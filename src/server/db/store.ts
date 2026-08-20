@@ -1,0 +1,587 @@
+import { nanoid } from 'nanoid';
+import type { DB } from './database.js';
+import type {
+  Agent,
+  AgentEvent,
+  AgentEventType,
+  AgentStatus,
+  AgentTask,
+  AgentTaskStatus,
+  ChatMessage,
+  ChatRole,
+  Project,
+  ProjectSettings,
+  Question,
+  WorkItem,
+} from '@shared/index';
+
+const now = (): string => new Date().toISOString();
+const id = (prefix: string): string => `${prefix}_${nanoid(12)}`;
+
+/* ------------------------------------------------------------------ mappers */
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  repo_dir: string;
+  settings: string;
+  created_at: string;
+  updated_at: string;
+}
+const toProject = (r: ProjectRow): Project => ({
+  id: r.id,
+  name: r.name,
+  repoDir: r.repo_dir,
+  settings: JSON.parse(r.settings) as ProjectSettings,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface AgentRow {
+  id: string;
+  project_id: string;
+  kind: string;
+  name: string;
+  display_name: string;
+  description: string;
+  prompt: string;
+  tools: string | null;
+  skills: string;
+  model: string;
+  emoji: string;
+  color: string;
+  catalog_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+const toAgent = (r: AgentRow): Agent => ({
+  id: r.id,
+  projectId: r.project_id,
+  kind: r.kind as Agent['kind'],
+  name: r.name,
+  displayName: r.display_name,
+  description: r.description,
+  prompt: r.prompt,
+  tools: r.tools ? (JSON.parse(r.tools) as string[]) : null,
+  skills: JSON.parse(r.skills) as string[],
+  model: r.model,
+  emoji: r.emoji,
+  color: r.color,
+  catalogId: r.catalog_id,
+  status: r.status as AgentStatus,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface WorkItemRow {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  assignee_agent_id: string | null;
+  ord: number;
+  created_at: string;
+  updated_at: string;
+}
+const toWorkItem = (r: WorkItemRow): WorkItem => ({
+  id: r.id,
+  projectId: r.project_id,
+  title: r.title,
+  description: r.description,
+  status: r.status as WorkItem['status'],
+  priority: r.priority as WorkItem['priority'],
+  assigneeAgentId: r.assignee_agent_id,
+  order: r.ord,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface AgentTaskRow {
+  id: string;
+  project_id: string;
+  agent_id: string;
+  work_item_id: string | null;
+  title: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+const toTask = (r: AgentTaskRow): AgentTask => ({
+  id: r.id,
+  projectId: r.project_id,
+  agentId: r.agent_id,
+  workItemId: r.work_item_id,
+  title: r.title,
+  status: r.status as AgentTaskStatus,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface AgentEventRow {
+  id: string;
+  project_id: string;
+  agent_id: string | null;
+  work_item_id: string | null;
+  type: string;
+  summary: string;
+  detail: string | null;
+  created_at: string;
+}
+const toEvent = (r: AgentEventRow): AgentEvent => ({
+  id: r.id,
+  projectId: r.project_id,
+  agentId: r.agent_id,
+  workItemId: r.work_item_id,
+  type: r.type as AgentEventType,
+  summary: r.summary,
+  detail: r.detail ? (JSON.parse(r.detail) as Record<string, unknown>) : null,
+  createdAt: r.created_at,
+});
+
+interface ChatRow {
+  id: string;
+  project_id: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+const toChat = (r: ChatRow): ChatMessage => ({
+  id: r.id,
+  projectId: r.project_id,
+  role: r.role as ChatRole,
+  content: r.content,
+  createdAt: r.created_at,
+});
+
+interface QuestionRow {
+  id: string;
+  project_id: string;
+  agent_id: string | null;
+  question: string;
+  choices: string | null;
+  status: string;
+  answer: string | null;
+  created_at: string;
+  answered_at: string | null;
+}
+const toQuestion = (r: QuestionRow): Question => ({
+  id: r.id,
+  projectId: r.project_id,
+  agentId: r.agent_id,
+  question: r.question,
+  choices: r.choices ? (JSON.parse(r.choices) as string[]) : null,
+  status: r.status as Question['status'],
+  answer: r.answer,
+  createdAt: r.created_at,
+  answeredAt: r.answered_at,
+});
+
+/* -------------------------------------------------------------------- store */
+
+/**
+ * Typed persistence layer over SQLite. All methods are synchronous
+ * (better-sqlite3 is synchronous), which keeps the service layer simple.
+ */
+export class Store {
+  constructor(private readonly db: DB) {}
+
+  /* projects */
+  createProject(input: { name: string; repoDir: string; settings: ProjectSettings }): Project {
+    const ts = now();
+    const row: ProjectRow = {
+      id: id('prj'),
+      name: input.name,
+      repo_dir: input.repoDir,
+      settings: JSON.stringify(input.settings),
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO projects (id,name,repo_dir,settings,created_at,updated_at)
+         VALUES (@id,@name,@repo_dir,@settings,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toProject(row);
+  }
+
+  listProjects(): Project[] {
+    return this.db
+      .prepare(`SELECT * FROM projects ORDER BY created_at ASC`)
+      .all()
+      .map((r) => toProject(r as ProjectRow));
+  }
+
+  getProject(projectId: string): Project | undefined {
+    const r = this.db.prepare(`SELECT * FROM projects WHERE id = ?`).get(projectId);
+    return r ? toProject(r as ProjectRow) : undefined;
+  }
+
+  updateProject(
+    projectId: string,
+    patch: { name?: string; settings?: ProjectSettings },
+  ): Project | undefined {
+    const existing = this.getProject(projectId);
+    if (!existing) return undefined;
+    const name = patch.name ?? existing.name;
+    const settings = patch.settings ?? existing.settings;
+    this.db
+      .prepare(`UPDATE projects SET name=?, settings=?, updated_at=? WHERE id=?`)
+      .run(name, JSON.stringify(settings), now(), projectId);
+    return this.getProject(projectId);
+  }
+
+  deleteProject(projectId: string): void {
+    this.db.prepare(`DELETE FROM projects WHERE id = ?`).run(projectId);
+  }
+
+  /* agents */
+  createAgent(a: Omit<Agent, 'id' | 'createdAt' | 'updatedAt'>): Agent {
+    const ts = now();
+    const row: AgentRow = {
+      id: id('agt'),
+      project_id: a.projectId,
+      kind: a.kind,
+      name: a.name,
+      display_name: a.displayName,
+      description: a.description,
+      prompt: a.prompt,
+      tools: a.tools ? JSON.stringify(a.tools) : null,
+      skills: JSON.stringify(a.skills),
+      model: a.model,
+      emoji: a.emoji,
+      color: a.color,
+      catalog_id: a.catalogId,
+      status: a.status,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO agents (id,project_id,kind,name,display_name,description,prompt,tools,skills,model,emoji,color,catalog_id,status,created_at,updated_at)
+         VALUES (@id,@project_id,@kind,@name,@display_name,@description,@prompt,@tools,@skills,@model,@emoji,@color,@catalog_id,@status,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toAgent(row);
+  }
+
+  listAgents(projectId: string): Agent[] {
+    return this.db
+      .prepare(`SELECT * FROM agents WHERE project_id = ? ORDER BY kind DESC, created_at ASC`)
+      .all(projectId)
+      .map((r) => toAgent(r as AgentRow));
+  }
+
+  getAgent(agentId: string): Agent | undefined {
+    const r = this.db.prepare(`SELECT * FROM agents WHERE id = ?`).get(agentId);
+    return r ? toAgent(r as AgentRow) : undefined;
+  }
+
+  getAgentByName(projectId: string, name: string): Agent | undefined {
+    const r = this.db
+      .prepare(`SELECT * FROM agents WHERE project_id=? AND name=?`)
+      .get(projectId, name);
+    return r ? toAgent(r as AgentRow) : undefined;
+  }
+
+  getLead(projectId: string): Agent | undefined {
+    const r = this.db
+      .prepare(`SELECT * FROM agents WHERE project_id=? AND kind='lead'`)
+      .get(projectId);
+    return r ? toAgent(r as AgentRow) : undefined;
+  }
+
+  updateAgent(
+    agentId: string,
+    patch: Partial<Omit<Agent, 'id' | 'projectId' | 'kind'>>,
+  ): Agent | undefined {
+    const existing = this.getAgent(agentId);
+    if (!existing) return undefined;
+    const merged = { ...existing, ...patch };
+    this.db
+      .prepare(
+        `UPDATE agents SET display_name=?, description=?, prompt=?, tools=?, skills=?, model=?, emoji=?, color=?, status=?, updated_at=? WHERE id=?`,
+      )
+      .run(
+        merged.displayName,
+        merged.description,
+        merged.prompt,
+        merged.tools ? JSON.stringify(merged.tools) : null,
+        JSON.stringify(merged.skills),
+        merged.model,
+        merged.emoji,
+        merged.color,
+        merged.status,
+        now(),
+        agentId,
+      );
+    return this.getAgent(agentId);
+  }
+
+  setAgentStatus(agentId: string, status: AgentStatus): Agent | undefined {
+    this.db
+      .prepare(`UPDATE agents SET status=?, updated_at=? WHERE id=?`)
+      .run(status, now(), agentId);
+    return this.getAgent(agentId);
+  }
+
+  deleteAgent(agentId: string): void {
+    this.db.prepare(`DELETE FROM agents WHERE id = ?`).run(agentId);
+  }
+
+  /* work items */
+  createWorkItem(
+    w: Omit<WorkItem, 'id' | 'createdAt' | 'updatedAt' | 'order'> & { order?: number },
+  ): WorkItem {
+    const ts = now();
+    const order =
+      w.order ??
+      (
+        this.db
+          .prepare(
+            `SELECT COALESCE(MAX(ord),0)+1 AS n FROM work_items WHERE project_id=? AND status=?`,
+          )
+          .get(w.projectId, w.status) as { n: number }
+      ).n;
+    const row: WorkItemRow = {
+      id: id('wi'),
+      project_id: w.projectId,
+      title: w.title,
+      description: w.description,
+      status: w.status,
+      priority: w.priority,
+      assignee_agent_id: w.assigneeAgentId,
+      ord: order,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO work_items (id,project_id,title,description,status,priority,assignee_agent_id,ord,created_at,updated_at)
+         VALUES (@id,@project_id,@title,@description,@status,@priority,@assignee_agent_id,@ord,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toWorkItem(row);
+  }
+
+  listWorkItems(projectId: string): WorkItem[] {
+    return this.db
+      .prepare(`SELECT * FROM work_items WHERE project_id=? ORDER BY ord ASC, created_at ASC`)
+      .all(projectId)
+      .map((r) => toWorkItem(r as WorkItemRow));
+  }
+
+  getWorkItem(workItemId: string): WorkItem | undefined {
+    const r = this.db.prepare(`SELECT * FROM work_items WHERE id=?`).get(workItemId);
+    return r ? toWorkItem(r as WorkItemRow) : undefined;
+  }
+
+  updateWorkItem(
+    workItemId: string,
+    patch: Partial<
+      Pick<WorkItem, 'title' | 'description' | 'status' | 'priority' | 'assigneeAgentId' | 'order'>
+    >,
+  ): WorkItem | undefined {
+    const existing = this.getWorkItem(workItemId);
+    if (!existing) return undefined;
+    const m = { ...existing, ...patch };
+    this.db
+      .prepare(
+        `UPDATE work_items SET title=?, description=?, status=?, priority=?, assignee_agent_id=?, ord=?, updated_at=? WHERE id=?`,
+      )
+      .run(
+        m.title,
+        m.description,
+        m.status,
+        m.priority,
+        m.assigneeAgentId,
+        m.order,
+        now(),
+        workItemId,
+      );
+    return this.getWorkItem(workItemId);
+  }
+
+  /** Next assigned, not-yet-done item for an agent (autonomous pull-loop source). */
+  nextAssignedItem(projectId: string, agentId: string): WorkItem | undefined {
+    const r = this.db
+      .prepare(
+        `SELECT * FROM work_items WHERE project_id=? AND assignee_agent_id=? AND status IN ('backlog','todo')
+         ORDER BY (priority='high') DESC, ord ASC, created_at ASC LIMIT 1`,
+      )
+      .get(projectId, agentId);
+    return r ? toWorkItem(r as WorkItemRow) : undefined;
+  }
+
+  deleteWorkItem(workItemId: string): void {
+    this.db.prepare(`DELETE FROM work_items WHERE id=?`).run(workItemId);
+  }
+
+  /* agent tasks */
+  upsertTask(t: {
+    projectId: string;
+    agentId: string;
+    workItemId?: string | null;
+    title: string;
+    status?: AgentTaskStatus;
+  }): AgentTask {
+    const existing = this.db
+      .prepare(`SELECT * FROM agent_tasks WHERE project_id=? AND agent_id=? AND title=?`)
+      .get(t.projectId, t.agentId, t.title) as AgentTaskRow | undefined;
+    const ts = now();
+    if (existing) {
+      this.db
+        .prepare(`UPDATE agent_tasks SET status=?, work_item_id=?, updated_at=? WHERE id=?`)
+        .run(t.status ?? existing.status, t.workItemId ?? existing.work_item_id, ts, existing.id);
+      return toTask({ ...existing, status: t.status ?? existing.status, updated_at: ts });
+    }
+    const row: AgentTaskRow = {
+      id: id('tsk'),
+      project_id: t.projectId,
+      agent_id: t.agentId,
+      work_item_id: t.workItemId ?? null,
+      title: t.title,
+      status: t.status ?? 'todo',
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO agent_tasks (id,project_id,agent_id,work_item_id,title,status,created_at,updated_at)
+         VALUES (@id,@project_id,@agent_id,@work_item_id,@title,@status,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toTask(row);
+  }
+
+  listTasks(projectId: string, agentId: string): AgentTask[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM agent_tasks WHERE project_id=? AND agent_id=? ORDER BY created_at ASC`,
+      )
+      .all(projectId, agentId)
+      .map((r) => toTask(r as AgentTaskRow));
+  }
+
+  /* events */
+  appendEvent(e: {
+    projectId: string;
+    agentId?: string | null;
+    workItemId?: string | null;
+    type: AgentEventType;
+    summary: string;
+    detail?: Record<string, unknown> | null;
+  }): AgentEvent {
+    const row: AgentEventRow = {
+      id: id('evt'),
+      project_id: e.projectId,
+      agent_id: e.agentId ?? null,
+      work_item_id: e.workItemId ?? null,
+      type: e.type,
+      summary: e.summary,
+      detail: e.detail ? JSON.stringify(e.detail) : null,
+      created_at: now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO agent_events (id,project_id,agent_id,work_item_id,type,summary,detail,created_at)
+         VALUES (@id,@project_id,@agent_id,@work_item_id,@type,@summary,@detail,@created_at)`,
+      )
+      .run(row);
+    return toEvent(row);
+  }
+
+  listEvents(
+    projectId: string,
+    opts: { agentId?: string | null; limit?: number } = {},
+  ): AgentEvent[] {
+    const limit = opts.limit ?? 500;
+    if (opts.agentId !== undefined) {
+      return this.db
+        .prepare(
+          `SELECT * FROM agent_events WHERE project_id=? AND agent_id IS ? ORDER BY created_at ASC LIMIT ?`,
+        )
+        .all(projectId, opts.agentId, limit)
+        .map((r) => toEvent(r as AgentEventRow));
+    }
+    return this.db
+      .prepare(`SELECT * FROM agent_events WHERE project_id=? ORDER BY created_at ASC LIMIT ?`)
+      .all(projectId, limit)
+      .map((r) => toEvent(r as AgentEventRow));
+  }
+
+  /* chat */
+  appendChat(m: { projectId: string; role: ChatRole; content: string }): ChatMessage {
+    const row: ChatRow = {
+      id: id('msg'),
+      project_id: m.projectId,
+      role: m.role,
+      content: m.content,
+      created_at: now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO chat_messages (id,project_id,role,content,created_at) VALUES (@id,@project_id,@role,@content,@created_at)`,
+      )
+      .run(row);
+    return toChat(row);
+  }
+
+  updateChat(messageId: string, content: string): ChatMessage | undefined {
+    this.db.prepare(`UPDATE chat_messages SET content=? WHERE id=?`).run(content, messageId);
+    const r = this.db.prepare(`SELECT * FROM chat_messages WHERE id=?`).get(messageId);
+    return r ? toChat(r as ChatRow) : undefined;
+  }
+
+  listChat(projectId: string): ChatMessage[] {
+    return this.db
+      .prepare(`SELECT * FROM chat_messages WHERE project_id=? ORDER BY created_at ASC`)
+      .all(projectId)
+      .map((r) => toChat(r as ChatRow));
+  }
+
+  /* questions */
+  createQuestion(q: {
+    projectId: string;
+    agentId?: string | null;
+    question: string;
+    choices?: string[] | null;
+  }): Question {
+    const row: QuestionRow = {
+      id: id('qst'),
+      project_id: q.projectId,
+      agent_id: q.agentId ?? null,
+      question: q.question,
+      choices: q.choices ? JSON.stringify(q.choices) : null,
+      status: 'pending',
+      answer: null,
+      created_at: now(),
+      answered_at: null,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO questions (id,project_id,agent_id,question,choices,status,answer,created_at,answered_at)
+         VALUES (@id,@project_id,@agent_id,@question,@choices,@status,@answer,@created_at,@answered_at)`,
+      )
+      .run(row);
+    return toQuestion(row);
+  }
+
+  answerQuestion(questionId: string, answer: string): Question | undefined {
+    this.db
+      .prepare(`UPDATE questions SET answer=?, status='answered', answered_at=? WHERE id=?`)
+      .run(answer, now(), questionId);
+    const r = this.db.prepare(`SELECT * FROM questions WHERE id=?`).get(questionId);
+    return r ? toQuestion(r as QuestionRow) : undefined;
+  }
+
+  listQuestions(projectId: string): Question[] {
+    return this.db
+      .prepare(`SELECT * FROM questions WHERE project_id=? ORDER BY created_at ASC`)
+      .all(projectId)
+      .map((r) => toQuestion(r as QuestionRow));
+  }
+}
