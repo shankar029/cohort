@@ -283,3 +283,7 @@ but the whole team's conversation is visible.
   it can jot plans, decisions, and thoughts (persisted, visible on its detail page) and maintain a
   checklist — the tools an engineer uses to plan and execute. New: `agent_notes` store + tools
   `write_note` / `update_plan`, surfaced on the Agent detail page.
+- **Scheduling for agents**: a `SchedulerService` (timers + `sleep` + `waitUntil` polling +
+  per-owner cleanup) exposed to agents as tools `wait` (pause/retry after a delay) and `poll`
+  (re-run a shell check every N seconds until it succeeds or times out) — so an agent can wait for
+  an event/command to complete, poll for a condition, or wait-and-retry. Cleaned up on shutdown.

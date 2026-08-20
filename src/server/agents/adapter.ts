@@ -28,6 +28,11 @@ export interface UserInputAsk {
   choices?: string[];
 }
 
+/** Minimal timing capability handed to agent tools (implemented by SchedulerService). */
+export interface Scheduler {
+  sleep(ms: number, owner?: string): Promise<void>;
+}
+
 export interface AgentSessionCallbacks {
   onEvent: (event: SessionEvent) => void;
   onPermission: (ask: PermissionAsk) => Promise<PermissionReply>;
@@ -48,6 +53,8 @@ export interface AgentSessionConfig extends AgentSessionCallbacks {
   workingDirectory: string;
   skillDirectories: string[];
   approvalMode: ApprovalMode;
+  /** Timing capability backing the agent's `wait` / `poll` tools. */
+  scheduler?: Scheduler;
 }
 
 /** A live session for a single agent. `ask` resolves with the final message text. */

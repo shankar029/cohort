@@ -11,12 +11,14 @@ import type {
 } from './agents/adapter.js';
 import { buildSystemPrompt } from './agents/context.js';
 import { discoverSkills, skillDirectories } from './agents/skillScanner.js';
+import type { SchedulerService } from './scheduler.js';
 
 interface Deps {
   store: Store;
   bus: Bus;
   adapter: CopilotAdapter;
   skillHomeRoots: string[];
+  scheduler: SchedulerService;
 }
 
 function isInsideWorkspace(repoDir: string, filePath: string | undefined): boolean {
@@ -97,6 +99,7 @@ class AgentActor {
       workingDirectory: project.repoDir,
       skillDirectories: skillDirectories(skills),
       approvalMode: project.settings.approvalMode,
+      scheduler: this.orch.deps.scheduler,
       onEvent: (e) => this.orch.onSessionEvent(this.agent, e, this.currentWorkItemId),
       onPermission: (ask) => this.orch.handlePermission(ask),
       onUserInput: (ask) => this.orch.handleUserInput(this.agent, ask),
@@ -583,6 +586,7 @@ export class OrchestratorManager {
       await o.dispose();
       this.byProject.delete(projectId);
     }
+    this.deps.scheduler.cancelOwner(projectId);
   }
 
   answer(projectId: string, questionId: string, answer: string): boolean {
@@ -592,6 +596,7 @@ export class OrchestratorManager {
   async shutdown(): Promise<void> {
     for (const o of this.byProject.values()) await o.dispose();
     this.byProject.clear();
+    this.deps.scheduler.dispose();
     await this.deps.adapter.shutdown();
   }
 }

@@ -6,6 +6,7 @@ import { openDatabase } from './db/database.js';
 import { Store } from './db/store.js';
 import { Bus } from './bus.js';
 import { OrchestratorManager } from './orchestrator.js';
+import { SchedulerService } from './scheduler.js';
 import { buildApp } from './app.js';
 import { FakeCopilotAdapter } from './agents/fakeAdapter.js';
 import { RealCopilotAdapter } from './agents/realAdapter.js';
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
   const db = openDatabase(config.dbPath);
   const store = new Store(db);
   const bus = new Bus();
+  const scheduler = new SchedulerService();
   const adapter: CopilotAdapter = config.fakeSdk
     ? new FakeCopilotAdapter()
     : new RealCopilotAdapter();
@@ -35,6 +37,7 @@ async function main(): Promise<void> {
     bus,
     adapter,
     skillHomeRoots: config.skillHomeRoots,
+    scheduler,
   });
 
   const app = buildApp({

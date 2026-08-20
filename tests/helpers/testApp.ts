@@ -2,6 +2,7 @@ import { openDatabase } from '../../src/server/db/database.js';
 import { Store } from '../../src/server/db/store.js';
 import { Bus } from '../../src/server/bus.js';
 import { OrchestratorManager } from '../../src/server/orchestrator.js';
+import { SchedulerService } from '../../src/server/scheduler.js';
 import { buildApp } from '../../src/server/app.js';
 import { FakeCopilotAdapter } from '../../src/server/agents/fakeAdapter.js';
 import type { ServerMessage } from '../../src/shared/index.js';
@@ -22,7 +23,14 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
   const store = new Store(db);
   const bus = new Bus();
   const adapter = new FakeCopilotAdapter();
-  const orchestrators = new OrchestratorManager({ store, bus, adapter, skillHomeRoots: homeRoots });
+  const scheduler = new SchedulerService();
+  const orchestrators = new OrchestratorManager({
+    store,
+    bus,
+    adapter,
+    skillHomeRoots: homeRoots,
+    scheduler,
+  });
   const app = buildApp({
     store,
     bus,

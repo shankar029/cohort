@@ -1,4 +1,5 @@
 import type { AgentSession, AgentSessionConfig, CopilotAdapter, PermissionAsk } from './adapter.js';
+import { execFile } from 'node:child_process';
 
 /**
  * Real adapter backed by @github/copilot-sdk. Each agent gets its OWN session
@@ -13,6 +14,17 @@ type AnySdk = any;
 
 // Tool each agent uses to maintain its own visible task board.
 const TASK_TOOL = 'update_task_board';
+
+function runOnce(command: string, cwd: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(
+      process.platform === 'win32' ? 'cmd' : 'sh',
+      process.platform === 'win32' ? ['/c', command] : ['-c', command],
+      { cwd, timeout: timeoutMs, windowsHide: true },
+      (err) => resolve(!err),
+    );
+  });
+}
 
 class RealAgentSession implements AgentSession {
   private queue: Promise<unknown> = Promise.resolve();
@@ -172,11 +184,74 @@ export class RealCopilotAdapter implements CopilotAdapter {
       },
     });
 
+    const sleep = (ms: number): Promise<void> =>
+      config.scheduler
+        ? config.scheduler.sleep(ms, config.projectId)
+        : new Promise((r) => setTimeout(r, ms));
+
+    // Lets an agent wait/retry after a delay.
+    const waitTool = sdk.defineTool('wait', {
+      description:
+        'Pause for a number of seconds before continuing — use to wait-and-retry or let an async operation settle. Capped at 300s.',
+      parameters: {
+        type: 'object',
+        properties: { seconds: { type: 'number' }, reason: { type: 'string' } },
+        required: ['seconds'],
+      },
+      skipPermission: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      handler: async (args: any) => {
+        const seconds = Math.max(0, Math.min(300, Number(args.seconds) || 0));
+        config.onEvent({
+          kind: 'tool_call',
+          toolName: 'wait',
+          detail: { seconds, reason: args.reason },
+        });
+        await sleep(seconds * 1000);
+        return { waited: seconds };
+      },
+    });
+
+    // Lets an agent poll a shell check until it passes (e.g. wait for a server/file/event).
+    const pollTool = sdk.defineTool('poll', {
+      description:
+        'Repeatedly run a shell command every intervalSeconds until it exits 0 (condition met) or timeoutSeconds elapses. Returns whether the condition was met.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          intervalSeconds: { type: 'number' },
+          timeoutSeconds: { type: 'number' },
+        },
+        required: ['command'],
+      },
+      skipPermission: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      handler: async (args: any) => {
+        const interval = Math.max(1, Math.min(60, Number(args.intervalSeconds) || 3)) * 1000;
+        const timeout = Math.max(1, Math.min(600, Number(args.timeoutSeconds) || 60)) * 1000;
+        const command = String(args.command);
+        config.onEvent({
+          kind: 'tool_call',
+          toolName: 'poll',
+          detail: { command, interval, timeout },
+        });
+        const deadline = Date.now() + timeout;
+        let met = await runOnce(command, config.workingDirectory, interval);
+        while (!met && Date.now() < deadline) {
+          await sleep(Math.min(interval, Math.max(0, deadline - Date.now())));
+          met = await runOnce(command, config.workingDirectory, interval);
+        }
+        config.onEvent({ kind: 'tool_result', toolName: 'poll', detail: { met } });
+        return { met };
+      },
+    });
+
     const session = await client.createSession({
       model: config.model,
       workingDirectory: config.workingDirectory,
       streaming: true,
-      tools: [taskTool],
+      tools: [taskTool, waitTool, pollTool],
       skillDirectories: config.skillDirectories,
       systemMessage: { content: config.persona },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
