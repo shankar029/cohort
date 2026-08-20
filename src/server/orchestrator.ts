@@ -284,6 +284,16 @@ class ProjectOrchestrator {
   }
 
   private handleEvent(event: AdapterEvent): void {
+    try {
+      this.handleEventUnsafe(event);
+    } catch (err) {
+      process.stderr.write(
+        `[orchestrator ${this.projectId}] event handler error: ${err instanceof Error ? err.stack : String(err)}\n`,
+      );
+    }
+  }
+
+  private handleEventUnsafe(event: AdapterEvent): void {
     const { store, bus } = this.deps;
     const pid = this.projectId;
     switch (event.kind) {

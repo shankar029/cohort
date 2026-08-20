@@ -11,6 +11,17 @@ import { FakeCopilotAdapter } from './agents/fakeAdapter.js';
 import { RealCopilotAdapter } from './agents/realAdapter.js';
 import type { CopilotAdapter } from './agents/adapter.js';
 
+// A long-running local server must never die because one agent turn threw or a
+// child process hiccuped. Log and keep serving instead of crashing the whole app.
+process.on('unhandledRejection', (reason) => {
+  process.stderr.write(
+    `[unhandledRejection] ${reason instanceof Error ? reason.stack : String(reason)}\n`,
+  );
+});
+process.on('uncaughtException', (err) => {
+  process.stderr.write(`[uncaughtException] ${err instanceof Error ? err.stack : String(err)}\n`);
+});
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
@@ -50,13 +61,23 @@ async function main(): Promise<void> {
 
   // WebSocket server for live event streaming.
   const wss = new WebSocketServer({ server: app.server, path: '/ws' });
+  wss.on('error', (err) => process.stderr.write(`[ws] server error: ${String(err)}\n`));
   wss.on('connection', (socket: WebSocket) => {
+    socket.on('error', () => undefined); // ignore per-socket transport errors
     const unsubscribe = bus.subscribe((message) => {
-      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
+      try {
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
+      } catch {
+        /* socket went away mid-send; the close handler will clean up */
+      }
     });
     socket.on('close', unsubscribe);
     socket.on('error', unsubscribe);
-    socket.send(JSON.stringify({ type: 'hello', adapter: adapter.name }));
+    try {
+      socket.send(JSON.stringify({ type: 'hello', adapter: adapter.name }));
+    } catch {
+      /* ignore */
+    }
   });
 
   await app.listen({ port: config.port, host: '0.0.0.0' });

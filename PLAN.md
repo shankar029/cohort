@@ -190,6 +190,18 @@ tests/e2e/  Playwright specs (run against server with FakeCopilotAdapter)
   hardcoded default model isn't guaranteed per-account. Fixed: default → `auto`, added live
   `/api/models` discovery + per-agent `ModelSelect`. Re-verified: live test passes; all suites green.
 
+- **Iter 3** — Real-adapter app “failed after a few requests” (hard crash + WS proxy ECONNABORTED).
+  Root causes, all fixed: (1) `RealTeamSession` serialized queue was **poisoned** by any rejected
+  turn — every later `send` silently skipped `runTurn`; rewrote so both chain branches run the next
+  turn. (2) A turn could **hang forever** waiting on `session.idle`; added an absolute safety timeout
+  and made turns never reject. (3) **No global process guards** — one escaped rejection/throw crashed
+  Node; added `unhandledRejection`/`uncaughtException` handlers + WS send try/catch + guarded event
+  handler. (4) SDK probe revealed `session.send()` returns an **id ack immediately** (not turn
+  completion) and streamed-only replies emit no discrete `assistant.message`; resolve strictly on
+  `session.idle` and finalize the stored message from the delta buffer. (5) Hardened the Vite
+  `/api` + `/ws` proxy with error handlers. Verified: live test + a real 2-turn smoke (server stays
+  up, both turns answer) + full unit/integration/E2E suite green.
+
 ## Final scorecard (top-1% rubric, target ≥4/5)
 
 | #   | Dimension               | Score | Justification                                                                             |

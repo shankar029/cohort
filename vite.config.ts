@@ -14,8 +14,29 @@ export default defineConfig({
   server: {
     port: 5319,
     proxy: {
-      '/api': `http://localhost:${port}`,
-      '/ws': { target: `ws://localhost:${port}`, ws: true },
+      '/api': {
+        target: `http://localhost:${port}`,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            // Backend not up yet or mid-restart; don't crash the dev server.
+            process.stderr.write(`[vite proxy] /api error: ${err.message}\n`);
+          });
+        },
+      },
+      '/ws': {
+        target: `ws://localhost:${port}`,
+        ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            process.stderr.write(`[vite proxy] /ws error: ${err.message}\n`);
+          });
+          // Swallow abrupt client/backend socket teardowns (ECONNABORTED/RESET).
+          proxy.on('proxyReqWs', (_proxyReq, _req, socket) => {
+            socket.on('error', () => undefined);
+          });
+        },
+      },
     },
   },
   build: {

@@ -101,42 +101,94 @@ class RealTeamSession implements TeamSession {
 
   send(prompt: string, messageId: string): Promise<void> {
     // Serialize sends so streaming from one turn never interleaves with another.
-    this.queue = this.queue.then(() => this.runTurn(prompt, messageId));
-    return this.queue;
+    // Crucially, a failed turn must NOT poison the chain: both branches run the
+    // next turn, so one bad message can never wedge the session permanently.
+    const turn = this.queue.then(
+      () => this.runTurn(prompt, messageId),
+      () => this.runTurn(prompt, messageId),
+    );
+    this.queue = turn.catch(() => undefined);
+    return turn;
   }
 
   private runTurn(prompt: string, messageId: string): Promise<void> {
     const { onEvent } = this.config;
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>((resolve) => {
       const offs: Array<() => void> = [];
-      const cleanup = (): void => offs.forEach((off) => off());
+      let settled = false;
+      let gotMessage = false;
+      let buffer = '';
+      const cleanup = (): void => {
+        for (const off of offs) {
+          try {
+            off?.();
+          } catch {
+            /* listener removal is best-effort */
+          }
+        }
+      };
+      // A turn always resolves (never rejects) so the serialized queue keeps
+      // draining. Errors are surfaced as events + a visible lead message.
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(safety);
+        // If the model streamed its reply as deltas without a discrete
+        // assistant.message, finalize from the accumulated buffer so the stored
+        // chat message is never left empty.
+        if (!gotMessage && buffer.trim()) {
+          onEvent({ kind: 'lead_message', messageId, text: buffer });
+        }
+        cleanup();
+        resolve();
+      };
+      const fail = (err: unknown): void => {
+        if (settled) return;
+        gotMessage = true;
+        onEvent({
+          kind: 'lead_message',
+          messageId,
+          text: `⚠️ The agent run failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        onEvent({ kind: 'idle' });
+        finish();
+      };
+
+      // Absolute safety net: never let a stuck turn freeze the whole session.
+      const safety = setTimeout(() => finish(), 15 * 60_000);
+      safety.unref?.();
 
       offs.push(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.session.on('assistant.message_delta', (e: any) => {
-          if (e?.data?.deltaContent)
+          if (e?.data?.deltaContent) {
+            buffer += String(e.data.deltaContent);
             onEvent({ kind: 'lead_delta', messageId, delta: String(e.data.deltaContent) });
+          }
         }),
       );
       offs.push(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.session.on('assistant.message', (e: any) => {
-          if (e?.data?.content)
+          if (e?.data?.content) {
+            gotMessage = true;
             onEvent({ kind: 'lead_message', messageId, text: String(e.data.content) });
+          }
         }),
       );
       offs.push(
+        // session.idle is the SDK's authoritative end-of-turn signal (it lands
+        // after the final assistant.message), so it reliably completes the turn.
         this.session.on('session.idle', () => {
           onEvent({ kind: 'idle' });
-          cleanup();
-          resolve();
+          finish();
         }),
       );
 
-      this.session.send({ prompt }).catch((err: unknown) => {
-        cleanup();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
+      // session.send() resolves immediately with a message-id ack — it is NOT a
+      // turn-completion signal, so it is used only to catch a synchronous send
+      // failure (e.g. an unavailable model). Completion comes from session.idle.
+      Promise.resolve(this.session.send({ prompt })).catch((err: unknown) => fail(err));
     });
   }
 
