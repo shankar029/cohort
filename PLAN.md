@@ -6,7 +6,7 @@ checked-out repo), builds a per-project team of GitHub-Copilot-SDK agents, talks
 (assign → agent auto-picks-up → works → pulls next), and watches each agent's live status,
 tasks, and logs. Multiple projects/teams run in parallel.
 
-**Status:** done — MVP-complete, all gates green (see scorecard below)
+**Status:** v1 done; **v2 (async multi-agent) in progress** — see "v2" section at the bottom.
 
 ---
 
@@ -214,3 +214,72 @@ tests/e2e/  Playwright specs (run against server with FakeCopilotAdapter)
 | 6   | Robustness              | 4     | Zod validation, workspace-scoped permissions, WS reconnect, graceful fake fallback.       |
 | 7   | Test quality            | 4     | Real unit + integration + browser E2E + opt-in live; covers delegation/pickup/escalation. |
 | 8   | Verification & evidence | 5     | Live SDK proof + Playwright + full suite; evidence captured in the PR/commit.             |
+
+---
+
+# v2 — Truly-async multi-agent redesign
+
+**Goal:** Agents are independent, concurrent actors that really talk, brainstorm, and
+collaborate. The Team Lead plans epics, runs group discussions, decomposes work onto the
+Kanban board, and coordinates a real git + PR/review workflow. The user talks to the Lead,
+but the whole team's conversation is visible.
+
+## Locked decisions
+
+- **One SDK session per agent** (independent actors + mailboxes), not SDK sub-agents.
+- **Truly async**: agents run concurrently (parallel `ask()` calls); Lead coordinates.
+- **Threads**: `main` (user↔team) + `group` (brainstorm/discussion, Lead-moderated) + `dm`.
+  The Lead can open a group chat; any agent can **request** one and the Lead opens it.
+- **Every user request is an Epic** → clarify → (brainstorm) → decompose into stream-tagged
+  tasks on the board → assign → agents work async → PR → review → merge to feature branch.
+- **Real git**: ateam `git init`s the project repo if needed, works on branches, commits;
+  in-app PR objects; real `gh` only when a remote + auth exist.
+- **Product Manager** agent added; all agent personas rewritten to principal/staff level.
+
+## Architecture
+
+- `AgentSession` seam (per agent): `ask(prompt) → finalText` + streamed events
+  (message/delta/reasoning/tool/idle). Fake + Real implementations.
+- `ProjectOrchestrator` = actor system: one `AgentActor` per agent (session + serialized
+  mailbox). Routes messages between actors, main thread, and group threads.
+- `GitService`: init/branch/commit/merge/diff in the project repo.
+
+## Milestones
+
+- [~] **M8 Engine rewrite** \u2014 per-agent `AgentSession` (fake+real); actor orchestrator;
+  multi-author threads; **group brainstorm** (Lead-led + agent-requested); correct status.
+- [ ] **M9 Epic planning** \u2014 user request → epic; clarify (batched) + PM consult; decompose
+      into stream-tagged task cards with acceptance criteria + deps; assign; schedule parallel.
+- [ ] **M10 Async task execution** \u2014 agents pick up ready tasks concurrently; post updates to
+      main thread as themselves; move cards; git branch+commit per task.
+- [ ] **M11 PR + review** \u2014 raise in-app PR (diff); reviewer/security agent reviews →
+      approve/changes → merge to feature branch; Lead plans the gate.
+- [ ] **M12 UI** \u2014 multi-author chat, Threads/group-chat panel, grouped-by-task Activity,
+      Epic→Task board hierarchy, PR view.
+- [ ] **M13 Polish** — PM agent + top-tier personas; live-adapter proof; hardening.
+
+## Cross-cutting: agent grounding
+
+- Every agent's system prompt is composed from: persona + **environment** (it is an
+  autonomous agent in ateam with its own workspace session) + **project** (name, repo path,
+  detected stack) + **teammates** (roster with names/roles) + **collaboration protocol**
+  (how to talk in threads, request a group chat, escalate via the Lead). Built by `context.ts`.
+
+## Iterations log (v2)
+
+- (populated as milestones land)
+
+## Added requirements (fold into M9–M11)
+
+- **Agents are first-class app users**: the Lead _and_ specialists can create and move work items,
+  post to threads, and call/join discussions via agent-callable tools (`create_work_item`,
+  `move_work_item`, `post_message`, `request_group_chat`, `raise_pr`, `review_pr`) that map to the
+  same store/bus the UI uses — so agent actions show up live in the board/chat.
+- **Iterate to quality**: work items loop (in_progress → review → changes_requested → in_progress)
+  until the reviewer/QA quality bar passes; the Lead may convene **multiple** group discussions as
+  needed, exactly like a human team, before marking an epic done.
+- **Agent scratchpads / planning surface**: each agent gets a private notes space (free-form
+  markdown "notepad/whiteboard") plus its existing task board. When an agent picks up a work item
+  it can jot plans, decisions, and thoughts (persisted, visible on its detail page) and maintain a
+  checklist — the tools an engineer uses to plan and execute. New: `agent_notes` store + tools
+  `write_note` / `update_plan`, surfaced on the Agent detail page.

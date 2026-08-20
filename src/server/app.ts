@@ -92,6 +92,8 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       agents: store.listAgents(id),
       workItems: store.listWorkItems(id),
       questions: store.listQuestions(id),
+      threads: store.listThreads(id),
+      pulls: store.listPRs(id),
     };
   });
 
@@ -121,6 +123,26 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     store.deleteProject(id);
     bus.publish({ type: 'project.deleted', projectId: id });
     reply.status(204);
+  });
+
+  /* --------------------------------------------------------------- threads */
+  app.get('/api/projects/:id/threads', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    return { threads: store.listThreads(id) };
+  });
+
+  app.get('/api/threads/:threadId/messages', async (req) => {
+    const { threadId } = req.params as { threadId: string };
+    const thread = store.getThread(threadId);
+    if (!thread) throw new HttpError(404, 'Thread not found');
+    return { thread, messages: store.listThreadMessages(threadId) };
+  });
+
+  app.get('/api/projects/:id/pulls', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    return { pulls: store.listPRs(id) };
   });
 
   /* --------------------------------------------------------------- skills */

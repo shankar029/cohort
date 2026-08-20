@@ -58,15 +58,18 @@ test('end-to-end: build a team, assign work, watch autonomous pickup, tasks and 
   await expect(page.getByTestId('activity-log')).toContainText('Frontend Engineer');
 });
 
-test('chat: the Team Lead streams a reply and delegates', async ({ page }) => {
+test('chat: the Team Lead replies and convenes a team discussion', async ({ page }) => {
   await createProject(page, 'E2E Chat');
   await addSpecialist(page, 'frontend-engineer');
 
   await page.getByRole('link', { name: 'Chat' }).click();
-  await page.getByTestId('chat-input').fill('Please delegate to `frontend` to build the header.');
+  await page.getByTestId('chat-input').fill('Please build the header component.');
   await page.getByTestId('chat-send').click();
 
-  await expect(page.getByTestId('lead-message').last()).toContainText('Frontend Engineer', {
+  // The Team Lead responds…
+  await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
+  // …and a specialist contributes to the convened discussion.
+  await expect(page.getByTestId('agent-message').first()).toContainText('Frontend Engineer', {
     timeout: 20000,
   });
 });

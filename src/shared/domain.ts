@@ -65,11 +65,21 @@ export interface Agent {
 export interface WorkItem {
   id: string;
   projectId: string;
+  /** 'epic' = a user request the Lead decomposes; 'task' = a unit assigned to an agent. */
+  kind: 'epic' | 'task';
+  /** Parent epic id for tasks; null for epics. */
+  parentId: string | null;
   title: string;
   description: string;
   status: WorkItemStatus;
   priority: WorkItemPriority;
+  /** Stream/discipline label for tasks (e.g. 'frontend', 'backend', 'qa'). */
+  stream: string | null;
+  /** Ids of sibling tasks this task depends on. */
+  dependsOn: string[];
   assigneeAgentId: string | null;
+  /** Git branch the assignee works on, if any. */
+  branch: string | null;
   /** Sort order within a column. */
   order: number;
   createdAt: string;
@@ -102,6 +112,9 @@ export const AGENT_EVENT_TYPES = [
   'subagent_failed',
   'status_change',
   'escalation',
+  'discussion',
+  'git',
+  'pull_request',
   'system',
 ] as const;
 export type AgentEventType = (typeof AGENT_EVENT_TYPES)[number];
@@ -120,14 +133,56 @@ export interface AgentEvent {
   createdAt: string;
 }
 
-export type ChatRole = 'user' | 'lead';
+export type ChatRole = 'user' | 'agent';
 
+/** A message in a conversation thread (main or group). */
 export interface ChatMessage {
   id: string;
   projectId: string;
+  threadId: string;
   role: ChatRole;
+  /** The authoring agent; null when the author is the user. */
+  authorAgentId: string | null;
   content: string;
   createdAt: string;
+}
+
+export const THREAD_KINDS = ['main', 'group', 'dm'] as const;
+export type ThreadKind = (typeof THREAD_KINDS)[number];
+
+/** A conversation: the main user↔team channel, or a Lead-moderated group chat. */
+export interface Thread {
+  id: string;
+  projectId: string;
+  kind: ThreadKind;
+  topic: string;
+  status: 'open' | 'closed';
+  /** Related epic/task, if the thread is about a work item. */
+  workItemId: string | null;
+  participantAgentIds: string[];
+  includesUser: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const PR_STATUSES = ['open', 'changes_requested', 'approved', 'merged'] as const;
+export type PrStatus = (typeof PR_STATUSES)[number];
+
+/** A pull request raised by an agent and reviewed by another before merge. */
+export interface PullRequest {
+  id: string;
+  projectId: string;
+  workItemId: string | null;
+  authorAgentId: string | null;
+  reviewerAgentId: string | null;
+  title: string;
+  description: string;
+  branch: string;
+  baseBranch: string;
+  diff: string;
+  status: PrStatus;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export const QUESTION_STATUSES = ['pending', 'answered'] as const;

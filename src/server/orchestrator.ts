@@ -1,17 +1,15 @@
 import path from 'node:path';
-import { nanoid } from 'nanoid';
-import type { Agent, Project, WorkItem } from '@shared/index';
+import type { Agent, Project, Thread, WorkItem } from '@shared/index';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
 import type {
-  AdapterEvent,
-  AgentDef,
+  AgentSession,
   CopilotAdapter,
   PermissionAsk,
-  TeamSession,
+  SessionEvent,
   UserInputAsk,
 } from './agents/adapter.js';
-import { TEAM_LEAD_PROMPT } from './agents/catalog.js';
+import { buildSystemPrompt } from './agents/context.js';
 import { discoverSkills, skillDirectories } from './agents/skillScanner.js';
 
 interface Deps {
@@ -21,30 +19,110 @@ interface Deps {
   skillHomeRoots: string[];
 }
 
-/** Is `filePath` inside `repoDir`? Used for workspace-scoped auto-approval. */
 function isInsideWorkspace(repoDir: string, filePath: string | undefined): boolean {
-  if (!filePath) return true; // nothing concrete to gate
+  if (!filePath) return true;
   const root = path.resolve(repoDir);
   const abs = path.isAbsolute(filePath) ? filePath : path.resolve(root, filePath);
   const rel = path.relative(root, abs);
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+const GROUPCHAT_RE = /\[\[REQUEST_GROUPCHAT:\s*([^\]]+)\]\]/i;
+
 /**
- * Runs one project's team: owns the Team Lead session, translates adapter events
- * into persisted state + WebSocket broadcasts, and implements delegation, the
- * autonomous pull-loop, escalations, and permission handling.
+ * One independent, concurrent actor per agent: owns the agent's own Copilot
+ * session (grounded with environment/project/team context) and a serialized
+ * mailbox so a single agent isn't asked twice at once. Different actors run in
+ * parallel — the team is truly async.
  */
-class ProjectOrchestrator {
-  private session: TeamSession | null = null;
-  private chain: Promise<unknown> = Promise.resolve();
+class AgentActor {
+  private session: AgentSession | null = null;
+  private mailbox: Promise<unknown> = Promise.resolve();
   private currentWorkItemId: string | null = null;
+
+  constructor(
+    readonly agent: Agent,
+    private readonly orch: ProjectOrchestrator,
+  ) {}
+
+  /** Ask this agent something in a thread; returns its final message text. */
+  ask(prompt: string, threadId: string, workItemId: string | null): Promise<string> {
+    const run = this.mailbox.then(
+      () => this.runTurn(prompt, threadId, workItemId),
+      () => this.runTurn(prompt, threadId, workItemId),
+    );
+    this.mailbox = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runTurn(
+    prompt: string,
+    threadId: string,
+    workItemId: string | null,
+  ): Promise<string> {
+    this.currentWorkItemId = workItemId;
+    const session = await this.ensureSession();
+    const placeholder = this.orch.postMessage(threadId, this.agent, '');
+    this.orch.setStatus(this.agent.id, 'working');
+    try {
+      const text = await session.ask(prompt, placeholder.id);
+      const reply = text || '(no response)';
+      this.orch.finalizeMessage(placeholder.id, reply);
+      await this.orch.maybeHandleGroupChatRequest(this.agent, reply, workItemId);
+      return reply;
+    } finally {
+      this.orch.setStatus(this.agent.id, 'idle');
+    }
+  }
+
+  private async ensureSession(): Promise<AgentSession> {
+    if (this.session) return this.session;
+    const { project, team } = this.orch.snapshot();
+    const skills = discoverSkills(
+      this.orch.deps.skillHomeRoots,
+      project.repoDir,
+      project.settings.extraSkillRoots,
+    );
+    const persona = buildSystemPrompt({ project, self: this.agent, team });
+    this.session = await this.orch.deps.adapter.createAgentSession({
+      projectId: project.id,
+      agentId: this.agent.id,
+      agentName: this.agent.name,
+      displayName: this.agent.displayName,
+      role: this.agent.kind,
+      persona,
+      model: this.agent.model || project.settings.defaultModel,
+      tools: this.agent.tools,
+      skills: this.agent.skills,
+      workingDirectory: project.repoDir,
+      skillDirectories: skillDirectories(skills),
+      approvalMode: project.settings.approvalMode,
+      onEvent: (e) => this.orch.onSessionEvent(this.agent, e, this.currentWorkItemId),
+      onPermission: (ask) => this.orch.handlePermission(ask),
+      onUserInput: (ask) => this.orch.handleUserInput(this.agent, ask),
+    });
+    return this.session;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.session) await this.session.dispose().catch(() => undefined);
+    this.session = null;
+  }
+}
+
+/** Coordinates a project's team of actors, threads, board work, and escalations. */
+class ProjectOrchestrator {
+  private actors = new Map<string, AgentActor>();
+  private mainThreadId: string | null = null;
   private readonly pending = new Map<string, (answer: string) => void>();
+  private groupDepth = 0;
 
   constructor(
     private readonly projectId: string,
-    private readonly deps: Deps,
+    readonly deps: Deps,
   ) {}
+
+  /* ----------------------------------------------------------- snapshots */
 
   private project(): Project {
     const p = this.deps.store.getProject(this.projectId);
@@ -52,95 +130,273 @@ class ProjectOrchestrator {
     return p;
   }
 
-  private agentIdByName(name: string | null): string | null {
-    if (!name) return null;
-    return this.deps.store.getAgentByName(this.projectId, name)?.id ?? null;
+  snapshot(): { project: Project; team: Agent[] } {
+    return { project: this.project(), team: this.deps.store.listAgents(this.projectId) };
   }
 
-  /** Build (or reuse) the Team Lead session from the project's current team. */
-  private async ensureSession(): Promise<TeamSession> {
-    if (this.session) return this.session;
-    const project = this.project();
-    const agents = this.deps.store.listAgents(this.projectId);
-    const lead = agents.find((a) => a.kind === 'lead');
-    const specialists = agents.filter((a) => a.kind === 'specialist');
+  private actor(agent: Agent): AgentActor {
+    let a = this.actors.get(agent.id);
+    if (!a) {
+      a = new AgentActor(agent, this);
+      this.actors.set(agent.id, a);
+    }
+    return a;
+  }
 
-    const skills = discoverSkills(
-      this.deps.skillHomeRoots,
-      project.repoDir,
-      project.settings.extraSkillRoots,
-    );
-    const dirs = skillDirectories(skills);
+  private lead(): Agent {
+    const lead = this.deps.store.getLead(this.projectId);
+    if (!lead) throw new Error('project has no Team Lead');
+    return lead;
+  }
 
-    const defs: AgentDef[] = specialists.map((s) => ({
-      name: s.name,
-      displayName: s.displayName,
-      description: s.description,
-      prompt: s.prompt,
-      tools: s.tools,
-      skills: s.skills,
-      model: s.model,
-    }));
+  private specialists(): Agent[] {
+    return this.deps.store.listAgents(this.projectId).filter((a) => a.kind === 'specialist');
+  }
 
-    this.session = await this.deps.adapter.createTeamSession({
+  private ensureMainThread(): Thread {
+    const t = this.deps.store.ensureMainThread(this.projectId);
+    if (!this.mainThreadId) {
+      this.mainThreadId = t.id;
+      this.deps.bus.publish({ type: 'thread.updated', projectId: this.projectId, thread: t });
+    }
+    return t;
+  }
+
+  /* -------------------------------------------------------------- events */
+
+  onSessionEvent(agent: Agent, e: SessionEvent, workItemId: string | null): void {
+    const { bus } = this.deps;
+    const pid = this.projectId;
+    switch (e.kind) {
+      case 'delta':
+        bus.publish({ type: 'chat.delta', projectId: pid, messageId: e.messageId, delta: e.delta });
+        break;
+      case 'message':
+        this.finalizeMessage(e.messageId, e.text);
+        break;
+      case 'reasoning':
+        this.emitEvent(agent.id, 'reasoning', e.text, { text: e.text }, workItemId);
+        break;
+      case 'tool_call':
+        this.emitEvent(agent.id, 'tool_call', e.toolName, e.detail ?? null, workItemId);
+        break;
+      case 'tool_result':
+        if (e.toolName === 'update_task_board' && e.detail) {
+          const task = this.deps.store.upsertTask({
+            projectId: pid,
+            agentId: agent.id,
+            workItemId,
+            title: String(e.detail.title ?? 'task'),
+            status: (e.detail.status as 'todo' | 'doing' | 'done') ?? 'doing',
+          });
+          bus.publish({ type: 'task.updated', projectId: pid, task });
+        } else {
+          this.emitEvent(
+            agent.id,
+            'tool_result',
+            `${e.toolName} done`,
+            e.detail ?? null,
+            workItemId,
+          );
+        }
+        break;
+      case 'idle':
+        break;
+    }
+  }
+
+  /* -------------------------------------------------------- thread posts */
+
+  /** Create a placeholder message authored by an agent and broadcast it. */
+  postMessage(threadId: string, author: Agent, content: string): { id: string } {
+    const msg = this.deps.store.appendChat({
       projectId: this.projectId,
-      workingDirectory: project.repoDir,
-      leadName: lead?.name ?? 'team-lead',
-      leadDisplayName: lead?.displayName ?? 'Team Lead',
-      leadModel: lead?.model ?? project.settings.defaultModel,
-      leadPrompt: lead?.prompt ?? TEAM_LEAD_PROMPT,
-      specialists: defs,
-      skillDirectories: dirs,
-      approvalMode: project.settings.approvalMode,
-      onEvent: (event) => this.handleEvent(event),
-      onPermission: (ask) => this.handlePermission(ask),
-      onUserInput: (ask) => this.handleUserInput(ask),
+      threadId,
+      role: 'agent',
+      authorAgentId: author.id,
+      content,
     });
-    return this.session;
+    this.deps.bus.publish({ type: 'chat.message', projectId: this.projectId, message: msg });
+    return msg;
   }
 
-  /** Rebuild the session next time (e.g. after the team roster changes). */
-  async invalidateSession(): Promise<void> {
-    const old = this.session;
-    this.session = null;
-    if (old) await old.dispose().catch(() => undefined);
+  finalizeMessage(messageId: string, text: string): void {
+    const updated = this.deps.store.updateChat(messageId, text);
+    if (updated) {
+      this.deps.bus.publish({ type: 'chat.message', projectId: this.projectId, message: updated });
+      const author = updated.authorAgentId
+        ? this.deps.store.getAgent(updated.authorAgentId)
+        : undefined;
+      this.emitEvent(
+        updated.authorAgentId,
+        'message',
+        `${author?.displayName ?? 'Agent'}: ${text.slice(0, 200)}`,
+        null,
+        null,
+      );
+    }
   }
 
-  /* --------------------------------------------------------------- actions */
+  /* --------------------------------------------------------- user chat */
 
-  /** Handle a chat message from the user to the Team Lead. */
   chat(content: string): Promise<void> {
-    return this.enqueue(async () => {
-      const user = this.deps.store.appendChat({ projectId: this.projectId, role: 'user', content });
-      this.deps.bus.publish({ type: 'chat.message', projectId: this.projectId, message: user });
+    const main = this.ensureMainThread();
+    const userMsg = this.deps.store.appendChat({
+      projectId: this.projectId,
+      threadId: main.id,
+      role: 'user',
+      authorAgentId: null,
+      content,
+    });
+    this.deps.bus.publish({ type: 'chat.message', projectId: this.projectId, message: userMsg });
+
+    return (async () => {
+      const lead = this.lead();
+      const roster = this.specialists()
+        .map((s) => `- \`${s.name}\` (${s.displayName}): ${s.description}`)
+        .join('\n');
+      const history = this.recentHistory(main.id);
+      const prompt =
+        `The user says:\n"""\n${content}\n"""\n\n` +
+        `Team available:\n${roster || '(no specialists yet)'}\n\n` +
+        `Conversation so far:\n${history}\n\n` +
+        `Respond to the user. If this needs hands-on work, say briefly how you'll approach it as an epic. ` +
+        `If it would benefit from a team discussion, note that you'll convene one.`;
+      await this.actor(lead).ask(prompt, main.id, null);
+
+      // Convene a brainstorm when the user asks to build/plan/discuss.
+      if (/\b(build|implement|design|plan|brainstorm|discuss|architect|feature)\b/i.test(content)) {
+        const participants = this.pickDiscussants();
+        if (participants.length > 0) {
+          await this.runGroupChat(
+            `How should we approach: ${content.slice(0, 80)}`,
+            participants,
+            null,
+          );
+        }
+      }
+    })();
+  }
+
+  /* ------------------------------------------------------- group chats */
+
+  /** Lead-moderated group discussion: each participant contributes in parallel. */
+  async runGroupChat(
+    topic: string,
+    participantIds: string[],
+    workItemId: string | null,
+  ): Promise<string> {
+    if (this.groupDepth >= 2) return ''; // guard against runaway nesting
+    this.groupDepth += 1;
+    try {
+      const lead = this.lead();
+      const participants = participantIds
+        .map((id) => this.deps.store.getAgent(id))
+        .filter((a): a is Agent => !!a && a.kind === 'specialist');
+      const thread = this.deps.store.createThread({
+        projectId: this.projectId,
+        kind: 'group',
+        topic,
+        workItemId,
+        participantAgentIds: [lead.id, ...participants.map((p) => p.id)],
+        includesUser: true,
+      });
+      this.deps.bus.publish({ type: 'thread.updated', projectId: this.projectId, thread });
+
+      // Lead opens the discussion.
+      await this.actor(lead).ask(
+        `You are moderating a group discussion titled "${topic}". Open it by framing the goal and the key questions for the team in 2-3 sentences.`,
+        thread.id,
+        workItemId,
+      );
+
+      // Participants contribute concurrently (truly async).
+      const contributions = await Promise.all(
+        participants.map((p) =>
+          this.actor(p).ask(
+            `Group discussion "${topic}". Give your concrete recommendation from your discipline in 2-4 sentences. Reference specifics.`,
+            thread.id,
+            workItemId,
+          ),
+        ),
+      );
+
+      // Lead synthesizes.
+      const summary = await this.actor(lead).ask(
+        `Synthesize the discussion "${topic}" into a clear decision and next steps.\n\nContributions:\n${contributions
+          .map((c, i) => `- ${participants[i]!.displayName}: ${c}`)
+          .join('\n')}`,
+        thread.id,
+        workItemId,
+      );
+
+      // Post a short summary back to the main thread so the user stays informed.
+      const main = this.ensureMainThread();
+      this.postMessage(main.id, lead, `📋 Discussion "${topic}" concluded. ${summary}`);
       this.deps.store.appendEvent({
         projectId: this.projectId,
-        type: 'message',
-        summary: `User: ${content}`,
-      });
-
-      const session = await this.ensureSession();
-      const placeholder = this.deps.store.appendChat({
-        projectId: this.projectId,
-        role: 'lead',
-        content: '',
+        agentId: lead.id,
+        type: 'discussion',
+        summary: `Group chat: ${topic}`,
       });
       this.deps.bus.publish({
-        type: 'chat.message',
+        type: 'thread.updated',
         projectId: this.projectId,
-        message: placeholder,
+        thread: this.deps.store.closeThread(thread.id) ?? thread,
       });
-
-      this.leadMessageId = placeholder.id;
-      this.leadBuffer = '';
-      await session.send(this.buildChatPrompt(content), placeholder.id);
-      await this.pullNextForAll();
-    });
+      return summary;
+    } finally {
+      this.groupDepth -= 1;
+    }
   }
 
-  /** Dispatch a specific work item to its assigned agent (delegation). */
-  dispatchWorkItem(workItemId: string): Promise<void> {
-    return this.enqueue(() => this.runWorkItem(workItemId));
+  /** When an agent asks the Lead to open a group chat, convene the right people. */
+  async maybeHandleGroupChatRequest(
+    requester: Agent,
+    reply: string,
+    workItemId: string | null,
+  ): Promise<void> {
+    const m = reply.match(GROUPCHAT_RE);
+    if (!m) return;
+    const topic = m[1]!.trim();
+    const others = this.specialists().filter((s) => s.id !== requester.id);
+    const participants = [requester.id, ...others.slice(0, 3).map((s) => s.id)];
+    this.deps.store.appendEvent({
+      projectId: this.projectId,
+      agentId: requester.id,
+      type: 'discussion',
+      summary: `${requester.displayName} requested a group chat: ${topic}`,
+    });
+    await this.runGroupChat(topic, participants, workItemId);
+  }
+
+  private pickDiscussants(): string[] {
+    // Prefer PM + UX + core engineers when present; else first few specialists.
+    const specialists = this.specialists();
+    const preferred = ['pm', 'ux', 'frontend', 'backend', 'qa'];
+    const chosen = specialists.filter((s) => preferred.includes(s.name)).map((s) => s.id);
+    const rest = specialists.filter((s) => !preferred.includes(s.name)).map((s) => s.id);
+    return [...chosen, ...rest].slice(0, 4);
+  }
+
+  private recentHistory(threadId: string, limit = 8): string {
+    const msgs = this.deps.store.listThreadMessages(threadId).slice(-limit);
+    return (
+      msgs
+        .map((m) => {
+          const who = m.authorAgentId
+            ? (this.deps.store.getAgent(m.authorAgentId)?.displayName ?? 'Agent')
+            : 'User';
+          return `${who}: ${m.content}`;
+        })
+        .join('\n') || '(no messages yet)'
+    );
+  }
+
+  /* ---------------------------------------------------------- board work */
+
+  onItemAssigned(workItemId: string): Promise<void> {
+    return this.runWorkItem(workItemId);
   }
 
   private async runWorkItem(workItemId: string): Promise<void> {
@@ -150,115 +406,41 @@ class ProjectOrchestrator {
     if (!agent || agent.kind !== 'specialist') return;
     if (item.status === 'done' || item.status === 'in_progress') return;
 
-    this.currentWorkItemId = item.id;
     this.moveItem(item.id, 'in_progress');
-    this.setStatus(agent.id, 'working');
-    this.deps.store.upsertTask({
+    const main = this.ensureMainThread();
+    const startTask = this.deps.store.upsertTask({
       projectId: this.projectId,
       agentId: agent.id,
       workItemId: item.id,
       title: item.title,
       status: 'doing',
     });
-    this.deps.bus.publish({
-      type: 'task.updated',
-      projectId: this.projectId,
-      task: this.deps.store.listTasks(this.projectId, agent.id).slice(-1)[0]!,
-    });
+    this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: startTask });
+    const prompt =
+      `The Team Lead assigned you this task. Work on it and report progress to the team.\n\n` +
+      `Task: ${item.title}\nDetails: ${item.description || '(none)'}\n` +
+      `When done, summarize what you did.`;
+    await this.actor(agent).ask(prompt, main.id, item.id);
 
-    const session = await this.ensureSession();
-    const placeholder = this.deps.store.appendChat({
-      projectId: this.projectId,
-      role: 'lead',
-      content: '',
-    });
-    this.deps.bus.publish({
-      type: 'chat.message',
-      projectId: this.projectId,
-      message: placeholder,
-    });
-    this.leadMessageId = placeholder.id;
-    this.leadBuffer = '';
-
-    await session.send(this.buildDispatchPrompt(agent, item), placeholder.id);
-
-    // On completion, move to review and mark agent idle, then pull the next item.
-    const latest = this.deps.store.getWorkItem(item.id);
-    if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
-    this.setStatus(agent.id, 'idle');
-    this.deps.store.upsertTask({
+    const doneTask = this.deps.store.upsertTask({
       projectId: this.projectId,
       agentId: agent.id,
       workItemId: item.id,
       title: item.title,
       status: 'done',
     });
-    this.currentWorkItemId = null;
+    this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: doneTask });
+    const latest = this.deps.store.getWorkItem(item.id);
+    if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
     await this.pullNext(agent.id);
   }
 
-  /** Autonomous pull-loop: an idle agent picks up its next assigned item. */
   private async pullNext(agentId: string): Promise<void> {
     const next = this.deps.store.nextAssignedItem(this.projectId, agentId);
     if (next) await this.runWorkItem(next.id);
   }
 
-  private async pullNextForAll(): Promise<void> {
-    for (const agent of this.deps.store.listAgents(this.projectId)) {
-      if (agent.kind !== 'specialist' || agent.status === 'working') continue;
-      const next = this.deps.store.nextAssignedItem(this.projectId, agent.id);
-      if (next) {
-        await this.runWorkItem(next.id);
-        return; // one at a time per project turn; loop continues on next idle
-      }
-    }
-  }
-
-  /** Public entry used when an item is (re)assigned via the API. */
-  onItemAssigned(workItemId: string): Promise<void> {
-    return this.enqueue(async () => {
-      const item = this.deps.store.getWorkItem(workItemId);
-      if (item && item.assigneeAgentId && (item.status === 'backlog' || item.status === 'todo')) {
-        await this.runWorkItem(workItemId);
-      }
-    });
-  }
-
-  answer(questionId: string, answer: string): boolean {
-    const resolve = this.pending.get(questionId);
-    if (!resolve) return false;
-    this.pending.delete(questionId);
-    resolve(answer);
-    return true;
-  }
-
-  /* --------------------------------------------------------------- helpers */
-
-  private leadMessageId: string | null = null;
-  private leadBuffer = '';
-
-  private buildChatPrompt(content: string): string {
-    const specialists = this.deps.store
-      .listAgents(this.projectId)
-      .filter((a) => a.kind === 'specialist');
-    const roster = specialists
-      .map((s) => `- \`${s.name}\` — ${s.displayName}: ${s.description}`)
-      .join('\n');
-    return (
-      `${content}\n\n---\nYour available specialist agents:\n${roster || '(none yet)'}\n` +
-      `If this requires hands-on work, delegate to the most suitable specialist by referencing its name in backticks, e.g. delegate to \`frontend\`.`
-    );
-  }
-
-  private buildDispatchPrompt(agent: Agent, item: WorkItem): string {
-    return (
-      `A work item has been assigned to the specialist \`${agent.name}\` (${agent.displayName}). ` +
-      `Delegate it to that agent and have them complete it.\n\n` +
-      `Work item: ${item.title}\n` +
-      `Details: ${item.description || '(none provided)'}\n\n` +
-      `Coordinate, then give me a short summary when done.`
-    );
-  }
+  /* -------------------------------------------------------- primitives */
 
   private moveItem(workItemId: string, status: WorkItem['status']): void {
     const updated = this.deps.store.updateWorkItem(workItemId, { status });
@@ -270,7 +452,7 @@ class ProjectOrchestrator {
       });
   }
 
-  private setStatus(agentId: string, status: Agent['status']): void {
+  setStatus(agentId: string, status: Agent['status']): void {
     const updated = this.deps.store.setAgentStatus(agentId, status);
     if (updated) {
       this.deps.bus.publish({ type: 'agent.status', projectId: this.projectId, agentId, status });
@@ -283,129 +465,13 @@ class ProjectOrchestrator {
     }
   }
 
-  private handleEvent(event: AdapterEvent): void {
-    try {
-      this.handleEventUnsafe(event);
-    } catch (err) {
-      process.stderr.write(
-        `[orchestrator ${this.projectId}] event handler error: ${err instanceof Error ? err.stack : String(err)}\n`,
-      );
-    }
-  }
-
-  private handleEventUnsafe(event: AdapterEvent): void {
-    const { store, bus } = this.deps;
-    const pid = this.projectId;
-    switch (event.kind) {
-      case 'lead_delta':
-        this.leadBuffer += event.delta;
-        bus.publish({
-          type: 'chat.delta',
-          projectId: pid,
-          messageId: event.messageId,
-          delta: event.delta,
-        });
-        break;
-      case 'lead_message': {
-        const updated = store.updateChat(event.messageId, event.text);
-        if (updated) bus.publish({ type: 'chat.message', projectId: pid, message: updated });
-        store.appendEvent({
-          projectId: pid,
-          type: 'message',
-          summary: `Team Lead: ${event.text.slice(0, 200)}`,
-        });
-        break;
-      }
-      case 'reasoning':
-        this.emitAgentEvent(
-          event.agentName,
-          'reasoning',
-          event.text,
-          { text: event.text },
-          this.currentWorkItemId,
-        );
-        break;
-      case 'tool_call':
-        this.emitAgentEvent(
-          event.agentName,
-          'tool_call',
-          `${event.toolName}`,
-          event.detail ?? null,
-          this.currentWorkItemId,
-        );
-        break;
-      case 'tool_result':
-        this.emitAgentEvent(
-          event.agentName,
-          'tool_result',
-          `${event.toolName} done`,
-          event.detail ?? null,
-          this.currentWorkItemId,
-        );
-        break;
-      case 'subagent_started': {
-        const agentId = this.agentIdByName(event.agentName);
-        if (agentId) this.setStatus(agentId, 'working');
-        this.emitAgentEvent(
-          event.agentName,
-          'subagent_started',
-          `${event.displayName} started`,
-          { description: event.description },
-          this.currentWorkItemId,
-        );
-        break;
-      }
-      case 'subagent_completed': {
-        const agentId = this.agentIdByName(event.agentName);
-        if (agentId) this.setStatus(agentId, 'idle');
-        this.emitAgentEvent(
-          event.agentName,
-          'subagent_completed',
-          `${event.displayName} completed`,
-          event.detail ?? null,
-          this.currentWorkItemId,
-        );
-        break;
-      }
-      case 'subagent_failed': {
-        const agentId = this.agentIdByName(event.agentName);
-        if (agentId) this.setStatus(agentId, 'blocked');
-        this.emitAgentEvent(
-          event.agentName,
-          'subagent_failed',
-          `${event.displayName} failed: ${event.error}`,
-          { error: event.error },
-          this.currentWorkItemId,
-        );
-        break;
-      }
-      case 'task_update': {
-        const agentId = this.agentIdByName(event.agentName);
-        if (agentId) {
-          const task = store.upsertTask({
-            projectId: pid,
-            agentId,
-            workItemId: this.currentWorkItemId,
-            title: event.title,
-            status: event.status,
-          });
-          bus.publish({ type: 'task.updated', projectId: pid, task });
-        }
-        break;
-      }
-      case 'idle':
-        break;
-    }
-  }
-
-  private emitAgentEvent(
-    agentName: string | null,
+  private emitEvent(
+    agentId: string | null,
     type: Parameters<Store['appendEvent']>[0]['type'],
     summary: string,
     detail: Record<string, unknown> | null,
     workItemId: string | null,
   ): void {
-    const agentId = this.agentIdByName(agentName);
     const event = this.deps.store.appendEvent({
       projectId: this.projectId,
       agentId,
@@ -417,33 +483,28 @@ class ProjectOrchestrator {
     this.deps.bus.publish({ type: 'event.appended', projectId: this.projectId, event });
   }
 
-  private async handlePermission(ask: PermissionAsk): Promise<'approve' | 'reject'> {
+  /* -------------------------------------------------- perms & escalation */
+
+  async handlePermission(ask: PermissionAsk): Promise<'approve' | 'reject'> {
     const project = this.project();
     if (project.settings.approvalMode === 'auto-workspace') {
       if (ask.kind === 'read') return 'approve';
-      const ok = isInsideWorkspace(project.repoDir, ask.fileName);
-      return ok ? 'approve' : 'reject';
+      return isInsideWorkspace(project.repoDir, ask.fileName) ? 'approve' : 'reject';
     }
-    // manual: surface as a yes/no question to the user.
     const label =
       ask.kind === 'shell'
-        ? `run command: ${ask.command ?? ''}`
+        ? `run: ${ask.command ?? ''}`
         : ask.fileName
           ? `${ask.kind} ${ask.fileName}`
           : `use ${ask.toolName ?? ask.kind}`;
-    const answer = await this.raiseQuestion(
-      this.agentIdByName(ask.agentName),
-      `Approve ${label}?`,
-      ['Approve', 'Reject'],
-    );
+    const answer = await this.raiseQuestion(null, `Approve ${label}?`, ['Approve', 'Reject']);
     return answer.toLowerCase().startsWith('a') ? 'approve' : 'reject';
   }
 
-  private async handleUserInput(ask: UserInputAsk): Promise<string> {
-    const agentId = this.agentIdByName(ask.agentName);
-    if (agentId) this.setStatus(agentId, 'needs_input');
-    const answer = await this.raiseQuestion(agentId, ask.question, ask.choices);
-    if (agentId) this.setStatus(agentId, 'working');
+  async handleUserInput(agent: Agent, ask: UserInputAsk): Promise<string> {
+    this.setStatus(agent.id, 'needs_input');
+    const answer = await this.raiseQuestion(agent.id, ask.question, ask.choices);
+    this.setStatus(agent.id, 'working');
     return answer;
   }
 
@@ -479,23 +540,27 @@ class ProjectOrchestrator {
     });
   }
 
-  /** Serialize all turns for this project so streams never interleave. */
-  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.chain.then(fn, fn);
-    this.chain = run.catch(() => undefined);
-    return run as Promise<T>;
+  answer(questionId: string, answer: string): boolean {
+    const resolve = this.pending.get(questionId);
+    if (!resolve) return false;
+    this.pending.delete(questionId);
+    resolve(answer);
+    return true;
+  }
+
+  async invalidateSession(): Promise<void> {
+    for (const a of this.actors.values()) await a.dispose();
+    this.actors.clear();
   }
 
   async dispose(): Promise<void> {
-    if (this.session) await this.session.dispose().catch(() => undefined);
-    this.session = null;
+    await this.invalidateSession();
   }
 }
 
 /** Owns one orchestrator per project; enables many projects to run in parallel. */
 export class OrchestratorManager {
   private readonly byProject = new Map<string, ProjectOrchestrator>();
-  private readonly _id = nanoid(6);
 
   constructor(private readonly deps: Deps) {}
 

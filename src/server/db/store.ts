@@ -11,7 +11,11 @@ import type {
   ChatRole,
   Project,
   ProjectSettings,
+  PullRequest,
+  PrStatus,
   Question,
+  Thread,
+  ThreadKind,
   WorkItem,
 } from '@shared/index';
 
@@ -77,11 +81,16 @@ const toAgent = (r: AgentRow): Agent => ({
 interface WorkItemRow {
   id: string;
   project_id: string;
+  kind: string;
+  parent_id: string | null;
   title: string;
   description: string;
   status: string;
   priority: string;
+  stream: string | null;
+  depends_on: string;
   assignee_agent_id: string | null;
+  branch: string | null;
   ord: number;
   created_at: string;
   updated_at: string;
@@ -89,11 +98,16 @@ interface WorkItemRow {
 const toWorkItem = (r: WorkItemRow): WorkItem => ({
   id: r.id,
   projectId: r.project_id,
+  kind: (r.kind as WorkItem['kind']) ?? 'task',
+  parentId: r.parent_id ?? null,
   title: r.title,
   description: r.description,
   status: r.status as WorkItem['status'],
   priority: r.priority as WorkItem['priority'],
+  stream: r.stream ?? null,
+  dependsOn: r.depends_on ? (JSON.parse(r.depends_on) as string[]) : [],
   assigneeAgentId: r.assignee_agent_id,
+  branch: r.branch ?? null,
   order: r.ord,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -144,16 +158,76 @@ const toEvent = (r: AgentEventRow): AgentEvent => ({
 interface ChatRow {
   id: string;
   project_id: string;
+  thread_id: string;
   role: string;
+  author_agent_id: string | null;
   content: string;
   created_at: string;
 }
 const toChat = (r: ChatRow): ChatMessage => ({
   id: r.id,
   projectId: r.project_id,
+  threadId: r.thread_id,
   role: r.role as ChatRole,
+  authorAgentId: r.author_agent_id ?? null,
   content: r.content,
   createdAt: r.created_at,
+});
+
+interface ThreadRow {
+  id: string;
+  project_id: string;
+  kind: string;
+  topic: string;
+  status: string;
+  work_item_id: string | null;
+  participants: string;
+  includes_user: number;
+  created_at: string;
+  updated_at: string;
+}
+const toThread = (r: ThreadRow): Thread => ({
+  id: r.id,
+  projectId: r.project_id,
+  kind: r.kind as ThreadKind,
+  topic: r.topic,
+  status: r.status as Thread['status'],
+  workItemId: r.work_item_id ?? null,
+  participantAgentIds: r.participants ? (JSON.parse(r.participants) as string[]) : [],
+  includesUser: r.includes_user !== 0,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface PrRow {
+  id: string;
+  project_id: string;
+  work_item_id: string | null;
+  author_agent_id: string | null;
+  reviewer_agent_id: string | null;
+  title: string;
+  description: string;
+  branch: string;
+  base_branch: string;
+  diff: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+const toPr = (r: PrRow): PullRequest => ({
+  id: r.id,
+  projectId: r.project_id,
+  workItemId: r.work_item_id ?? null,
+  authorAgentId: r.author_agent_id ?? null,
+  reviewerAgentId: r.reviewer_agent_id ?? null,
+  title: r.title,
+  description: r.description,
+  branch: r.branch,
+  baseBranch: r.base_branch,
+  diff: r.diff,
+  status: r.status as PrStatus,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
 });
 
 interface QuestionRow {
@@ -333,9 +407,20 @@ export class Store {
   }
 
   /* work items */
-  createWorkItem(
-    w: Omit<WorkItem, 'id' | 'createdAt' | 'updatedAt' | 'order'> & { order?: number },
-  ): WorkItem {
+  createWorkItem(w: {
+    projectId: string;
+    title: string;
+    description: string;
+    status: WorkItem['status'];
+    priority: WorkItem['priority'];
+    assigneeAgentId: string | null;
+    kind?: WorkItem['kind'];
+    parentId?: string | null;
+    stream?: string | null;
+    dependsOn?: string[];
+    branch?: string | null;
+    order?: number;
+  }): WorkItem {
     const ts = now();
     const order =
       w.order ??
@@ -349,19 +434,24 @@ export class Store {
     const row: WorkItemRow = {
       id: id('wi'),
       project_id: w.projectId,
+      kind: w.kind ?? 'task',
+      parent_id: w.parentId ?? null,
       title: w.title,
       description: w.description,
       status: w.status,
       priority: w.priority,
+      stream: w.stream ?? null,
+      depends_on: JSON.stringify(w.dependsOn ?? []),
       assignee_agent_id: w.assigneeAgentId,
+      branch: w.branch ?? null,
       ord: order,
       created_at: ts,
       updated_at: ts,
     };
     this.db
       .prepare(
-        `INSERT INTO work_items (id,project_id,title,description,status,priority,assignee_agent_id,ord,created_at,updated_at)
-         VALUES (@id,@project_id,@title,@description,@status,@priority,@assignee_agent_id,@ord,@created_at,@updated_at)`,
+        `INSERT INTO work_items (id,project_id,kind,parent_id,title,description,status,priority,stream,depends_on,assignee_agent_id,branch,ord,created_at,updated_at)
+         VALUES (@id,@project_id,@kind,@parent_id,@title,@description,@status,@priority,@stream,@depends_on,@assignee_agent_id,@branch,@ord,@created_at,@updated_at)`,
       )
       .run(row);
     return toWorkItem(row);
@@ -374,6 +464,13 @@ export class Store {
       .map((r) => toWorkItem(r as WorkItemRow));
   }
 
+  listChildTasks(parentId: string): WorkItem[] {
+    return this.db
+      .prepare(`SELECT * FROM work_items WHERE parent_id=? ORDER BY ord ASC, created_at ASC`)
+      .all(parentId)
+      .map((r) => toWorkItem(r as WorkItemRow));
+  }
+
   getWorkItem(workItemId: string): WorkItem | undefined {
     const r = this.db.prepare(`SELECT * FROM work_items WHERE id=?`).get(workItemId);
     return r ? toWorkItem(r as WorkItemRow) : undefined;
@@ -382,7 +479,18 @@ export class Store {
   updateWorkItem(
     workItemId: string,
     patch: Partial<
-      Pick<WorkItem, 'title' | 'description' | 'status' | 'priority' | 'assigneeAgentId' | 'order'>
+      Pick<
+        WorkItem,
+        | 'title'
+        | 'description'
+        | 'status'
+        | 'priority'
+        | 'assigneeAgentId'
+        | 'order'
+        | 'stream'
+        | 'branch'
+        | 'dependsOn'
+      >
     >,
   ): WorkItem | undefined {
     const existing = this.getWorkItem(workItemId);
@@ -390,7 +498,7 @@ export class Store {
     const m = { ...existing, ...patch };
     this.db
       .prepare(
-        `UPDATE work_items SET title=?, description=?, status=?, priority=?, assignee_agent_id=?, ord=?, updated_at=? WHERE id=?`,
+        `UPDATE work_items SET title=?, description=?, status=?, priority=?, assignee_agent_id=?, ord=?, stream=?, branch=?, depends_on=?, updated_at=? WHERE id=?`,
       )
       .run(
         m.title,
@@ -399,6 +507,9 @@ export class Store {
         m.priority,
         m.assigneeAgentId,
         m.order,
+        m.stream,
+        m.branch,
+        JSON.stringify(m.dependsOn ?? []),
         now(),
         workItemId,
       );
@@ -513,18 +624,92 @@ export class Store {
       .map((r) => toEvent(r as AgentEventRow));
   }
 
-  /* chat */
-  appendChat(m: { projectId: string; role: ChatRole; content: string }): ChatMessage {
+  /* threads */
+  ensureMainThread(projectId: string): Thread {
+    const existing = this.db
+      .prepare(`SELECT * FROM threads WHERE project_id=? AND kind='main'`)
+      .get(projectId) as ThreadRow | undefined;
+    if (existing) return toThread(existing);
+    return this.createThread({
+      projectId,
+      kind: 'main',
+      topic: 'Main',
+      workItemId: null,
+      participantAgentIds: [],
+      includesUser: true,
+    });
+  }
+
+  createThread(t: {
+    projectId: string;
+    kind: ThreadKind;
+    topic: string;
+    workItemId?: string | null;
+    participantAgentIds?: string[];
+    includesUser?: boolean;
+  }): Thread {
+    const ts = now();
+    const row: ThreadRow = {
+      id: id('thr'),
+      project_id: t.projectId,
+      kind: t.kind,
+      topic: t.topic,
+      status: 'open',
+      work_item_id: t.workItemId ?? null,
+      participants: JSON.stringify(t.participantAgentIds ?? []),
+      includes_user: t.includesUser === false ? 0 : 1,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO threads (id,project_id,kind,topic,status,work_item_id,participants,includes_user,created_at,updated_at)
+         VALUES (@id,@project_id,@kind,@topic,@status,@work_item_id,@participants,@includes_user,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toThread(row);
+  }
+
+  listThreads(projectId: string): Thread[] {
+    return this.db
+      .prepare(`SELECT * FROM threads WHERE project_id=? ORDER BY created_at ASC`)
+      .all(projectId)
+      .map((r) => toThread(r as ThreadRow));
+  }
+
+  getThread(threadId: string): Thread | undefined {
+    const r = this.db.prepare(`SELECT * FROM threads WHERE id=?`).get(threadId);
+    return r ? toThread(r as ThreadRow) : undefined;
+  }
+
+  closeThread(threadId: string): Thread | undefined {
+    this.db
+      .prepare(`UPDATE threads SET status='closed', updated_at=? WHERE id=?`)
+      .run(now(), threadId);
+    return this.getThread(threadId);
+  }
+
+  /* chat / thread messages */
+  appendChat(m: {
+    projectId: string;
+    threadId: string;
+    role: ChatRole;
+    authorAgentId?: string | null;
+    content: string;
+  }): ChatMessage {
     const row: ChatRow = {
       id: id('msg'),
       project_id: m.projectId,
+      thread_id: m.threadId,
       role: m.role,
+      author_agent_id: m.authorAgentId ?? null,
       content: m.content,
       created_at: now(),
     };
     this.db
       .prepare(
-        `INSERT INTO chat_messages (id,project_id,role,content,created_at) VALUES (@id,@project_id,@role,@content,@created_at)`,
+        `INSERT INTO chat_messages (id,project_id,thread_id,role,author_agent_id,content,created_at)
+         VALUES (@id,@project_id,@thread_id,@role,@author_agent_id,@content,@created_at)`,
       )
       .run(row);
     return toChat(row);
@@ -541,6 +726,80 @@ export class Store {
       .prepare(`SELECT * FROM chat_messages WHERE project_id=? ORDER BY created_at ASC`)
       .all(projectId)
       .map((r) => toChat(r as ChatRow));
+  }
+
+  listThreadMessages(threadId: string): ChatMessage[] {
+    return this.db
+      .prepare(`SELECT * FROM chat_messages WHERE thread_id=? ORDER BY created_at ASC`)
+      .all(threadId)
+      .map((r) => toChat(r as ChatRow));
+  }
+
+  /* pull requests */
+  createPR(p: {
+    projectId: string;
+    workItemId?: string | null;
+    authorAgentId?: string | null;
+    title: string;
+    description: string;
+    branch: string;
+    baseBranch: string;
+    diff: string;
+  }): PullRequest {
+    const ts = now();
+    const row: PrRow = {
+      id: id('pr'),
+      project_id: p.projectId,
+      work_item_id: p.workItemId ?? null,
+      author_agent_id: p.authorAgentId ?? null,
+      reviewer_agent_id: null,
+      title: p.title,
+      description: p.description,
+      branch: p.branch,
+      base_branch: p.baseBranch,
+      diff: p.diff,
+      status: 'open',
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO pull_requests (id,project_id,work_item_id,author_agent_id,reviewer_agent_id,title,description,branch,base_branch,diff,status,created_at,updated_at)
+         VALUES (@id,@project_id,@work_item_id,@author_agent_id,@reviewer_agent_id,@title,@description,@branch,@base_branch,@diff,@status,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toPr(row);
+  }
+
+  updatePR(
+    prId: string,
+    patch: Partial<Pick<PullRequest, 'status' | 'reviewerAgentId' | 'description' | 'diff'>>,
+  ): PullRequest | undefined {
+    const r = this.db.prepare(`SELECT * FROM pull_requests WHERE id=?`).get(prId) as
+      PrRow | undefined;
+    if (!r) return undefined;
+    const m = toPr(r);
+    this.db
+      .prepare(
+        `UPDATE pull_requests SET status=?, reviewer_agent_id=?, description=?, diff=?, updated_at=? WHERE id=?`,
+      )
+      .run(
+        patch.status ?? m.status,
+        patch.reviewerAgentId ?? m.reviewerAgentId,
+        patch.description ?? m.description,
+        patch.diff ?? m.diff,
+        now(),
+        prId,
+      );
+    const updated = this.db.prepare(`SELECT * FROM pull_requests WHERE id=?`).get(prId);
+    return updated ? toPr(updated as PrRow) : undefined;
+  }
+
+  listPRs(projectId: string): PullRequest[] {
+    return this.db
+      .prepare(`SELECT * FROM pull_requests WHERE project_id=? ORDER BY created_at ASC`)
+      .all(projectId)
+      .map((r) => toPr(r as PrRow));
   }
 
   /* questions */

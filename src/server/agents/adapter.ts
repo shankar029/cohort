@@ -1,47 +1,22 @@
 import type { ApprovalMode } from '@shared/index';
 
-/** A specialist agent definition handed to the SDK as a custom agent. */
-export interface AgentDef {
-  name: string;
-  displayName: string;
-  description: string;
-  prompt: string;
-  tools: string[] | null;
-  skills: string[];
-  model: string;
-}
+/**
+ * v2 adapter seam: one session per agent (independent actors), replacing the
+ * single team-session + SDK sub-agents model. The orchestrator owns the actor
+ * system and routes messages between agents, the main thread, and group chats.
+ */
 
-/** Normalized event emitted by any adapter, decoupled from the SDK's wire shape. */
-export type AdapterEvent =
-  | { kind: 'lead_delta'; messageId: string; delta: string }
-  | { kind: 'lead_message'; messageId: string; text: string }
-  | { kind: 'reasoning'; agentName: string | null; text: string }
-  | {
-      kind: 'tool_call';
-      agentName: string | null;
-      toolName: string;
-      detail?: Record<string, unknown>;
-    }
-  | {
-      kind: 'tool_result';
-      agentName: string | null;
-      toolName: string;
-      detail?: Record<string, unknown>;
-    }
-  | { kind: 'subagent_started'; agentName: string; displayName: string; description?: string }
-  | {
-      kind: 'subagent_completed';
-      agentName: string;
-      displayName: string;
-      detail?: Record<string, unknown>;
-    }
-  | { kind: 'subagent_failed'; agentName: string; displayName: string; error: string }
-  | { kind: 'task_update'; agentName: string; title: string; status: 'todo' | 'doing' | 'done' }
+/** A streamed event from a single agent's own session. */
+export type SessionEvent =
+  | { kind: 'delta'; messageId: string; delta: string }
+  | { kind: 'message'; messageId: string; text: string }
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'tool_call'; toolName: string; detail?: Record<string, unknown> }
+  | { kind: 'tool_result'; toolName: string; detail?: Record<string, unknown> }
   | { kind: 'idle' };
 
 export interface PermissionAsk {
   kind: 'read' | 'write' | 'shell' | 'mcp' | 'custom-tool' | 'url' | string;
-  agentName: string | null;
   toolName?: string;
   fileName?: string;
   command?: string;
@@ -49,42 +24,42 @@ export interface PermissionAsk {
 export type PermissionReply = 'approve' | 'reject';
 
 export interface UserInputAsk {
-  agentName: string | null;
   question: string;
   choices?: string[];
 }
 
-/** Callbacks the orchestrator supplies when creating a team session. */
-export interface TeamSessionCallbacks {
-  onEvent: (event: AdapterEvent) => void;
+export interface AgentSessionCallbacks {
+  onEvent: (event: SessionEvent) => void;
   onPermission: (ask: PermissionAsk) => Promise<PermissionReply>;
   onUserInput: (ask: UserInputAsk) => Promise<string>;
 }
 
-export interface TeamSessionConfig extends TeamSessionCallbacks {
+export interface AgentSessionConfig extends AgentSessionCallbacks {
   projectId: string;
+  agentId: string;
+  agentName: string;
+  displayName: string;
+  role: 'lead' | 'specialist';
+  /** System prompt / persona. */
+  persona: string;
+  model: string;
+  tools: string[] | null;
+  skills: string[];
   workingDirectory: string;
-  leadName: string;
-  leadDisplayName: string;
-  leadModel: string;
-  leadPrompt: string;
-  specialists: AgentDef[];
   skillDirectories: string[];
   approvalMode: ApprovalMode;
 }
 
-/** A live team session for a single project. */
-export interface TeamSession {
-  /** Send a prompt to the Team Lead. Streams via callbacks; resolves when idle. */
-  send(prompt: string, messageId: string): Promise<void>;
-  abort(): Promise<void>;
+/** A live session for a single agent. `ask` resolves with the final message text. */
+export interface AgentSession {
+  ask(prompt: string, messageId: string): Promise<string>;
   dispose(): Promise<void>;
 }
 
-/** Factory for team sessions. Implemented by the Real (SDK) and Fake adapters. */
+/** Factory for per-agent sessions. Implemented by the Real (SDK) and Fake adapters. */
 export interface CopilotAdapter {
   readonly name: string;
-  createTeamSession(config: TeamSessionConfig): Promise<TeamSession>;
+  createAgentSession(config: AgentSessionConfig): Promise<AgentSession>;
   /** Models available to the authenticated account (for per-agent selection). */
   listModels(): Promise<string[]>;
   /** Release any process-wide resources (e.g. the CopilotClient). */

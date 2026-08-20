@@ -1,108 +1,29 @@
-import type { CopilotAdapter, PermissionAsk, TeamSession, TeamSessionConfig } from './adapter.js';
+import type { AgentSession, AgentSessionConfig, CopilotAdapter, PermissionAsk } from './adapter.js';
 
 /**
- * Real adapter backed by @github/copilot-sdk, driving the local Copilot CLI.
+ * Real adapter backed by @github/copilot-sdk. Each agent gets its OWN session
+ * (independent actor), so agents run concurrently and the orchestrator routes
+ * their messages between the main thread and group chats.
  *
- * The SDK is imported lazily so the Fake adapter (tests / offline / UI dev) never
- * loads it. Team Lead = the session's default agent; specialists = customAgents.
- * Sub-agent lifecycle + tool events are normalized into AdapterEvent, attributing
- * work to whichever specialist is currently active.
+ * The SDK is imported lazily so the Fake adapter (tests / offline) never loads it.
  */
-
-// Tool the specialists use to maintain their own visible task board.
-const TASK_TOOL = 'update_task_board';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnySdk = any;
 
-class RealTeamSession implements TeamSession {
-  private currentAgent: string | null = null;
-  private queue: Promise<void> = Promise.resolve();
+// Tool each agent uses to maintain its own visible task board.
+const TASK_TOOL = 'update_task_board';
+
+class RealAgentSession implements AgentSession {
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly session: AnySdk,
-    private readonly config: TeamSessionConfig,
-  ) {
-    this.wireEvents();
-  }
+    private readonly config: AgentSessionConfig,
+  ) {}
 
-  private wireEvents(): void {
-    const { onEvent } = this.config;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.session.on((event: any) => {
-      const data = event?.data ?? {};
-      switch (event?.type) {
-        case 'subagent.selected':
-          this.currentAgent = data.agentName ?? this.currentAgent;
-          break;
-        case 'subagent.started':
-          this.currentAgent = data.agentName ?? this.currentAgent;
-          onEvent({
-            kind: 'subagent_started',
-            agentName: data.agentName,
-            displayName: data.agentDisplayName ?? data.agentName,
-            description: data.agentDescription,
-          });
-          break;
-        case 'subagent.completed':
-          onEvent({
-            kind: 'subagent_completed',
-            agentName: data.agentName,
-            displayName: data.agentDisplayName ?? data.agentName,
-            detail: {
-              durationMs: data.durationMs,
-              totalTokens: data.totalTokens,
-              totalToolCalls: data.totalToolCalls,
-            },
-          });
-          this.currentAgent = null;
-          break;
-        case 'subagent.failed':
-          onEvent({
-            kind: 'subagent_failed',
-            agentName: data.agentName,
-            displayName: data.agentDisplayName ?? data.agentName,
-            error: String(data.error ?? 'unknown error'),
-          });
-          this.currentAgent = null;
-          break;
-        case 'subagent.deselected':
-          this.currentAgent = null;
-          break;
-        case 'assistant.reasoning':
-          if (data.content)
-            onEvent({
-              kind: 'reasoning',
-              agentName: this.currentAgent,
-              text: String(data.content),
-            });
-          break;
-        case 'tool.execution_start':
-          onEvent({
-            kind: 'tool_call',
-            agentName: this.currentAgent,
-            toolName: String(data.toolName ?? data.name ?? 'tool'),
-            detail: data.arguments ?? data.args,
-          });
-          break;
-        case 'tool.execution_complete':
-          onEvent({
-            kind: 'tool_result',
-            agentName: this.currentAgent,
-            toolName: String(data.toolName ?? data.name ?? 'tool'),
-            detail: { status: data.status },
-          });
-          break;
-        default:
-          break;
-      }
-    });
-  }
-
-  send(prompt: string, messageId: string): Promise<void> {
-    // Serialize sends so streaming from one turn never interleaves with another.
-    // Crucially, a failed turn must NOT poison the chain: both branches run the
-    // next turn, so one bad message can never wedge the session permanently.
+  ask(prompt: string, messageId: string): Promise<string> {
+    // Serialize turns for THIS agent; a failed turn never poisons the chain.
     const turn = this.queue.then(
       () => this.runTurn(prompt, messageId),
       () => this.runTurn(prompt, messageId),
@@ -111,50 +32,41 @@ class RealTeamSession implements TeamSession {
     return turn;
   }
 
-  private runTurn(prompt: string, messageId: string): Promise<void> {
+  private runTurn(prompt: string, messageId: string): Promise<string> {
     const { onEvent } = this.config;
-    return new Promise<void>((resolve) => {
+    return new Promise<string>((resolve) => {
       const offs: Array<() => void> = [];
       let settled = false;
-      let gotMessage = false;
+      let final = '';
       let buffer = '';
       const cleanup = (): void => {
         for (const off of offs) {
           try {
             off?.();
           } catch {
-            /* listener removal is best-effort */
+            /* best-effort */
           }
         }
       };
-      // A turn always resolves (never rejects) so the serialized queue keeps
-      // draining. Errors are surfaced as events + a visible lead message.
       const finish = (): void => {
         if (settled) return;
         settled = true;
         clearTimeout(safety);
-        // If the model streamed its reply as deltas without a discrete
-        // assistant.message, finalize from the accumulated buffer so the stored
-        // chat message is never left empty.
-        if (!gotMessage && buffer.trim()) {
-          onEvent({ kind: 'lead_message', messageId, text: buffer });
+        if (!final && buffer.trim()) {
+          final = buffer;
+          onEvent({ kind: 'message', messageId, text: buffer });
         }
         cleanup();
-        resolve();
+        resolve(final);
       };
       const fail = (err: unknown): void => {
         if (settled) return;
-        gotMessage = true;
-        onEvent({
-          kind: 'lead_message',
-          messageId,
-          text: `⚠️ The agent run failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
+        final = `⚠️ ${this.config.displayName} run failed: ${err instanceof Error ? err.message : String(err)}`;
+        onEvent({ kind: 'message', messageId, text: final });
         onEvent({ kind: 'idle' });
         finish();
       };
 
-      // Absolute safety net: never let a stuck turn freeze the whole session.
       const safety = setTimeout(() => finish(), 15 * 60_000);
       safety.unref?.();
 
@@ -163,7 +75,7 @@ class RealTeamSession implements TeamSession {
         this.session.on('assistant.message_delta', (e: any) => {
           if (e?.data?.deltaContent) {
             buffer += String(e.data.deltaContent);
-            onEvent({ kind: 'lead_delta', messageId, delta: String(e.data.deltaContent) });
+            onEvent({ kind: 'delta', messageId, delta: String(e.data.deltaContent) });
           }
         }),
       );
@@ -171,29 +83,46 @@ class RealTeamSession implements TeamSession {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.session.on('assistant.message', (e: any) => {
           if (e?.data?.content) {
-            gotMessage = true;
-            onEvent({ kind: 'lead_message', messageId, text: String(e.data.content) });
+            final = String(e.data.content);
+            onEvent({ kind: 'message', messageId, text: final });
           }
         }),
       );
       offs.push(
-        // session.idle is the SDK's authoritative end-of-turn signal (it lands
-        // after the final assistant.message), so it reliably completes the turn.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.session.on('assistant.reasoning', (e: any) => {
+          if (e?.data?.content) onEvent({ kind: 'reasoning', text: String(e.data.content) });
+        }),
+      );
+      offs.push(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.session.on('tool.execution_start', (e: any) => {
+          onEvent({
+            kind: 'tool_call',
+            toolName: String(e?.data?.toolName ?? e?.data?.name ?? 'tool'),
+            detail: e?.data?.arguments ?? e?.data?.args,
+          });
+        }),
+      );
+      offs.push(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.session.on('tool.execution_complete', (e: any) => {
+          onEvent({
+            kind: 'tool_result',
+            toolName: String(e?.data?.toolName ?? e?.data?.name ?? 'tool'),
+            detail: { status: e?.data?.status },
+          });
+        }),
+      );
+      offs.push(
         this.session.on('session.idle', () => {
           onEvent({ kind: 'idle' });
           finish();
         }),
       );
 
-      // session.send() resolves immediately with a message-id ack — it is NOT a
-      // turn-completion signal, so it is used only to catch a synchronous send
-      // failure (e.g. an unavailable model). Completion comes from session.idle.
       Promise.resolve(this.session.send({ prompt })).catch((err: unknown) => fail(err));
     });
-  }
-
-  async abort(): Promise<void> {
-    await this.session.abort?.();
   }
 
   async dispose(): Promise<void> {
@@ -216,59 +145,44 @@ export class RealCopilotAdapter implements CopilotAdapter {
     return client;
   }
 
-  async createTeamSession(config: TeamSessionConfig): Promise<TeamSession> {
+  async createAgentSession(config: AgentSessionConfig): Promise<AgentSession> {
     const client = await this.ensureClient();
     const sdk = this.sdk;
 
-    // A custom tool each specialist uses to maintain its own task board.
     const taskTool = sdk.defineTool(TASK_TOOL, {
       description:
         'Update your personal task board so the user can see your progress. Call this when you start, work on, or finish a step.',
-      // Minimal JSON schema (avoids a hard zod dependency in the tool def).
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Short task title' },
+          title: { type: 'string' },
           status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         },
         required: ['title', 'status'],
       },
       skipPermission: true,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      handler: async (args: any, invocation: any) => {
+      handler: async (args: any) => {
         config.onEvent({
-          kind: 'task_update',
-          agentName: invocation?.agentName ?? null,
-          title: String(args.title),
-          status: (args.status as 'todo' | 'doing' | 'done') ?? 'doing',
+          kind: 'tool_result',
+          toolName: TASK_TOOL,
+          detail: { title: String(args.title), status: String(args.status) },
         });
         return { ok: true };
       },
     });
 
-    const customAgents = config.specialists.map((s) => ({
-      name: s.name,
-      displayName: s.displayName,
-      description: s.description,
-      prompt: s.prompt,
-      tools: s.tools ? [...s.tools, TASK_TOOL] : null,
-      skills: s.skills,
-      model: s.model,
-    }));
-
     const session = await client.createSession({
-      model: config.leadModel,
+      model: config.model,
       workingDirectory: config.workingDirectory,
       streaming: true,
       tools: [taskTool],
       skillDirectories: config.skillDirectories,
-      customAgents,
-      systemMessage: { content: config.leadPrompt },
+      systemMessage: { content: config.persona },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       onPermissionRequest: async (request: any): Promise<any> => {
         const ask: PermissionAsk = {
           kind: request?.kind ?? 'custom-tool',
-          agentName: null,
           toolName: request?.toolName,
           fileName: request?.fileName,
           command: request?.fullCommandText,
@@ -279,7 +193,6 @@ export class RealCopilotAdapter implements CopilotAdapter {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       onUserInputRequest: async (request: any) => {
         const answer = await config.onUserInput({
-          agentName: null,
           question: String(request?.question ?? 'The agent needs your input.'),
           choices: request?.choices,
         });
@@ -287,14 +200,7 @@ export class RealCopilotAdapter implements CopilotAdapter {
       },
     });
 
-    return new RealTeamSession(session, config);
-  }
-
-  async shutdown(): Promise<void> {
-    if (this.client) {
-      await this.client.stop?.();
-      this.client = null;
-    }
+    return new RealAgentSession(session, config);
   }
 
   async listModels(): Promise<string[]> {
@@ -302,5 +208,12 @@ export class RealCopilotAdapter implements CopilotAdapter {
     const models = (await client.listModels?.()) ?? [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return models.map((m: any) => (typeof m === 'string' ? m : (m.id ?? m.name))).filter(Boolean);
+  }
+
+  async shutdown(): Promise<void> {
+    if (this.client) {
+      await this.client.stop?.();
+      this.client = null;
+    }
   }
 }

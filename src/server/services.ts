@@ -41,6 +41,7 @@ export function createProjectWithLead(
     ...TEAM_LEAD_TEMPLATE,
     model,
   });
+  store.ensureMainThread(project.id);
   return project;
 }
 

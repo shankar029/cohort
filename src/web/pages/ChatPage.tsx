@@ -35,7 +35,8 @@ export function ChatPage(): React.JSX.Element {
       <header className="border-b border-surface-border px-6 py-4">
         <h1 className="text-lg font-semibold text-slate-100">Chat · Team Lead</h1>
         <p className="text-sm text-slate-500">
-          Talk to your Team Lead. It delegates work to specialists for you.
+          Talk to your Team Lead. The whole team's conversation — discussions and decisions — shows
+          up here.
         </p>
       </header>
 
@@ -47,21 +48,30 @@ export function ChatPage(): React.JSX.Element {
           />
         )}
 
-        {bundle.chat.map((m) => (
-          <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              className={`max-w-[75%] whitespace-pre-wrap rounded-lg px-4 py-2 text-sm ${
-                m.role === 'user' ? 'bg-blue-600 text-white' : 'card text-slate-200'
-              }`}
-              data-testid={m.role === 'lead' ? 'lead-message' : 'user-message'}
-            >
-              {m.role === 'lead' && (
-                <div className="mb-1 text-xs font-semibold text-status-idle">🧭 Team Lead</div>
-              )}
-              {m.content || <span className="text-slate-500">…</span>}
+        {bundle.chat.map((m) => {
+          const author = m.authorAgentId
+            ? bundle.agents.find((a) => a.id === m.authorAgentId)
+            : undefined;
+          const isUser = m.role === 'user';
+          const isLead = author?.kind === 'lead';
+          return (
+            <div key={m.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className={`max-w-[75%] whitespace-pre-wrap rounded-lg px-4 py-2 text-sm ${
+                  isUser ? 'bg-blue-600 text-white' : 'card text-slate-200'
+                }`}
+                data-testid={isUser ? 'user-message' : isLead ? 'lead-message' : 'agent-message'}
+              >
+                {!isUser && author && (
+                  <div className="mb-1 text-xs font-semibold" style={{ color: author.color }}>
+                    {author.emoji} {author.displayName}
+                  </div>
+                )}
+                {m.content || <span className="text-slate-500">…</span>}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {pending.map((q) => (
           <QuestionCard

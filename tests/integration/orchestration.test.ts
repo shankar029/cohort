@@ -142,25 +142,36 @@ describe('board-driven autonomous work', () => {
   });
 });
 
-describe('chat delegation', () => {
-  it('the Team Lead streams a reply and delegates to a named specialist', async () => {
-    const { projectId } = await createProject();
-    await addSpecialist(projectId);
+describe('chat: multi-agent discussion', () => {
+  it('the Team Lead replies and convenes a discussion where a specialist contributes', async () => {
+    const { projectId, leadId } = await createProject();
+    const frontendId = await addSpecialist(projectId);
 
     const res = await ctx.app.inject({
       method: 'POST',
       url: `/api/projects/${projectId}/chat`,
-      payload: { content: 'Please delegate to `frontend` to build the header.' },
+      payload: { content: 'Please build the header component.' },
     });
     expect(res.statusCode).toBe(202);
 
-    // A streamed delta arrives, then a final lead message.
+    // A streamed delta arrives, then a final message from the Team Lead.
     await ctx.waitFor((m) => m.type === 'chat.delta');
     await ctx.waitFor(
-      (m) => m.type === 'chat.message' && m.message.role === 'lead' && m.message.content.length > 0,
+      (m) =>
+        m.type === 'chat.message' &&
+        m.message.authorAgentId === leadId &&
+        m.message.content.length > 0,
     );
-    // A subagent event was logged.
-    await ctx.waitFor((m) => m.type === 'event.appended' && m.event.type === 'subagent_started');
+    // The convened discussion produces a real contribution from the specialist.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'chat.message' &&
+        m.message.authorAgentId === frontendId &&
+        m.message.content.length > 0,
+      8000,
+    );
+    // A group thread was opened for the discussion.
+    await ctx.waitFor((m) => m.type === 'thread.updated' && m.thread.kind === 'group');
   });
 });
 

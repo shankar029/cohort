@@ -14,6 +14,9 @@ const TYPE_STYLE: Record<AgentEventType, { icon: string; color: string }> = {
   subagent_failed: { icon: '❌', color: 'text-red-300' },
   status_change: { icon: '🔄', color: 'text-slate-400' },
   escalation: { icon: '🙋', color: 'text-amber-300' },
+  discussion: { icon: '🗣️', color: 'text-cyan-300' },
+  git: { icon: '🔀', color: 'text-orange-300' },
+  pull_request: { icon: '🔃', color: 'text-fuchsia-300' },
   system: { icon: 'ℹ️', color: 'text-slate-400' },
 };
 

@@ -5,7 +5,9 @@ import type {
   AgentTask,
   ChatMessage,
   Project,
+  PullRequest,
   Question,
+  Thread,
   WorkItem,
 } from './domain';
 
@@ -22,6 +24,8 @@ export type ServerMessage =
   | { type: 'task.updated'; projectId: string; task: AgentTask }
   | { type: 'chat.message'; projectId: string; message: ChatMessage }
   | { type: 'chat.delta'; projectId: string; messageId: string; delta: string }
+  | { type: 'thread.updated'; projectId: string; thread: Thread }
+  | { type: 'pull_request.updated'; projectId: string; pr: PullRequest }
   | { type: 'question.updated'; projectId: string; question: Question }
   | { type: 'project.updated'; project: Project }
   | { type: 'project.deleted'; projectId: string };

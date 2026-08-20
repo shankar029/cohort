@@ -1,184 +1,114 @@
-import type { AdapterEvent, CopilotAdapter, TeamSession, TeamSessionConfig } from './adapter.js';
+import type { AgentSession, AgentSessionConfig, CopilotAdapter, SessionEvent } from './adapter.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-/** Small deterministic tick so streaming feels real without slowing tests. */
-const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 4);
-
-function extractDelegateTarget(prompt: string): string | null {
-  const m =
-    prompt.match(/delegate[^`]*`([a-z0-9-]+)`/i) ??
-    prompt.match(/agent named `([a-z0-9-]+)`/i) ??
-    prompt.match(/specialist `([a-z0-9-]+)`/i);
-  return m ? m[1]! : null;
-}
+const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
 
 /**
- * Deterministic, offline stand-in for the Copilot runtime. It parses the
- * orchestrator's prompt for a delegation directive and an escalation marker
- * (`[[ASK]]`) so every branch (delegate, tool-use, task-board, escalation,
- * permission) can be driven from tests and Playwright E2E without an LLM.
+ * Deterministic, offline stand-in for a single agent's Copilot session. Replies
+ * are role-aware and honor markers embedded in the prompt so every branch
+ * (discussion, escalation, permission-gated write, group-chat request) can be
+ * driven from tests and Playwright E2E without an LLM:
+ *   [[ASK]]              → the agent escalates a question to the user
+ *   [[WRITE]]            → the agent requests a file-write permission
+ *   [[NEEDS_DISCUSSION]] → the agent asks the Lead to open a group chat
  */
-class FakeTeamSession implements TeamSession {
-  private aborted = false;
+class FakeAgentSession implements AgentSession {
+  constructor(private readonly config: AgentSessionConfig) {}
 
-  constructor(private readonly config: TeamSessionConfig) {}
+  async ask(prompt: string, messageId: string): Promise<string> {
+    const { onEvent, displayName, role } = this.config;
 
-  async send(prompt: string, messageId: string): Promise<void> {
-    this.aborted = false;
-    const { onEvent, specialists } = this.config;
+    onEvent({ kind: 'reasoning', text: `Considering: ${prompt.slice(0, 60)}` });
+    await sleep(TICK);
 
-    const targetName = extractDelegateTarget(prompt);
-    const target = targetName ? specialists.find((s) => s.name === targetName) : undefined;
-    const wantsAsk = /\[\[ASK\]\]/.test(prompt);
-
-    const lead = (text: string): Promise<void> => this.stream(messageId, text, onEvent);
-
-    if (!target) {
-      // Plain conversational reply from the Team Lead — no delegation.
-      await lead(
-        specialists.length === 0
-          ? `I'm your Team Lead. Add specialists to your team and I'll delegate work to them.`
-          : `I'm your Team Lead. I can delegate to: ${specialists.map((s) => s.displayName).join(', ')}. What should we build?`,
-      );
-      onEvent({ kind: 'idle' });
-      return;
+    if (/\[\[WRITE\]\]/.test(prompt)) {
+      const decision = await this.config.onPermission({
+        kind: 'write',
+        toolName: 'edit_file',
+        fileName: 'src/example.ts',
+      });
+      if (decision === 'approve') {
+        onEvent({ kind: 'tool_call', toolName: 'edit_file', detail: { file: 'src/example.ts' } });
+        await sleep(TICK);
+        onEvent({ kind: 'tool_result', toolName: 'edit_file', detail: { ok: true } });
+      }
     }
 
-    // Delegation path.
-    onEvent({
-      kind: 'subagent_started',
-      agentName: target.name,
-      displayName: target.displayName,
-      description: target.description,
-    });
-    await sleep(TICK);
-    if (this.aborted) return this.finishAborted(onEvent);
-
-    onEvent({
-      kind: 'task_update',
-      agentName: target.name,
-      title: `Analyze request`,
-      status: 'doing',
-    });
-    onEvent({
-      kind: 'reasoning',
-      agentName: target.name,
-      text: `Planning the ${target.displayName} work.`,
-    });
-    await sleep(TICK);
-
-    // Permission-gated tool use.
-    const decision = await this.config.onPermission({
-      kind: 'write',
-      agentName: target.name,
-      toolName: 'edit_file',
-      fileName: 'src/example.ts',
-    });
-    if (decision === 'reject') {
-      onEvent({
-        kind: 'subagent_failed',
-        agentName: target.name,
-        displayName: target.displayName,
-        error: 'Write permission denied.',
-      });
-      await lead(
-        `The ${target.displayName} could not complete the task because file writes were denied.`,
-      );
-      onEvent({ kind: 'idle' });
-      return;
-    }
-
-    onEvent({
-      kind: 'tool_call',
-      agentName: target.name,
-      toolName: 'edit_file',
-      detail: { file: 'src/example.ts' },
-    });
-    await sleep(TICK);
-    onEvent({
-      kind: 'tool_result',
-      agentName: target.name,
-      toolName: 'edit_file',
-      detail: { ok: true },
-    });
-    onEvent({
-      kind: 'task_update',
-      agentName: target.name,
-      title: `Analyze request`,
-      status: 'done',
-    });
-
-    if (wantsAsk) {
-      onEvent({
-        kind: 'task_update',
-        agentName: target.name,
-        title: `Awaiting clarification`,
-        status: 'doing',
-      });
+    let extra = '';
+    if (/\[\[ASK\]\]/.test(prompt)) {
       const answer = await this.config.onUserInput({
-        agentName: target.name,
-        question: `Which approach should the ${target.displayName} take?`,
+        question: `Which approach should the ${displayName} take?`,
         choices: ['Option A', 'Option B'],
       });
-      onEvent({ kind: 'reasoning', agentName: target.name, text: `Proceeding with: ${answer}` });
-      onEvent({
-        kind: 'task_update',
-        agentName: target.name,
-        title: `Awaiting clarification`,
-        status: 'done',
-      });
-      await sleep(TICK);
+      extra = ` I'll proceed with: ${answer}.`;
     }
 
-    onEvent({
-      kind: 'task_update',
-      agentName: target.name,
-      title: `Finalize work`,
-      status: 'done',
-    });
-    onEvent({
-      kind: 'subagent_completed',
-      agentName: target.name,
-      displayName: target.displayName,
-      detail: { totalToolCalls: 1 },
-    });
-    await lead(`The ${target.displayName} finished the task. Work is ready for review.`);
+    let text: string;
+    if (role === 'lead') {
+      text = `Here's my read as Team Lead: ${summarize(prompt)}.${extra}`;
+    } else {
+      text = `As the ${displayName}, my recommendation: ${idea(displayName, prompt)}.${extra}`;
+      if (/\[\[NEEDS_DISCUSSION\]\]/.test(prompt)) {
+        text += ` [[REQUEST_GROUPCHAT: ${topicOf(prompt)}]]`;
+      }
+    }
+
+    await this.stream(messageId, text, onEvent);
     onEvent({ kind: 'idle' });
+    return text;
   }
 
   private async stream(
     messageId: string,
     text: string,
-    onEvent: (e: AdapterEvent) => void,
+    onEvent: (e: SessionEvent) => void,
   ): Promise<void> {
     const words = text.split(' ');
     for (let i = 0; i < words.length; i++) {
-      if (this.aborted) break;
-      onEvent({ kind: 'lead_delta', messageId, delta: (i === 0 ? '' : ' ') + words[i]! });
+      onEvent({ kind: 'delta', messageId, delta: (i === 0 ? '' : ' ') + words[i]! });
       await sleep(TICK);
     }
-    onEvent({ kind: 'lead_message', messageId, text });
-  }
-
-  private finishAborted(onEvent: (e: AdapterEvent) => void): void {
-    onEvent({ kind: 'idle' });
-  }
-
-  async abort(): Promise<void> {
-    this.aborted = true;
+    onEvent({ kind: 'message', messageId, text });
   }
 
   async dispose(): Promise<void> {
-    this.aborted = true;
+    /* nothing to release */
   }
+}
+
+function summarize(prompt: string): string {
+  const first = prompt.split('\n').find((l) => l.trim().length > 0) ?? prompt;
+  return (
+    first
+      .replace(/\[\[[^\]]+\]\]/g, '')
+      .trim()
+      .slice(0, 80) || 'let me coordinate the team'
+  );
+}
+
+function topicOf(prompt: string): string {
+  return summarize(prompt).slice(0, 40);
+}
+
+/** A short, role-flavored contribution so brainstorms read like a real discussion. */
+function idea(displayName: string, prompt: string): string {
+  const topic = summarize(prompt);
+  const byRole: Record<string, string> = {
+    'Product Manager': `clarify the user outcome and success metric for "${topic}"`,
+    'UX Designer': `sketch the primary flow and keep the UI low-friction for "${topic}"`,
+    'Frontend Engineer': `build accessible components with tests for "${topic}"`,
+    'Backend Engineer': `expose a validated API with error handling for "${topic}"`,
+    'QA Engineer': `cover happy path + edge cases with automated tests for "${topic}"`,
+    'Code Reviewer': `gate the change on correctness, security, and test quality`,
+  };
+  return byRole[displayName] ?? `apply ${displayName} best practices to "${topic}"`;
 }
 
 export class FakeCopilotAdapter implements CopilotAdapter {
   readonly name = 'fake';
 
-  async createTeamSession(config: TeamSessionConfig): Promise<TeamSession> {
-    return new FakeTeamSession(config);
+  async createAgentSession(config: AgentSessionConfig): Promise<AgentSession> {
+    return new FakeAgentSession(config);
   }
 
   async listModels(): Promise<string[]> {
