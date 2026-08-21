@@ -264,3 +264,49 @@ describe('scheduled + recurring work items', () => {
     expect(hourly.some((i) => i.recurrence === 'hourly' && i.scheduledAt! > Date.now())).toBe(true);
   });
 });
+
+describe('agents as first-class app users (tool layer)', () => {
+  it('an agent creates a board work item via its app tools', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId);
+
+    // Assigning this item makes the specialist run; the marker drives its create_work_item tool.
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: {
+        title: 'Investigate and [[CREATE_TASK: Write integration tests]]',
+        status: 'todo',
+        assigneeAgentId: agentId,
+      },
+    });
+
+    // The tool-created task shows up on the board (via the same store/bus the UI uses).
+    const created = (await ctx.waitFor(
+      (m) => m.type === 'workitem.updated' && m.workItem.title === 'Write integration tests',
+      8000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    expect(created.workItem.kind).toBe('task');
+
+    const items = ctx.store.listWorkItems(projectId).map((i) => i.title);
+    expect(items).toContain('Write integration tests');
+  });
+
+  it('an agent posts a message to the team via its app tools', async () => {
+    const { projectId, leadId } = await createProject();
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Status update please [[POST: Backend API is ready for review]]' },
+    });
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'chat.message' &&
+        m.message.authorAgentId === leadId &&
+        m.message.content.includes('Backend API is ready for review'),
+      8000,
+    );
+  });
+});

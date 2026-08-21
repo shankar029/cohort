@@ -3,6 +3,7 @@ import type { Agent, Project, Thread, WorkItem } from '@shared/index';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
 import type {
+  AgentAppTools,
   AgentSession,
   CopilotAdapter,
   PermissionAsk,
@@ -100,6 +101,7 @@ class AgentActor {
       skillDirectories: skillDirectories(skills),
       approvalMode: project.settings.approvalMode,
       scheduler: this.orch.deps.scheduler,
+      appTools: this.orch.appToolsFor(this.agent),
       onEvent: (e) => this.orch.onSessionEvent(this.agent, e, this.currentWorkItemId),
       onPermission: (ask) => this.orch.handlePermission(ask),
       onUserInput: (ask) => this.orch.handleUserInput(this.agent, ask),
@@ -510,6 +512,84 @@ class ProjectOrchestrator {
   }
 
   /* -------------------------------------------------------- primitives */
+
+  /** Board/chat capabilities exposed to an agent as first-class tools. */
+  appToolsFor(agent: Agent): AgentAppTools {
+    const pid = this.projectId;
+    return {
+      createWorkItem: (input) => {
+        const assignee = input.assigneeName ? this.findAgentByName(input.assigneeName) : null;
+        const item = this.deps.store.createWorkItem({
+          projectId: pid,
+          title: input.title,
+          description: input.acceptanceCriteria
+            ? `${input.description ?? ''}\n\nAcceptance criteria:\n${input.acceptanceCriteria}`.trim()
+            : (input.description ?? ''),
+          status: (input.status as WorkItem['status']) ?? 'todo',
+          priority: 'medium',
+          assigneeAgentId: assignee?.id ?? null,
+          kind: 'task',
+          parentId: input.parentId ?? null,
+          stream: input.stream ?? null,
+        });
+        this.deps.bus.publish({ type: 'workitem.updated', projectId: pid, workItem: item });
+        this.emitEvent(agent.id, 'system', `Created task “${item.title}”`, null, item.id);
+        if (item.assigneeAgentId && (item.status === 'todo' || item.status === 'backlog')) {
+          void this.onItemAssigned(item.id).catch(() => undefined);
+        }
+        return { id: item.id, title: item.title };
+      },
+      moveWorkItem: (input) => {
+        const before = this.deps.store.getWorkItem(input.workItemId);
+        if (!before) return { ok: false };
+        this.moveItem(input.workItemId, input.status as WorkItem['status']);
+        this.emitEvent(
+          agent.id,
+          'system',
+          `Moved “${before.title}” → ${input.status}`,
+          null,
+          input.workItemId,
+        );
+        return { ok: true };
+      },
+      postMessage: (input) => {
+        const threadId = input.threadId ?? this.ensureMainThread().id;
+        const msg = this.postMessage(threadId, agent, input.content);
+        this.finalizeMessage(msg.id, input.content);
+        return { ok: true };
+      },
+      requestGroupChat: (input) => {
+        void this.maybeHandleGroupChatRequest(
+          agent,
+          `[[REQUEST_GROUPCHAT: ${input.topic}]]`,
+          null,
+        ).catch(() => undefined);
+        return { ok: true };
+      },
+      listBoard: () => ({
+        items: this.deps.store.listWorkItems(pid).map((i) => ({
+          id: i.id,
+          title: i.title,
+          status: i.status,
+          stream: i.stream,
+          assignee: i.assigneeAgentId
+            ? (this.deps.store.getAgent(i.assigneeAgentId)?.displayName ?? null)
+            : null,
+        })),
+      }),
+    };
+  }
+
+  private findAgentByName(name: string): Agent | null {
+    const needle = name.trim().toLowerCase();
+    const team = this.deps.store.listAgents(this.projectId);
+    return (
+      team.find((a) => a.name.toLowerCase() === needle) ??
+      team.find((a) => a.displayName.toLowerCase() === needle) ??
+      team.find((a) => a.displayName.toLowerCase().includes(needle)) ??
+      null
+    );
+  }
 
   private moveItem(workItemId: string, status: WorkItem['status']): void {
     const updated = this.deps.store.updateWorkItem(workItemId, { status });

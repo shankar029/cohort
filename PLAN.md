@@ -296,3 +296,28 @@ but the whole team's conversation is visible.
   delivering every request as a working, maintained, high-quality feature — clarify → epic →
   decompose by stream → assign in parallel → git/PR/review → drive iteration until the quality bar
   is met. Full workflow lands with M9–M11; grounding elevated now.
+
+## Execution phases (backlog grouped; tackled one by one)
+
+Done already: M8 engine, agent scheduling primitives (wait/poll), user-scheduled/recurring
+work items, Lead ownership grounding, startup-migration fix.
+
+- [x] **Phase 1 — Agents as first-class app users (tool layer).** Agent-callable tools mapped to
+  the same store/bus the UI uses: `create_work_item`, `move_work_item`, `post_message`,
+  `request_group_chat`, `list_board`. Real adapter registers SDK tools; Fake adapter drives them
+  via markers. Foundation for Phases 2–4.
+- [ ] **Phase 2 — Epic planning & decomposition (M9).** Every user request → an Epic. Lead
+      clarifies (batched) + consults the PM, then decomposes into stream-tagged task cards with
+      acceptance criteria + dependencies, and assigns for parallelism.
+- [ ] **Phase 3 — Async task execution + GitService (M10).** `GitService` (init/branch/commit/
+      merge/diff). Agents pick up ready tasks concurrently (respecting deps), post updates as
+      themselves, move cards, commit on a per-task branch.
+- [ ] **Phase 4 — PR + review + iterate-to-quality (M11).** In-app PR objects (diff); reviewer/QA
+      agent reviews → approve/changes_requested → merge to the epic branch; loop
+      in_progress→review→changes_requested until the quality bar passes.
+- [ ] **Phase 5 — Agent scratchpads / planning surface.** `agent_notes` store + `write_note` /
+      `update_plan` tools; free-form notepad + checklist surfaced on the Agent detail page.
+- [ ] **Phase 6 — UX modernization + UI features (M12 + UX).** Redesign the whole app to a
+      minimalist, aesthetic, modern look & feel (current UI looks dated). Plus: Threads/group-chat
+      panel, grouped-by-task Activity, Epic→Task board hierarchy, PR view, polished multi-author chat.
+- [ ] **Phase 7 — Polish (M13).** Top-tier personas, opt-in live-adapter proof, hardening, docs.

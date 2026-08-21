@@ -247,11 +247,86 @@ export class RealCopilotAdapter implements CopilotAdapter {
       },
     });
 
+    // App tools: let the agent act as a first-class user of the board and chat.
+    const app = config.appTools;
+    const appTools = app
+      ? [
+          sdk.defineTool('create_work_item', {
+            description:
+              'Create a work item (task) on the project board. Optionally set stream, assigneeName (a teammate), parentId (epic), status, and acceptanceCriteria.',
+            parameters: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                stream: { type: 'string' },
+                assigneeName: { type: 'string' },
+                parentId: { type: 'string' },
+                status: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review'] },
+                acceptanceCriteria: { type: 'string' },
+              },
+              required: ['title'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.createWorkItem(args),
+          }),
+          sdk.defineTool('move_work_item', {
+            description: 'Move a work item to a new board column (status).',
+            parameters: {
+              type: 'object',
+              properties: {
+                workItemId: { type: 'string' },
+                status: {
+                  type: 'string',
+                  enum: ['backlog', 'todo', 'in_progress', 'review', 'done'],
+                },
+              },
+              required: ['workItemId', 'status'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.moveWorkItem(args),
+          }),
+          sdk.defineTool('post_message', {
+            description:
+              'Post a message to the team as yourself. Defaults to the main thread; pass threadId to post in a specific discussion.',
+            parameters: {
+              type: 'object',
+              properties: { content: { type: 'string' }, threadId: { type: 'string' } },
+              required: ['content'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.postMessage(args),
+          }),
+          sdk.defineTool('request_group_chat', {
+            description:
+              'Ask the Team Lead to convene a group chat / brainstorm on a topic with the right teammates.',
+            parameters: {
+              type: 'object',
+              properties: { topic: { type: 'string' } },
+              required: ['topic'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.requestGroupChat(args),
+          }),
+          sdk.defineTool('list_board', {
+            description:
+              'List the current project board (work items with status, stream, assignee).',
+            parameters: { type: 'object', properties: {} },
+            skipPermission: true,
+            handler: async () => app.listBoard(),
+          }),
+        ]
+      : [];
+
     const session = await client.createSession({
       model: config.model,
       workingDirectory: config.workingDirectory,
       streaming: true,
-      tools: [taskTool, waitTool, pollTool],
+      tools: [taskTool, waitTool, pollTool, ...appTools],
       skillDirectories: config.skillDirectories,
       systemMessage: { content: config.persona },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

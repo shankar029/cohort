@@ -33,6 +33,35 @@ export interface Scheduler {
   sleep(ms: number, owner?: string): Promise<void>;
 }
 
+/**
+ * App-level capabilities exposed to an agent as first-class tools. These map to the
+ * same store/bus the UI uses, so an agent creating/moving a card or posting a message
+ * shows up live in the board and chat. Implemented by the orchestrator per agent.
+ */
+export interface AgentAppTools {
+  createWorkItem(input: {
+    title: string;
+    description?: string;
+    stream?: string;
+    assigneeName?: string;
+    parentId?: string;
+    status?: string;
+    acceptanceCriteria?: string;
+  }): { id: string; title: string };
+  moveWorkItem(input: { workItemId: string; status: string }): { ok: boolean };
+  postMessage(input: { content: string; threadId?: string }): { ok: boolean };
+  requestGroupChat(input: { topic: string }): { ok: boolean };
+  listBoard(): {
+    items: Array<{
+      id: string;
+      title: string;
+      status: string;
+      stream: string | null;
+      assignee: string | null;
+    }>;
+  };
+}
+
 export interface AgentSessionCallbacks {
   onEvent: (event: SessionEvent) => void;
   onPermission: (ask: PermissionAsk) => Promise<PermissionReply>;
@@ -55,6 +84,8 @@ export interface AgentSessionConfig extends AgentSessionCallbacks {
   approvalMode: ApprovalMode;
   /** Timing capability backing the agent's `wait` / `poll` tools. */
   scheduler?: Scheduler;
+  /** App capabilities backing the agent's board/chat tools. */
+  appTools?: AgentAppTools;
 }
 
 /** A live session for a single agent. `ask` resolves with the final message text. */
