@@ -14,6 +14,7 @@ import type {
   ProjectSettings,
   PullRequest,
   PrStatus,
+  PrComment,
   Question,
   Notification,
   NotificationType,
@@ -254,6 +255,31 @@ const toPr = (r: PrRow): PullRequest => ({
   baseBranch: r.base_branch,
   diff: r.diff,
   status: r.status as PrStatus,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface PrCommentRow {
+  id: string;
+  project_id: string;
+  pr_id: string;
+  body: string;
+  target_stream: string | null;
+  target_agent_id: string | null;
+  work_item_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+const toPrComment = (r: PrCommentRow): PrComment => ({
+  id: r.id,
+  projectId: r.project_id,
+  prId: r.pr_id,
+  body: r.body,
+  targetStream: r.target_stream ?? null,
+  targetAgentId: r.target_agent_id ?? null,
+  workItemId: r.work_item_id ?? null,
+  status: r.status as PrComment['status'],
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -947,6 +973,82 @@ export class Store {
     const r = this.db.prepare(`SELECT * FROM pull_requests WHERE id=?`).get(prId) as
       PrRow | undefined;
     return r ? toPr(r) : undefined;
+  }
+
+  /* pr comments */
+  createPrComment(c: {
+    projectId: string;
+    prId: string;
+    body: string;
+    targetStream?: string | null;
+    targetAgentId?: string | null;
+    workItemId?: string | null;
+    status?: PrComment['status'];
+  }): PrComment {
+    const ts = now();
+    const row: PrCommentRow = {
+      id: id('prc'),
+      project_id: c.projectId,
+      pr_id: c.prId,
+      body: c.body,
+      target_stream: c.targetStream ?? null,
+      target_agent_id: c.targetAgentId ?? null,
+      work_item_id: c.workItemId ?? null,
+      status: c.status ?? 'open',
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO pr_comments (id,project_id,pr_id,body,target_stream,target_agent_id,work_item_id,status,created_at,updated_at)
+         VALUES (@id,@project_id,@pr_id,@body,@target_stream,@target_agent_id,@work_item_id,@status,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toPrComment(row);
+  }
+
+  updatePrComment(
+    commentId: string,
+    patch: Partial<Pick<PrComment, 'status' | 'workItemId' | 'targetAgentId'>>,
+  ): PrComment | undefined {
+    const r = this.db.prepare(`SELECT * FROM pr_comments WHERE id=?`).get(commentId) as
+      PrCommentRow | undefined;
+    if (!r) return undefined;
+    const m = toPrComment(r);
+    this.db
+      .prepare(
+        `UPDATE pr_comments SET status=?, work_item_id=?, target_agent_id=?, updated_at=? WHERE id=?`,
+      )
+      .run(
+        patch.status ?? m.status,
+        patch.workItemId !== undefined ? patch.workItemId : m.workItemId,
+        patch.targetAgentId !== undefined ? patch.targetAgentId : m.targetAgentId,
+        now(),
+        commentId,
+      );
+    const updated = this.db.prepare(`SELECT * FROM pr_comments WHERE id=?`).get(commentId);
+    return updated ? toPrComment(updated as PrCommentRow) : undefined;
+  }
+
+  listPrComments(prId: string): PrComment[] {
+    return this.db
+      .prepare(`SELECT * FROM pr_comments WHERE pr_id=? ORDER BY created_at ASC`)
+      .all(prId)
+      .map((r) => toPrComment(r as PrCommentRow));
+  }
+
+  listProjectPrComments(projectId: string): PrComment[] {
+    return this.db
+      .prepare(`SELECT * FROM pr_comments WHERE project_id=? ORDER BY created_at ASC`)
+      .all(projectId)
+      .map((r) => toPrComment(r as PrCommentRow));
+  }
+
+  commentsForWorkItem(workItemId: string): PrComment[] {
+    return this.db
+      .prepare(`SELECT * FROM pr_comments WHERE work_item_id=? ORDER BY created_at ASC`)
+      .all(workItemId)
+      .map((r) => toPrComment(r as PrCommentRow));
   }
 
   /* questions */

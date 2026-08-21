@@ -37,10 +37,19 @@ async function addSpecialist(projectId: string, catalogId: string): Promise<void
 }
 
 describe('PR + review + iterate-to-quality (Phase 4)', () => {
-  it('raises a PR, requests changes, then approves and merges the epic', async () => {
+  it('files review comments, assigns fixes, then approves and merges once resolved', async () => {
     const projectId = await createProject('PR Flow');
     await addSpecialist(projectId, 'frontend-engineer');
-    await addSpecialist(projectId, 'qa-engineer'); // acts as reviewer
+    // A reviewer whose persona files one routed review comment (deduped across rounds).
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/agents`,
+      payload: {
+        name: 'reviewer',
+        displayName: 'Code Reviewer',
+        prompt: 'You review pull requests. [[REVIEW_COMMENT: frontend | add tests for edge cases]]',
+      },
+    });
 
     await ctx.app.inject({
       method: 'POST',
@@ -48,11 +57,18 @@ describe('PR + review + iterate-to-quality (Phase 4)', () => {
       payload: { content: 'Please build a profile page.' },
     });
 
-    // The reviewer asks for changes on the first round (iterate-to-quality).
+    // The reviewer files a comment → the PR requests changes.
     await ctx.waitFor(
       (m) => m.type === 'pull_request.updated' && m.pr.status === 'changes_requested',
       12000,
     );
+
+    // The Team Lead assigned a fix task for the comment.
+    const commentAssigned = (await ctx.waitFor(
+      (m) => m.type === 'pr_comment.updated' && m.comment.workItemId != null,
+      12000,
+    )) as { type: 'pr_comment.updated'; comment: { workItemId: string | null } };
+    expect(commentAssigned.comment.workItemId).toBeTruthy();
 
     // After the rework, the PR is approved and merged.
     const merged = (await ctx.waitFor(
@@ -78,5 +94,10 @@ describe('PR + review + iterate-to-quality (Phase 4)', () => {
     const pulls = ctx.store.listPRs(projectId);
     expect(pulls).toHaveLength(1);
     expect(pulls[0]!.status).toBe('merged');
+
+    // Every review comment ended up resolved before the merge.
+    const comments = ctx.store.listProjectPrComments(projectId);
+    expect(comments.length).toBeGreaterThanOrEqual(1);
+    expect(comments.every((c) => c.status === 'resolved')).toBe(true);
   });
 });

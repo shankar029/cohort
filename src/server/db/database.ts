@@ -152,6 +152,19 @@ CREATE TABLE IF NOT EXISTS notifications (
   read INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pr_comments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pr_id TEXT NOT NULL REFERENCES pull_requests(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  target_stream TEXT,
+  target_agent_id TEXT,
+  work_item_id TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /** Indexes created AFTER migrations so they can reference migrated columns. */
@@ -168,6 +181,8 @@ CREATE INDEX IF NOT EXISTS idx_prs_project ON pull_requests(project_id, created_
 CREATE INDEX IF NOT EXISTS idx_workitems_parent ON work_items(parent_id);
 CREATE INDEX IF NOT EXISTS idx_questions_project ON questions(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notifications_project ON notifications(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pr_comments_pr ON pr_comments(pr_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pr_comments_project ON pr_comments(project_id, created_at);
 `;
 
 /** Additive column migrations for databases created by an earlier schema. */

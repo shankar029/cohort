@@ -54,6 +54,14 @@ class FakeAgentSession implements AgentSession {
         app.updateProgress({ progress: Number(progressed[1]), note: 'milestone reached' });
         onEvent({ kind: 'tool_call', toolName: 'update_progress', detail: {} });
       }
+      // [[REVIEW_COMMENT: stream | body]] — a reviewer files a routed PR comment.
+      // Read from the persona so a test reviewer files it on every review round;
+      // the orchestrator dedupes by body so the loop still converges.
+      const rc = /\[\[REVIEW_COMMENT:\s*([^|\]]+)\|([^\]]+)\]\]/.exec(this.config.persona);
+      if (rc && /review/i.test(prompt)) {
+        app.addReviewComment({ targetStream: rc[1]!.trim(), body: rc[2]!.trim() });
+        onEvent({ kind: 'tool_call', toolName: 'add_review_comment', detail: {} });
+      }
     }
 
     if (/\[\[WRITE\]\]/.test(prompt)) {

@@ -11,6 +11,7 @@ import type {
   WorkItem,
   PullRequest,
   Notification,
+  PrComment,
   Thread,
 } from '@shared/index';
 import { api } from './api';
@@ -27,6 +28,7 @@ export interface ProjectBundle {
   pulls: PullRequest[];
   threads: Thread[];
   notifications: Notification[];
+  prComments: PrComment[];
   loaded: boolean;
 }
 
@@ -49,6 +51,7 @@ const emptyBundle = (): ProjectBundle => ({
   pulls: [],
   threads: [],
   notifications: [],
+  prComments: [],
   loaded: false,
 });
 
@@ -154,6 +157,8 @@ function applyWs(state: State, message: ServerMessage): State {
         return { ...b, threads: upsert(b.threads, message.thread) };
       case 'notification.created':
         return { ...b, notifications: [message.notification, ...b.notifications].slice(0, 300) };
+      case 'pr_comment.updated':
+        return { ...b, prComments: upsert(b.prComments, message.comment) };
       case 'event.appended':
         return { ...b, events: [...b.events, message.event].slice(-1000) };
       default:
@@ -305,6 +310,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           pulls: detail.pulls,
           threads: detail.threads,
           notifications: detail.notifications,
+          prComments: detail.prComments,
           loaded: true,
         },
       });

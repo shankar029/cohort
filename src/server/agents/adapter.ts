@@ -54,6 +54,7 @@ export interface AgentAppTools {
   };
   postMessage(input: { content: string; threadId?: string }): { ok: boolean };
   requestGroupChat(input: { topic: string }): { ok: boolean };
+  addReviewComment(input: { body: string; targetStream?: string | null }): { ok: boolean };
   writeNote(input: { content: string; workItemId?: string | null }): { ok: boolean };
   updatePlan(input: { content: string }): { ok: boolean };
   listBoard(): {

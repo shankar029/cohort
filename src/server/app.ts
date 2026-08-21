@@ -94,6 +94,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       questions: store.listQuestions(id),
       threads: store.listThreads(id),
       pulls: store.listPRs(id),
+      prComments: store.listProjectPrComments(id),
       notifications: store.listNotifications(id),
     };
   });
@@ -144,6 +145,12 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { id } = req.params as { id: string };
     requireProject(id);
     return { pulls: store.listPRs(id) };
+  });
+
+  app.get('/api/projects/:id/pr-comments', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    return { prComments: store.listProjectPrComments(id) };
   });
 
   /* --------------------------------------------------------------- skills */

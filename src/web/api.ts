@@ -11,6 +11,7 @@ import type {
   PullRequest,
   Question,
   Notification,
+  PrComment,
   Thread,
   SkillInfo,
   UpdateProjectSettingsInput,
@@ -61,6 +62,7 @@ export const api = {
       pulls: PullRequest[];
       threads: Thread[];
       notifications: Notification[];
+      prComments: PrComment[];
     }>(`/api/projects/${id}`),
   updateProject: (id: string, input: UpdateProjectSettingsInput) =>
     request<{ project: Project }>(`/api/projects/${id}`, {

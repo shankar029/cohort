@@ -7,6 +7,7 @@ import type {
   ChatMessage,
   Project,
   PullRequest,
+  PrComment,
   Question,
   Notification,
   Thread,
@@ -32,6 +33,7 @@ export type ServerMessage =
   | { type: 'notification.created'; projectId: string; notification: Notification }
   | { type: 'thread.updated'; projectId: string; thread: Thread }
   | { type: 'pull_request.updated'; projectId: string; pr: PullRequest }
+  | { type: 'pr_comment.updated'; projectId: string; comment: PrComment }
   | { type: 'question.updated'; projectId: string; question: Question }
   | { type: 'project.updated'; project: Project }
   | { type: 'project.deleted'; projectId: string };

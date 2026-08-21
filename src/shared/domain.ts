@@ -204,6 +204,24 @@ export interface PullRequest {
   updatedAt: string;
 }
 
+export const PR_COMMENT_STATUSES = ['open', 'resolved'] as const;
+export type PrCommentStatus = (typeof PR_COMMENT_STATUSES)[number];
+
+/** A specific review comment on a PR, routed to a stream and its fix task. */
+export interface PrComment {
+  id: string;
+  projectId: string;
+  prId: string;
+  body: string;
+  targetStream: string | null;
+  targetAgentId: string | null;
+  /** The fix task the Team Lead assigned to address this comment. */
+  workItemId: string | null;
+  status: PrCommentStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const QUESTION_STATUSES = ['pending', 'answered'] as const;
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
 

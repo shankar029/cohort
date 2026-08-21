@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { PrStatus, PullRequest } from '@shared/index';
+import type { PrComment, PrStatus, PullRequest } from '@shared/index';
 import { useBundle } from '../state';
 import { EmptyState } from '../components/ui';
 
@@ -39,6 +39,8 @@ export function PullRequestsPage(): React.JSX.Element {
               <PrCard
                 key={pr.id}
                 pr={pr}
+                comments={bundle.prComments.filter((c) => c.prId === pr.id)}
+                nameById={nameById}
                 author={pr.authorAgentId ? nameById.get(pr.authorAgentId) : '🧭 Team Lead'}
                 reviewer={pr.reviewerAgentId ? nameById.get(pr.reviewerAgentId) : undefined}
               />
@@ -52,15 +54,20 @@ export function PullRequestsPage(): React.JSX.Element {
 
 function PrCard({
   pr,
+  comments,
+  nameById,
   author,
   reviewer,
 }: {
   pr: PullRequest;
+  comments: PrComment[];
+  nameById: Map<string, string>;
   author?: string;
   reviewer?: string;
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const style = STATUS_STYLE[pr.status];
+  const openCount = comments.filter((c) => c.status === 'open').length;
   return (
     <li className="rounded-lg border border-surface-border bg-surface-1" data-testid="pr-card">
       <div className="flex items-start justify-between gap-3 px-4 py-3">
@@ -85,6 +92,41 @@ function PrCard({
           </button>
         )}
       </div>
+
+      {comments.length > 0 && (
+        <div className="border-t border-surface-border px-4 py-3" data-testid="pr-comments">
+          <p className="mb-2 text-xs font-medium text-slate-400">
+            Review comments · {comments.length - openCount}/{comments.length} resolved
+          </p>
+          <ul className="space-y-1.5">
+            {comments.map((c) => (
+              <li key={c.id} className="flex items-start gap-2 text-xs" data-testid="pr-comment">
+                <span
+                  className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 font-medium ${
+                    c.status === 'resolved'
+                      ? 'bg-emerald-500/15 text-emerald-300'
+                      : 'bg-amber-500/15 text-amber-300'
+                  }`}
+                >
+                  {c.status === 'resolved' ? '✓ resolved' : 'open'}
+                </span>
+                {c.targetStream && (
+                  <span className="mt-0.5 shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-slate-400">
+                    {c.targetStream}
+                  </span>
+                )}
+                <span className="text-slate-300">
+                  {c.body}
+                  {c.targetAgentId && nameById.has(c.targetAgentId) && (
+                    <span className="text-slate-500"> — {nameById.get(c.targetAgentId)}</span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {open && pr.diff && (
         <pre
           className="max-h-96 overflow-auto border-t border-surface-border bg-surface-2 px-4 py-3 font-mono text-xs text-slate-300"

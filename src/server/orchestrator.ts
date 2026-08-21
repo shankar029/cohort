@@ -160,6 +160,8 @@ class ProjectOrchestrator {
   private leadPoke?: Cancel;
   /** agentId -> last time the Lead nudged them, so guidance stays low-noise. */
   private readonly leadNudges = new Map<string, number>();
+  /** reviewerAgentId -> the PR they are actively reviewing (for add_review_comment). */
+  private readonly reviewContext = new Map<string, { epicId: string; prId: string }>();
 
   constructor(
     private readonly projectId: string,
@@ -995,6 +997,8 @@ class ProjectOrchestrator {
       item.id,
       agent.id,
     );
+    // If this was a fix task for review comments, mark them resolved.
+    this.resolveCommentsForItem(item.id);
     // A finished task may unblock dependency-gated siblings (e.g. QA/review).
     this.maybePromoteDependents(item.parentId);
     // When every task in the epic is reviewed, raise a PR and run review-to-merge.
@@ -1032,11 +1036,19 @@ class ProjectOrchestrator {
 
   private findReviewer(lead: Agent): Agent {
     const specialists = this.specialists();
-    for (const name of ['reviewer', 'qa', 'security']) {
+    // The Architect designed the epic, so they're the natural PR gatekeeper.
+    for (const name of ['architect', 'reviewer', 'qa', 'security']) {
       const found = specialists.find((s) => s.name === name);
       if (found) return found;
     }
     return specialists[0] ?? lead;
+  }
+
+  /** The specialist that owns a stream (by name), if any. */
+  private findAgentByStream(stream: string | null): Agent | null {
+    if (!stream) return null;
+    const needle = stream.trim().toLowerCase();
+    return this.specialists().find((s) => s.name.toLowerCase() === needle) ?? null;
   }
 
   /** If every task in the epic is reviewed, open a PR and drive review-to-merge. */
@@ -1130,23 +1142,30 @@ class ProjectOrchestrator {
       return;
     }
 
+    // The reviewer (Architect) inspects the diff and files routed comments via
+    // the add_review_comment tool. We resolve the PR from reviewContext during
+    // the ask.
+    this.reviewContext.set(reviewer.id, { epicId: epic.id, prId });
     const prompt =
-      `Please review the pull request for epic “${epic.title}”.\n` +
-      `[[REVIEW: iteration=${iter}]]\n\n` +
+      `Please review the pull request for epic “${epic.title}” against the design and the ` +
+      `quality bar.\n\n` +
       `Diff:\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
-      `Reply APPROVE if it meets the quality bar, or REQUEST_CHANGES: <reason> otherwise.`;
-    const verdict = await this.actor(reviewer).ask(prompt, main.id, epic.id, wt?.path);
+      `For every issue, call add_review_comment(body, targetStream) routed to the responsible ` +
+      `stream. If it meets the bar, leave no comments and it will be approved.`;
+    try {
+      await this.actor(reviewer).ask(prompt, main.id, epic.id, wt?.path);
+    } finally {
+      this.reviewContext.delete(reviewer.id);
+    }
 
-    const approved =
-      /\[\[APPROVE\]\]/i.test(verdict) ||
-      (!/REQUEST_CHANGES/i.test(verdict) && /\bapprove\b/i.test(verdict));
-    if (approved) {
-      await this.approveAndMerge(epic, prId, reviewer, repoDir, branch);
+    const open = this.deps.store.listPrComments(prId).filter((c) => c.status === 'open');
+
+    // Clean bill of health: the Team Lead (sole approver) merges.
+    if (open.length === 0) {
+      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
       return;
     }
 
-    const reasonMatch = /\[\[REQUEST_CHANGES:\s*([^\]]+)\]\]/i.exec(verdict);
-    const reason = reasonMatch ? reasonMatch[1]!.trim() : 'address review feedback';
     const changed = this.deps.store.updatePR(prId, { status: 'changes_requested' });
     if (changed)
       this.deps.bus.publish({
@@ -1154,17 +1173,26 @@ class ProjectOrchestrator {
         projectId: this.projectId,
         pr: changed,
       });
-    this.emitEvent(reviewer.id, 'pull_request', `Requested changes: ${reason}`, null, epic.id);
+    this.emitEvent(
+      reviewer.id,
+      'pull_request',
+      `Requested changes: ${open.length} comment(s)`,
+      null,
+      epic.id,
+    );
     this.notify(
       'review',
       `Changes requested: ${epic.title}`,
-      reason,
+      `${reviewer.displayName} left ${open.length} comment(s); the Team Lead is assigning fixes.`,
       'pulls',
       epic.id,
       reviewer.id,
     );
 
+    // Deadlock guard: after the cap, the Lead resolves outstanding comments and
+    // merges rather than letting the epic hang forever.
     if (iter >= ProjectOrchestrator.MAX_REVIEW_ITER) {
+      for (const c of open) this.resolveComment(c.id);
       this.emitEvent(
         lead.id,
         'pull_request',
@@ -1172,31 +1200,67 @@ class ProjectOrchestrator {
         null,
         epic.id,
       );
-      await this.approveAndMerge(epic, prId, reviewer, repoDir, branch);
+      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
       return;
     }
 
-    // Iterate: bounce a builder task back so the team addresses the feedback.
-    const children = this.deps.store.listChildTasks(epic.id);
-    const target =
-      children.find((c) => !/^(qa|reviewer|security)$/.test(c.stream ?? '')) ?? children[0];
-    if (target && target.assigneeAgentId) {
-      const reopened = this.deps.store.updateWorkItem(target.id, { status: 'todo' });
-      if (reopened) {
-        this.deps.bus.publish({
-          type: 'workitem.updated',
-          projectId: this.projectId,
-          workItem: reopened,
-        });
-        this.emitEvent(
-          target.assigneeAgentId,
-          'system',
-          `Reworking “${target.title}” per review`,
-          null,
-          target.id,
-        );
-        void this.onItemAssigned(target.id).catch(() => undefined);
-      }
+    // The Team Lead turns each open comment into a fix task assigned to the
+    // responsible stream. When those tasks land, comments resolve and review
+    // re-runs automatically.
+    for (const c of open) {
+      if (c.workItemId) continue;
+      const target =
+        (c.targetAgentId ? this.deps.store.getAgent(c.targetAgentId) : null) ??
+        this.findAgentByStream(c.targetStream) ??
+        this.pickAgentForItem({ stream: c.targetStream } as WorkItem, this.assignableSpecialists());
+      const stream = c.targetStream ?? target?.name ?? null;
+      const fix = this.deps.store.createWorkItem({
+        projectId: this.projectId,
+        kind: 'task',
+        parentId: epic.id,
+        title: `[${stream ?? 'fix'}] fix: ${c.body.slice(0, 60)}`,
+        description: `Review comment on “${epic.title}”:\n\n${c.body}`,
+        status: 'todo',
+        priority: 'high',
+        assigneeAgentId: target?.id ?? null,
+        stream,
+      });
+      this.deps.store.updatePrComment(c.id, {
+        workItemId: fix.id,
+        targetAgentId: target?.id ?? null,
+      });
+      this.deps.bus.publish({
+        type: 'workitem.updated',
+        projectId: this.projectId,
+        workItem: fix,
+      });
+      this.emitEvent(
+        lead.id,
+        'system',
+        `Assigned fix “${fix.title}”${target ? ` → ${target.displayName}` : ''}`,
+        null,
+        fix.id,
+      );
+      if (target) void this.onItemAssigned(fix.id).catch(() => undefined);
+      else this.pokeLead();
+    }
+  }
+
+  /** Mark a review comment resolved and broadcast it. */
+  private resolveComment(commentId: string): void {
+    const updated = this.deps.store.updatePrComment(commentId, { status: 'resolved' });
+    if (updated)
+      this.deps.bus.publish({
+        type: 'pr_comment.updated',
+        projectId: this.projectId,
+        comment: updated,
+      });
+  }
+
+  /** When a fix task lands, resolve the comments it addressed. */
+  private resolveCommentsForItem(workItemId: string): void {
+    for (const c of this.deps.store.commentsForWorkItem(workItemId)) {
+      if (c.status === 'open') this.resolveComment(c.id);
     }
   }
 
@@ -1337,6 +1401,36 @@ class ProjectOrchestrator {
           `[[REQUEST_GROUPCHAT: ${input.topic}]]`,
           null,
         ).catch(() => undefined);
+        return { ok: true };
+      },
+      addReviewComment: (input) => {
+        const ctx = this.reviewContext.get(agent.id);
+        if (!ctx) return { ok: false };
+        // Dedupe by body so re-reviews of the same diff converge instead of piling up.
+        const existing = this.deps.store.listPrComments(ctx.prId);
+        if (existing.some((c) => c.body === input.body)) return { ok: true };
+        const targetStream = input.targetStream?.trim() || null;
+        const targetAgent = this.findAgentByStream(targetStream);
+        const comment = this.deps.store.createPrComment({
+          projectId: pid,
+          prId: ctx.prId,
+          body: input.body,
+          targetStream,
+          targetAgentId: targetAgent?.id ?? null,
+          status: 'open',
+        });
+        this.deps.bus.publish({
+          type: 'pr_comment.updated',
+          projectId: pid,
+          comment,
+        });
+        this.emitEvent(
+          agent.id,
+          'pull_request',
+          `Review comment${targetStream ? ` [${targetStream}]` : ''}: ${input.body.slice(0, 80)}`,
+          null,
+          ctx.epicId,
+        );
         return { ok: true };
       },
       writeNote: (input) => {

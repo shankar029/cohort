@@ -328,6 +328,21 @@ export class RealCopilotAdapter implements CopilotAdapter {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             handler: async (args: any) => app.requestGroupChat(args),
           }),
+          sdk.defineTool('add_review_comment', {
+            description:
+              'While reviewing a pull request, file a specific, addressable comment and route it to the responsible stream (e.g. frontend, backend, qa). The Team Lead turns each comment into a fix task; the PR is not approved until every comment is resolved.',
+            parameters: {
+              type: 'object',
+              properties: {
+                body: { type: 'string' },
+                targetStream: { type: 'string' },
+              },
+              required: ['body'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.addReviewComment(args),
+          }),
           sdk.defineTool('write_note', {
             description:
               'Append a short note to your personal scratchpad (observations, findings, decisions). Optionally attach a workItemId.',
