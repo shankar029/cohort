@@ -1,25 +1,37 @@
 # ateam — Agents Team
 
 A **local web app** that orchestrates [GitHub Copilot SDK](https://github.com/github/copilot-sdk)
-agents to get real work done in your repositories. You talk to a single **Team Lead** agent; it
-delegates to a team of specialists (UX, Frontend, Backend, QA, DevOps, …) that work in your
-checked-out repo, maintain their own task boards, and report their progress live. Create work items
-on a Kanban board, assign them to an agent, and watch the agent pick them up and work autonomously.
+agents to get real work done in your repositories. You talk to a single **Team Lead** agent; it turns
+each request into an **epic**, decomposes it into stream-tagged tasks on a Kanban board, and assigns
+them to a team of principal-level specialists (PM, UX, Frontend, Backend, Data, QA, DevOps, Security,
+Docs, …) that work **in parallel** in isolated git worktrees, brainstorm in group threads, keep
+living scratchpads, and drive the work through a real **pull-request → review → merge** loop.
 
-> Built with the real `@github/copilot-sdk`. The Team Lead is the session's default agent;
-> specialists are SDK **custom agents**; delegation, streaming, and escalation use the SDK's native
-> sub-agent orchestration.
+> Built with the real `@github/copilot-sdk`. Each agent is an independent, grounded actor (aware of
+> the project, environment, and teammates); the Team Lead owns every request end to end.
 
 ## Features
 
 - **Projects** — each points at a locally checked-out repo; the team works in that directory.
   Run **many projects/teams in parallel**.
-- **Team Lead orchestration** — you only chat with the Lead; it delegates to specialists internally.
-- **Agent catalog** — 10 highly-specialized agents ready to add, plus create your own custom agent
+- **Epics & decomposition** — every request becomes an epic; the Team Lead consults the Product
+  Manager for outcomes + acceptance criteria, then breaks it into stream-tagged tasks with
+  dependencies, assigned for safe parallelism.
+- **Per-epic git worktrees** — each epic runs on its own `ateam/epic-<id>` branch in an isolated
+  worktree (kept outside your repo), so parallel epics never collide. `main`/`master` is never
+  touched until an explicit merge.
+- **Pull-request workflow** — when an epic's tasks are done the Lead opens an in-app PR, assigns an
+  independent reviewer, and **iterates to a quality bar** (approve / request-changes, capped rounds)
+  before a real `git merge --no-ff`.
+- **Async, grounded agents** — each specialist is its own SDK session/actor that really talks:
+  group **brainstorm threads**, escalation, and multi-author chat.
+- **Agent catalog** — 11 highly-specialized agents ready to add, plus create your own custom agent
   (name, description, prompt, tools, **skills**, and **per-agent model**).
-- **Kanban board** — create work items, assign to an agent → the agent **auto-picks-up** the item,
-  works it, moves it across columns, then **pulls the next** assigned item.
-- **Per-agent task boards** — each agent maintains its own tasks, visible to you.
+- **Kanban board** — create work items (or agents create them), assign to an agent → the agent
+  **auto-picks-up** the item, works it, moves it across columns, then **pulls the next** item.
+- **Scratchpads** — every agent keeps a living plan + timestamped notes you can watch.
+- **Scheduling** — agents can `wait`/`poll`; you can schedule work items for later or make them
+  **recurring** (hourly/daily/weekly).
 - **Live activity & logs** — watch every agent's messages, reasoning, tool calls, and sub-agent
   lifecycle stream in real time over WebSocket.
 - **Escalation** — a specialist's question routes to the Team Lead, which answers or **asks you**;
@@ -72,19 +84,22 @@ pick one **per agent**. The default is `auto` (always available); choose a speci
 
 ```
 Browser (React/Vite)  ──REST + WebSocket──▶  Fastify server
-                                              ├─ SQLite (better-sqlite3): projects, agents,
-                                              │  work items, tasks, events, chat, questions
+                                              ├─ SQLite (better-sqlite3): projects, agents, epics +
+                                              │  tasks, pull requests, threads, notes, events, chat
                                               ├─ Orchestrator (one per project, run in parallel)
-                                              │   • Team-Lead session with workingDirectory = repo
-                                              │   • specialists = SDK customAgents (scoped tools,
-                                              │     prompt, skills, per-agent model)
-                                              │   • autonomous pull-loop + escalation + permissions
+                                              │   • per-agent AgentSession actors + mailboxes
+                                              │     (independent, grounded, one session per worktree)
+                                              │   • epic planning → stream-tagged tasks → assign
+                                              │   • GitService: per-epic branch + isolated worktree
+                                              │   • PR → review → iterate-to-quality → merge
+                                              │   • SchedulerService: wait/poll + scheduled/recurring
                                               └─ CopilotAdapter
                                                   • RealCopilotAdapter  → @github/copilot-sdk
                                                   • FakeCopilotAdapter  → deterministic (tests)
 ```
 
 The LLM lives behind the `CopilotAdapter` seam so the app and tests never depend on a live model.
+Git worktrees always resolve to an absolute temp location (never inside a project or the app repo).
 
 ## Testing
 
@@ -100,15 +115,15 @@ ATEAM_LIVE=1 npx vitest run tests/live
 
 ```
 src/shared/   Types + Zod contracts shared by server and web
-src/server/   Fastify API, WebSocket, SQLite store, orchestrator, Copilot adapters, agent catalog
-src/web/      React app (Projects, Chat, Board, Agents, Activity, Settings)
+src/server/   Fastify API, WebSocket, SQLite store, orchestrator, GitService, scheduler,
+              Copilot adapters, agent catalog
+src/web/      React app (Projects, Chat, Board, Agents, Activity, Pull Requests, Settings)
 tests/        unit · integration · e2e · live
 ```
 
 ## Known follow-ups (out of scope for this build)
 
-- Parallel specialists **within** one project via the SDK's Fleet Mode (today: parallel across
-  projects; sequential within a project).
+- Remote git (push + hosted PRs); today all git is local (branches, worktrees, `--no-ff` merges).
 - Desktop packaging (Tauri/Electron) for a one-click app.
 - Richer permission UI (diff preview before approving writes) and audit export.
 - Multi-user auth (currently a local, single-user app).
