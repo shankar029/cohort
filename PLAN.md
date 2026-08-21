@@ -287,3 +287,12 @@ but the whole team's conversation is visible.
   per-owner cleanup) exposed to agents as tools `wait` (pause/retry after a delay) and `poll`
   (re-run a shell check every N seconds until it succeeds or times out) — so an agent can wait for
   an event/command to complete, poll for a condition, or wait-and-retry. Cleaned up on shutdown.
+- **User-scheduled work items**: a work item can carry a `scheduledAt` (specific time) and
+  `recurrence` (none/hourly/daily/weekly) and be assigned to an agent. Scheduled items wait in
+  backlog; the SchedulerService activates them at their time (→ todo → autonomous pickup) and, when
+  recurring, spawns the next future occurrence. Re-armed on server boot. Board form exposes a
+  datetime + repeat picker; cards show an ⏰ badge.
+- **Team Lead owns the project end-to-end**: the Lead's grounding makes it accountable for
+  delivering every request as a working, maintained, high-quality feature — clarify → epic →
+  decompose by stream → assign in parallel → git/PR/review → drive iteration until the quality bar
+  is met. Full workflow lands with M9–M11; grounding elevated now.

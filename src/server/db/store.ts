@@ -91,6 +91,8 @@ interface WorkItemRow {
   depends_on: string;
   assignee_agent_id: string | null;
   branch: string | null;
+  scheduled_at: number | null;
+  recurrence: string;
   ord: number;
   created_at: string;
   updated_at: string;
@@ -108,6 +110,8 @@ const toWorkItem = (r: WorkItemRow): WorkItem => ({
   dependsOn: r.depends_on ? (JSON.parse(r.depends_on) as string[]) : [],
   assigneeAgentId: r.assignee_agent_id,
   branch: r.branch ?? null,
+  scheduledAt: r.scheduled_at ?? null,
+  recurrence: (r.recurrence as WorkItem['recurrence']) ?? 'none',
   order: r.ord,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -419,6 +423,8 @@ export class Store {
     stream?: string | null;
     dependsOn?: string[];
     branch?: string | null;
+    scheduledAt?: number | null;
+    recurrence?: WorkItem['recurrence'];
     order?: number;
   }): WorkItem {
     const ts = now();
@@ -444,14 +450,16 @@ export class Store {
       depends_on: JSON.stringify(w.dependsOn ?? []),
       assignee_agent_id: w.assigneeAgentId,
       branch: w.branch ?? null,
+      scheduled_at: w.scheduledAt ?? null,
+      recurrence: w.recurrence ?? 'none',
       ord: order,
       created_at: ts,
       updated_at: ts,
     };
     this.db
       .prepare(
-        `INSERT INTO work_items (id,project_id,kind,parent_id,title,description,status,priority,stream,depends_on,assignee_agent_id,branch,ord,created_at,updated_at)
-         VALUES (@id,@project_id,@kind,@parent_id,@title,@description,@status,@priority,@stream,@depends_on,@assignee_agent_id,@branch,@ord,@created_at,@updated_at)`,
+        `INSERT INTO work_items (id,project_id,kind,parent_id,title,description,status,priority,stream,depends_on,assignee_agent_id,branch,scheduled_at,recurrence,ord,created_at,updated_at)
+         VALUES (@id,@project_id,@kind,@parent_id,@title,@description,@status,@priority,@stream,@depends_on,@assignee_agent_id,@branch,@scheduled_at,@recurrence,@ord,@created_at,@updated_at)`,
       )
       .run(row);
     return toWorkItem(row);
@@ -460,6 +468,16 @@ export class Store {
   listWorkItems(projectId: string): WorkItem[] {
     return this.db
       .prepare(`SELECT * FROM work_items WHERE project_id=? ORDER BY ord ASC, created_at ASC`)
+      .all(projectId)
+      .map((r) => toWorkItem(r as WorkItemRow));
+  }
+
+  /** Scheduled items awaiting activation (have a scheduledAt and still in backlog). */
+  listScheduledWorkItems(projectId: string): WorkItem[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM work_items WHERE project_id=? AND scheduled_at IS NOT NULL AND status='backlog' ORDER BY scheduled_at ASC`,
+      )
       .all(projectId)
       .map((r) => toWorkItem(r as WorkItemRow));
   }

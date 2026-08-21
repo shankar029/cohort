@@ -3,6 +3,7 @@ import {
   APPROVAL_MODES,
   WORK_ITEM_STATUSES,
   WORK_ITEM_PRIORITIES,
+  WORK_ITEM_RECURRENCES,
   AGENT_TASK_STATUSES,
 } from './domain';
 
@@ -51,6 +52,8 @@ export const createWorkItemSchema = z.object({
   priority: z.enum(WORK_ITEM_PRIORITIES).optional(),
   status: z.enum(WORK_ITEM_STATUSES).optional(),
   assigneeAgentId: z.string().nullable().optional(),
+  scheduledAt: z.number().int().positive().optional(),
+  recurrence: z.enum(WORK_ITEM_RECURRENCES).optional(),
 });
 export type CreateWorkItemInput = z.infer<typeof createWorkItemSchema>;
 

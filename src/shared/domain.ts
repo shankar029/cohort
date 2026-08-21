@@ -62,6 +62,9 @@ export interface Agent {
   updatedAt: string;
 }
 
+export const WORK_ITEM_RECURRENCES = ['none', 'hourly', 'daily', 'weekly'] as const;
+export type WorkItemRecurrence = (typeof WORK_ITEM_RECURRENCES)[number];
+
 export interface WorkItem {
   id: string;
   projectId: string;
@@ -80,6 +83,10 @@ export interface WorkItem {
   assigneeAgentId: string | null;
   /** Git branch the assignee works on, if any. */
   branch: string | null;
+  /** Epoch ms at which a scheduled item should activate (move to todo); null = not scheduled. */
+  scheduledAt: number | null;
+  /** Recurrence for scheduled items. */
+  recurrence: WorkItemRecurrence;
   /** Sort order within a column. */
   order: number;
   createdAt: string;

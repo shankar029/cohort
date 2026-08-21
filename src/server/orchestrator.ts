@@ -402,6 +402,72 @@ class ProjectOrchestrator {
     return this.runWorkItem(workItemId);
   }
 
+  /* ------------------------------------------------------ scheduled work */
+
+  private readonly armed = new Set<string>();
+
+  /** Arm any scheduled items already persisted for this project (called on boot). */
+  armSchedules(): void {
+    for (const item of this.deps.store.listScheduledWorkItems(this.projectId)) {
+      this.scheduleWorkItem(item);
+    }
+  }
+
+  /** Register a scheduled/recurring item to activate at its time. */
+  scheduleWorkItem(item: WorkItem): void {
+    if (item.scheduledAt == null || this.armed.has(item.id)) return;
+    this.armed.add(item.id);
+    const delay = item.scheduledAt - Date.now();
+    if (delay <= 0) {
+      this.activateScheduled(item.id);
+      return;
+    }
+    this.deps.scheduler.after(delay, () => this.activateScheduled(item.id), this.projectId);
+  }
+
+  private activateScheduled(itemId: string): void {
+    const item = this.deps.store.getWorkItem(itemId);
+    if (!item) return;
+    this.armed.delete(itemId);
+
+    if (item.status === 'backlog') {
+      const activated = this.deps.store.updateWorkItem(itemId, { status: 'todo' });
+      if (activated) {
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: activated,
+        });
+        if (activated.assigneeAgentId) {
+          void this.onItemAssigned(itemId).catch(() => undefined);
+        }
+      }
+    }
+
+    // Recurring: schedule the next occurrence (rolled forward to a future time).
+    const stepMs = recurrenceMs(item.recurrence);
+    if (stepMs && item.scheduledAt != null) {
+      let nextAt = item.scheduledAt + stepMs;
+      while (nextAt <= Date.now()) nextAt += stepMs;
+      const next = this.deps.store.createWorkItem({
+        projectId: this.projectId,
+        title: item.title,
+        description: item.description,
+        status: 'backlog',
+        priority: item.priority,
+        assigneeAgentId: item.assigneeAgentId,
+        scheduledAt: nextAt,
+        recurrence: item.recurrence,
+      });
+      this.deps.bus.publish({
+        type: 'workitem.updated',
+        projectId: this.projectId,
+        workItem: next,
+      });
+      this.scheduleWorkItem(next);
+    }
+  }
+
   private async runWorkItem(workItemId: string): Promise<void> {
     const item = this.deps.store.getWorkItem(workItemId);
     if (!item || !item.assigneeAgentId) return;
@@ -561,6 +627,20 @@ class ProjectOrchestrator {
   }
 }
 
+/** Milliseconds between recurrences, or null for a one-shot schedule. */
+function recurrenceMs(r: WorkItem['recurrence']): number | null {
+  switch (r) {
+    case 'hourly':
+      return 3_600_000;
+    case 'daily':
+      return 86_400_000;
+    case 'weekly':
+      return 604_800_000;
+    default:
+      return null;
+  }
+}
+
 /** Owns one orchestrator per project; enables many projects to run in parallel. */
 export class OrchestratorManager {
   private readonly byProject = new Map<string, ProjectOrchestrator>();
@@ -572,8 +652,14 @@ export class OrchestratorManager {
     if (!o) {
       o = new ProjectOrchestrator(projectId, this.deps);
       this.byProject.set(projectId, o);
+      o.armSchedules();
     }
     return o;
+  }
+
+  /** Re-arm scheduled work across all known projects (call once at startup). */
+  resumeAll(projectIds: string[]): void {
+    for (const pid of projectIds) this.get(pid);
   }
 
   async invalidate(projectId: string): Promise<void> {

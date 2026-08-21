@@ -171,6 +171,8 @@ interface AppContextValue {
       description?: string;
       priority?: string;
       assigneeAgentId?: string | null;
+      scheduledAt?: number;
+      recurrence?: string;
     },
   ) => Promise<void>;
   updateWorkItem: (

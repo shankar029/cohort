@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS work_items (
   depends_on TEXT NOT NULL DEFAULT '[]',
   assignee_agent_id TEXT,
   branch TEXT,
+  scheduled_at INTEGER,
+  recurrence TEXT NOT NULL DEFAULT 'none',
   ord REAL NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -155,6 +157,8 @@ function migrate(db: DB): void {
   add('work_items', 'stream', 'stream TEXT');
   add('work_items', 'depends_on', "depends_on TEXT NOT NULL DEFAULT '[]'");
   add('work_items', 'branch', 'branch TEXT');
+  add('work_items', 'scheduled_at', 'scheduled_at INTEGER');
+  add('work_items', 'recurrence', "recurrence TEXT NOT NULL DEFAULT 'none'");
   add('chat_messages', 'thread_id', "thread_id TEXT NOT NULL DEFAULT ''");
   add('chat_messages', 'author_agent_id', 'author_agent_id TEXT');
 }

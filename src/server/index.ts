@@ -62,6 +62,9 @@ async function main(): Promise<void> {
 
   await app.ready();
 
+  // Re-arm any scheduled/recurring work items persisted from previous runs.
+  orchestrators.resumeAll(store.listProjects().map((p) => p.id));
+
   // WebSocket server for live event streaming.
   const wss = new WebSocketServer({ server: app.server, path: '/ws' });
   wss.on('error', (err) => process.stderr.write(`[ws] server error: ${String(err)}\n`));

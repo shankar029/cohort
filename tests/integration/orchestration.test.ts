@@ -203,3 +203,64 @@ describe('escalation (specialist → team lead → user)', () => {
     await ctx.waitFor((m) => m.type === 'workitem.updated' && m.workItem.status === 'review', 8000);
   });
 });
+
+describe('scheduled + recurring work items', () => {
+  it('activates a scheduled item at its time and the assignee picks it up', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: {
+        title: 'Nightly report',
+        assigneeAgentId: agentId,
+        scheduledAt: Date.now() + 150,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const item = (res.json() as { workItem: WorkItem }).workItem;
+    // Parked in backlog until its scheduled time.
+    expect(item.status).toBe('backlog');
+    expect(item.scheduledAt).toBeGreaterThan(Date.now());
+
+    // Fires, activates, and is worked to review autonomously.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.title === 'Nightly report' &&
+        m.workItem.status === 'review',
+      8000,
+    );
+  });
+
+  it('a recurring item spawns the next occurrence when it fires', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId);
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: {
+        title: 'Hourly sync',
+        assigneeAgentId: agentId,
+        scheduledAt: Date.now() + 100,
+        recurrence: 'hourly',
+      },
+    });
+
+    // Wait until a future-scheduled occurrence exists (the next one).
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.title === 'Hourly sync' &&
+        m.workItem.status === 'backlog' &&
+        (m.workItem.scheduledAt ?? 0) > Date.now() + 60_000,
+      8000,
+    );
+    const hourly = ctx.store.listWorkItems(projectId).filter((i) => i.title === 'Hourly sync');
+    // One activated occurrence + one still-scheduled future occurrence.
+    expect(hourly.length).toBeGreaterThanOrEqual(2);
+    expect(hourly.some((i) => i.recurrence === 'hourly' && i.scheduledAt! > Date.now())).toBe(true);
+  });
+});

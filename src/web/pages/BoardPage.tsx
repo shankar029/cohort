@@ -124,6 +124,12 @@ function WorkItemCard({
       {item.description && (
         <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description}</p>
       )}
+      {item.scheduledAt && item.status === 'backlog' && (
+        <p className="mt-1 text-xs text-cyan-300">
+          ⏰ {new Date(item.scheduledAt).toLocaleString()}
+          {item.recurrence !== 'none' && ` · ${item.recurrence}`}
+        </p>
+      )}
       <div className="mt-2 flex items-center justify-between">
         <span className={`text-xs font-medium ${PRIORITY_COLOR[item.priority]}`}>
           ● {item.priority}
@@ -169,6 +175,8 @@ function CreateItemModal({
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('medium');
   const [assignee, setAssignee] = useState('');
+  const [scheduleAt, setScheduleAt] = useState('');
+  const [recurrence, setRecurrence] = useState('none');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -178,11 +186,14 @@ function CreateItemModal({
     setBusy(true);
     setError(null);
     try {
+      const scheduledAt = scheduleAt ? new Date(scheduleAt).getTime() : undefined;
       await createWorkItem(projectId, {
         title,
         description,
         priority,
         assigneeAgentId: assignee || null,
+        ...(scheduledAt && scheduledAt > Date.now() ? { scheduledAt } : {}),
+        ...(scheduledAt && recurrence !== 'none' ? { recurrence } : {}),
         ...({ status } as object),
       });
       onClose();
@@ -262,6 +273,38 @@ function CreateItemModal({
                     {a.emoji} {a.displayName}
                   </option>
                 ))}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label" htmlFor="wi-schedule">
+                Schedule (optional)
+              </label>
+              <input
+                id="wi-schedule"
+                type="datetime-local"
+                className="input"
+                data-testid="workitem-schedule"
+                value={scheduleAt}
+                onChange={(e) => setScheduleAt(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="wi-recurrence">
+                Repeat
+              </label>
+              <select
+                id="wi-recurrence"
+                className="input"
+                value={recurrence}
+                onChange={(e) => setRecurrence(e.target.value)}
+                disabled={!scheduleAt}
+              >
+                <option value="none">Once</option>
+                <option value="hourly">Hourly</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
               </select>
             </div>
           </div>

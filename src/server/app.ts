@@ -233,21 +233,28 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { id } = req.params as { id: string };
     requireProject(id);
     const input = createWorkItemSchema.parse(req.body);
+    const scheduled = typeof input.scheduledAt === 'number';
     const item = store.createWorkItem({
       projectId: id,
       title: input.title,
       description: input.description ?? '',
-      status: input.status ?? 'backlog',
+      // A scheduled item waits in backlog until its time arrives.
+      status: scheduled ? 'backlog' : (input.status ?? 'backlog'),
       priority: input.priority ?? 'medium',
       assigneeAgentId: input.assigneeAgentId ?? null,
+      scheduledAt: input.scheduledAt ?? null,
+      recurrence: input.recurrence ?? 'none',
     });
     bus.publish({ type: 'workitem.updated', projectId: id, workItem: item });
     reply.status(201);
-    if (item.assigneeAgentId)
+    if (scheduled) {
+      orchestrators.get(id).scheduleWorkItem(item);
+    } else if (item.assigneeAgentId) {
       void orchestrators
         .get(id)
         .onItemAssigned(item.id)
         .catch(() => undefined);
+    }
     return { workItem: item };
   });
 
