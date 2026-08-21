@@ -94,6 +94,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       questions: store.listQuestions(id),
       threads: store.listThreads(id),
       pulls: store.listPRs(id),
+      notifications: store.listNotifications(id),
     };
   });
 
@@ -341,6 +342,27 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       if (answered) bus.publish({ type: 'question.updated', projectId, question: answered });
     }
     return { ok: true };
+  });
+
+  /* ------------------------------------------------------- notifications */
+  app.get('/api/projects/:id/notifications', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    return { notifications: store.listNotifications(id) };
+  });
+
+  app.post('/api/projects/:id/notifications/read-all', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    store.markAllNotificationsRead(id);
+    return { ok: true };
+  });
+
+  app.post('/api/notifications/:notificationId/read', async (req) => {
+    const { notificationId } = req.params as { notificationId: string };
+    const updated = store.markNotificationRead(notificationId);
+    if (!updated) throw new HttpError(404, 'Notification not found');
+    return { notification: updated };
   });
 
   /* ---------------------------------------------------------------- events */

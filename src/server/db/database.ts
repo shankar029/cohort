@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS work_items (
   branch TEXT,
   scheduled_at INTEGER,
   recurrence TEXT NOT NULL DEFAULT 'none',
+  progress INTEGER NOT NULL DEFAULT 0,
   ord REAL NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -138,6 +139,19 @@ CREATE TABLE IF NOT EXISTS questions (
   created_at TEXT NOT NULL,
   answered_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  link TEXT NOT NULL DEFAULT 'chat',
+  work_item_id TEXT,
+  agent_id TEXT,
+  read INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
 `;
 
 /** Indexes created AFTER migrations so they can reference migrated columns. */
@@ -153,6 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_threads_project ON threads(project_id, created_at
 CREATE INDEX IF NOT EXISTS idx_prs_project ON pull_requests(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_workitems_parent ON work_items(parent_id);
 CREATE INDEX IF NOT EXISTS idx_questions_project ON questions(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_project ON notifications(project_id, created_at);
 `;
 
 /** Additive column migrations for databases created by an earlier schema. */
@@ -176,6 +191,7 @@ function migrate(db: DB): void {
   add('work_items', 'branch', 'branch TEXT');
   add('work_items', 'scheduled_at', 'scheduled_at INTEGER');
   add('work_items', 'recurrence', "recurrence TEXT NOT NULL DEFAULT 'none'");
+  add('work_items', 'progress', 'progress INTEGER NOT NULL DEFAULT 0');
   add('chat_messages', 'thread_id', "thread_id TEXT NOT NULL DEFAULT ''");
   add('chat_messages', 'author_agent_id', 'author_agent_id TEXT');
 }

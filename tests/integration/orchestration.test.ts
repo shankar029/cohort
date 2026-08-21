@@ -405,6 +405,18 @@ describe('epic planning & decomposition', () => {
         m.type === 'workitem.updated' && m.workItem.id === epicId && m.workItem.status === 'done',
       15000,
     );
+
+    // The epic rolls up to 100% progress when complete, and its child tasks report
+    // full progress as they finish.
+    expect(ctx.store.getWorkItem(epicId)?.progress).toBe(100);
+    expect(ctx.store.getWorkItem(fe.id)?.progress).toBe(100);
+
+    // Major milestones were recorded as user notifications (epic, plan, task, merge).
+    const notifTypes = new Set(ctx.store.listNotifications(projectId).map((n) => n.type));
+    expect(notifTypes.has('epic')).toBe(true);
+    expect(notifTypes.has('plan')).toBe(true);
+    expect(notifTypes.has('task')).toBe(true);
+    expect(notifTypes.has('merge')).toBe(true);
   });
 
   it('a casual message does not spawn an epic', async () => {

@@ -288,6 +288,22 @@ export class RealCopilotAdapter implements CopilotAdapter {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             handler: async (args: any) => app.moveWorkItem(args),
           }),
+          sdk.defineTool('update_progress', {
+            description:
+              'Update the completion percentage (0-100) of the work item you are currently on. Keep it current as you make progress so the user and teammates can track it; pass a short note describing the milestone.',
+            parameters: {
+              type: 'object',
+              properties: {
+                progress: { type: 'number' },
+                workItemId: { type: 'string' },
+                note: { type: 'string' },
+              },
+              required: ['progress'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.updateProgress(args),
+          }),
           sdk.defineTool('post_message', {
             description:
               'Post a message to the team as yourself. Defaults to the main thread; pass threadId to post in a specific discussion.',

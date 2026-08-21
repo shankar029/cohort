@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import type { Agent, Project, Thread, WorkItem } from '@shared/index';
+import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
 import type {
@@ -364,6 +364,14 @@ class ProjectOrchestrator {
     });
     this.deps.bus.publish({ type: 'workitem.updated', projectId: this.projectId, workItem: epic });
     this.emitEvent(lead.id, 'system', `Opened epic “${epic.title}”`, null, epic.id);
+    this.notify(
+      'epic',
+      `New epic: ${epic.title}`,
+      'The Team Lead opened an epic and is planning the work.',
+      'board',
+      epic.id,
+      lead.id,
+    );
 
     // Isolate the epic in its own git branch + worktree so parallel epics never
     // share a filesystem. Best-effort: fall back to the repo dir if git is unavailable.
@@ -489,6 +497,14 @@ class ProjectOrchestrator {
       `assigned and starting now in parallel. ${verifyNote}` +
       `Follow progress on the Board; I'll keep you posted here.`;
     this.postMessage(main.id, lead, summary);
+    this.notify(
+      'plan',
+      `Plan ready: ${epic.title}`,
+      `${builderTaskIds.length} task(s) across ${streamList} — work is starting.`,
+      'chat',
+      epic.id,
+      lead.id,
+    );
 
     return epic;
   }
@@ -745,6 +761,7 @@ class ProjectOrchestrator {
     if (item.status === 'done' || item.status === 'in_progress') return;
 
     this.moveItem(item.id, 'in_progress');
+    this.setProgress(item.id, Math.max(10, item.progress), agent);
     const main = this.ensureMainThread();
     const startTask = this.deps.store.upsertTask({
       projectId: this.projectId,
@@ -807,6 +824,15 @@ class ProjectOrchestrator {
     this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: doneTask });
     const latest = this.deps.store.getWorkItem(item.id);
     if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
+    this.setProgress(item.id, 100, agent);
+    this.notify(
+      'task',
+      `Task complete: ${item.title}`,
+      summary.slice(0, 200),
+      'board',
+      item.id,
+      agent.id,
+    );
     // A finished task may unblock dependency-gated siblings (e.g. QA/review).
     this.maybePromoteDependents(item.parentId);
     // When every task in the epic is reviewed, raise a PR and run review-to-merge.
@@ -908,6 +934,14 @@ class ProjectOrchestrator {
       prId = pr.id;
       this.epicPr.set(epic.id, prId);
       this.emitEvent(lead.id, 'pull_request', `Raised PR for “${epic.title}”`, null, epic.id);
+      this.notify(
+        'pr',
+        `PR opened: ${epic.title}`,
+        `${reviewer.displayName} will review the changes.`,
+        'pulls',
+        epic.id,
+        lead.id,
+      );
     } else {
       this.deps.store.updatePR(prId, { status: 'open', diff });
     }
@@ -953,6 +987,14 @@ class ProjectOrchestrator {
         pr: changed,
       });
     this.emitEvent(reviewer.id, 'pull_request', `Requested changes: ${reason}`, null, epic.id);
+    this.notify(
+      'review',
+      `Changes requested: ${epic.title}`,
+      reason,
+      'pulls',
+      epic.id,
+      reviewer.id,
+    );
 
     if (iter >= ProjectOrchestrator.MAX_REVIEW_ITER) {
       this.emitEvent(
@@ -1038,12 +1080,21 @@ class ProjectOrchestrator {
       if (c.status !== 'done') this.moveItem(c.id, 'done');
     }
     this.moveItem(epic.id, 'done');
+    this.setProgress(epic.id, 100);
     this.emitEvent(
       this.lead().id,
       'system',
       `Epic “${epic.title}” merged and closed`,
       null,
       epic.id,
+    );
+    this.notify(
+      'merge',
+      `Epic merged: ${epic.title}`,
+      'All tasks reviewed and merged. The epic is complete.',
+      'pulls',
+      epic.id,
+      this.lead().id,
     );
   }
 
@@ -1091,6 +1142,17 @@ class ProjectOrchestrator {
           null,
           input.workItemId,
         );
+        return { ok: true };
+      },
+      updateProgress: (input) => {
+        const target =
+          input.workItemId ??
+          this.deps.store
+            .listWorkItems(pid)
+            .find((w) => w.assigneeAgentId === agent.id && w.status === 'in_progress')?.id ??
+          null;
+        if (!target) return { ok: false };
+        this.setProgress(target, input.progress, agent, input.note);
         return { ok: true };
       },
       postMessage: (input) => {
@@ -1179,6 +1241,79 @@ class ProjectOrchestrator {
       });
   }
 
+  /** Update a work item's completion %, roll it up to its epic, and notify milestones. */
+  private setProgress(workItemId: string, value: number, agent?: Agent, note?: string): void {
+    const before = this.deps.store.getWorkItem(workItemId);
+    const clamped = Math.max(0, Math.min(100, Math.round(value)));
+    if (before && before.progress === clamped && !note) {
+      if (before.parentId) this.recomputeEpicProgress(before.parentId);
+      return;
+    }
+    const updated = this.deps.store.updateWorkItem(workItemId, { progress: clamped });
+    if (!updated) return;
+    this.deps.bus.publish({
+      type: 'workitem.updated',
+      projectId: this.projectId,
+      workItem: updated,
+    });
+    if (updated.parentId) this.recomputeEpicProgress(updated.parentId);
+    // Notify only on meaningful milestones (an explicit note, or completion) so
+    // the panel stays signal-rich rather than logging every tick.
+    if (note) {
+      this.notify(
+        'progress',
+        `${updated.title} · ${clamped}%`,
+        note,
+        'board',
+        workItemId,
+        agent?.id ?? null,
+      );
+    }
+  }
+
+  /** Roll an epic's progress up from the average of its child tasks. */
+  private recomputeEpicProgress(epicId: string): void {
+    const children = this.deps.store.listChildTasks(epicId);
+    if (children.length === 0) return;
+    const avg = Math.round(
+      children.reduce((s, c) => s + (c.status === 'done' ? 100 : c.progress), 0) / children.length,
+    );
+    const epic = this.deps.store.getWorkItem(epicId);
+    if (!epic || epic.progress === avg) return;
+    const updated = this.deps.store.updateWorkItem(epicId, { progress: avg });
+    if (updated)
+      this.deps.bus.publish({
+        type: 'workitem.updated',
+        projectId: this.projectId,
+        workItem: updated,
+      });
+  }
+
+  /** Record a user-facing notification and broadcast it. */
+  notify(
+    type: NotificationType,
+    title: string,
+    body: string,
+    link: string,
+    workItemId: string | null = null,
+    agentId: string | null = null,
+  ): void {
+    const notification = this.deps.store.createNotification({
+      projectId: this.projectId,
+      type,
+      title,
+      body,
+      link,
+      workItemId,
+      agentId,
+    });
+    this.deps.bus.publish({
+      type: 'notification.created',
+      projectId: this.projectId,
+      notification,
+    });
+  }
+
   setStatus(agentId: string, status: Agent['status']): void {
     const updated = this.deps.store.setAgentStatus(agentId, status);
     if (updated) {
@@ -1247,6 +1382,7 @@ class ProjectOrchestrator {
       choices: choices ?? null,
     });
     this.deps.bus.publish({ type: 'question.updated', projectId: this.projectId, question: q });
+    this.notify('question', 'Your input is needed', question, 'chat', null, agentId);
     this.deps.store.appendEvent({
       projectId: this.projectId,
       agentId,

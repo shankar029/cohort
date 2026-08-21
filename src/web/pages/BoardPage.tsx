@@ -230,6 +230,20 @@ function WorkItemCard({
         {item.description && (
           <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description}</p>
         )}
+        {!isEpic && (item.progress > 0 || item.status === 'in_progress') && (
+          <div className="mt-2">
+            <div className="mb-1 flex items-center justify-between text-[0.7rem] text-slate-500">
+              <span>Progress</span>
+              <span>{item.progress}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
+              <div
+                className="h-full rounded-full bg-status-working transition-all"
+                style={{ width: `${item.progress}%` }}
+              />
+            </div>
+          </div>
+        )}
         {isEpic && childCount > 0 && (
           <div className="mt-2">
             <div className="mb-1 flex items-center justify-between text-[0.7rem] text-slate-500">
@@ -372,6 +386,29 @@ function WorkItemDetailModal({
               </select>
             </label>
           )}
+        </div>
+
+        <div>
+          <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
+            <span className="label !mb-0">Progress</span>
+            <span className="font-medium text-slate-200">{item.progress}%</span>
+          </div>
+          <div className="mb-2 h-2 overflow-hidden rounded-full bg-surface-3">
+            <div
+              className="h-full rounded-full bg-status-working transition-all"
+              style={{ width: `${item.progress}%` }}
+            />
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={item.progress}
+            className="w-full accent-accent-500"
+            data-testid="progress-slider"
+            onChange={(e) => set({ progress: Number(e.target.value) })}
+          />
         </div>
 
         <div>

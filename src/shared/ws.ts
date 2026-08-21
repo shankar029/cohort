@@ -8,6 +8,7 @@ import type {
   Project,
   PullRequest,
   Question,
+  Notification,
   Thread,
   WorkItem,
 } from './domain';
@@ -28,6 +29,7 @@ export type ServerMessage =
   | { type: 'chat.message'; projectId: string; message: ChatMessage }
   | { type: 'chat.delta'; projectId: string; messageId: string; delta: string }
   | { type: 'chat.deleted'; projectId: string; messageId: string }
+  | { type: 'notification.created'; projectId: string; notification: Notification }
   | { type: 'thread.updated'; projectId: string; thread: Thread }
   | { type: 'pull_request.updated'; projectId: string; pr: PullRequest }
   | { type: 'question.updated'; projectId: string; question: Question }

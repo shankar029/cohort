@@ -10,6 +10,7 @@ import type {
   ServerMessage,
   WorkItem,
   PullRequest,
+  Notification,
   Thread,
 } from '@shared/index';
 import { api } from './api';
@@ -25,6 +26,7 @@ export interface ProjectBundle {
   events: AgentEvent[];
   pulls: PullRequest[];
   threads: Thread[];
+  notifications: Notification[];
   loaded: boolean;
 }
 
@@ -46,6 +48,7 @@ const emptyBundle = (): ProjectBundle => ({
   events: [],
   pulls: [],
   threads: [],
+  notifications: [],
   loaded: false,
 });
 
@@ -149,6 +152,8 @@ function applyWs(state: State, message: ServerMessage): State {
         };
       case 'thread.updated':
         return { ...b, threads: upsert(b.threads, message.thread) };
+      case 'notification.created':
+        return { ...b, notifications: [message.notification, ...b.notifications].slice(0, 300) };
       case 'event.appended':
         return { ...b, events: [...b.events, message.event].slice(-1000) };
       default:
@@ -225,6 +230,8 @@ interface AppContextValue {
   ) => Promise<void>;
   deleteAgent: (projectId: string, agentId: string) => Promise<void>;
   answerQuestion: (questionId: string, answer: string) => Promise<void>;
+  markNotificationRead: (notificationId: string) => Promise<void>;
+  markAllNotificationsRead: (projectId: string) => Promise<void>;
   updateProject: (id: string, input: Record<string, unknown>) => Promise<void>;
 }
 
@@ -297,6 +304,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           events: events.events,
           pulls: detail.pulls,
           threads: detail.threads,
+          notifications: detail.notifications,
           loaded: true,
         },
       });
@@ -363,6 +371,33 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       answerQuestion: async (questionId, answer) => {
         await api.answerQuestion(questionId, answer);
+      },
+      markNotificationRead: async (notificationId) => {
+        await api.markNotificationRead(notificationId);
+        for (const [pid, b] of Object.entries(state.bundles)) {
+          if (b.notifications.some((n) => n.id === notificationId)) {
+            dispatch({
+              type: 'SET_BUNDLE',
+              projectId: pid,
+              bundle: {
+                notifications: b.notifications.map((n) =>
+                  n.id === notificationId ? { ...n, read: true } : n,
+                ),
+              },
+            });
+            break;
+          }
+        }
+      },
+      markAllNotificationsRead: async (projectId) => {
+        await api.markAllNotificationsRead(projectId);
+        const b = state.bundles[projectId];
+        if (b)
+          dispatch({
+            type: 'SET_BUNDLE',
+            projectId,
+            bundle: { notifications: b.notifications.map((n) => ({ ...n, read: true })) },
+          });
       },
     };
   }, [state]);

@@ -10,6 +10,7 @@ import type {
   Project,
   PullRequest,
   Question,
+  Notification,
   Thread,
   SkillInfo,
   UpdateProjectSettingsInput,
@@ -59,6 +60,7 @@ export const api = {
       questions: Question[];
       pulls: PullRequest[];
       threads: Thread[];
+      notifications: Notification[];
     }>(`/api/projects/${id}`),
   updateProject: (id: string, input: UpdateProjectSettingsInput) =>
     request<{ project: Project }>(`/api/projects/${id}`, {
@@ -66,6 +68,17 @@ export const api = {
       body: JSON.stringify(input),
     }),
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+
+  notifications: (projectId: string) =>
+    request<{ notifications: Notification[] }>(`/api/projects/${projectId}/notifications`),
+  markNotificationRead: (notificationId: string) =>
+    request<{ notification: Notification }>(`/api/notifications/${notificationId}/read`, {
+      method: 'POST',
+    }),
+  markAllNotificationsRead: (projectId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${projectId}/notifications/read-all`, {
+      method: 'POST',
+    }),
 
   catalog: () => request<{ agents: CatalogAgentDTOShape[] }>('/api/catalog'),
   skills: (projectId: string) =>

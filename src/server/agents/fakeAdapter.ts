@@ -49,6 +49,11 @@ class FakeAgentSession implements AgentSession {
         app.updatePlan({ content: planned[1]!.trim() });
         onEvent({ kind: 'tool_call', toolName: 'update_plan', detail: {} });
       }
+      const progressed = /\[\[PROGRESS:\s*(\d+)\]\]/.exec(prompt);
+      if (progressed) {
+        app.updateProgress({ progress: Number(progressed[1]), note: 'milestone reached' });
+        onEvent({ kind: 'tool_call', toolName: 'update_progress', detail: {} });
+      }
     }
 
     if (/\[\[WRITE\]\]/.test(prompt)) {

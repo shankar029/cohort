@@ -15,6 +15,8 @@ import type {
   PullRequest,
   PrStatus,
   Question,
+  Notification,
+  NotificationType,
   Thread,
   ThreadKind,
   WorkItem,
@@ -94,6 +96,7 @@ interface WorkItemRow {
   branch: string | null;
   scheduled_at: number | null;
   recurrence: string;
+  progress: number;
   ord: number;
   created_at: string;
   updated_at: string;
@@ -114,6 +117,7 @@ const toWorkItem = (r: WorkItemRow): WorkItem => ({
   scheduledAt: r.scheduled_at ?? null,
   recurrence: (r.recurrence as WorkItem['recurrence']) ?? 'none',
   order: r.ord,
+  progress: r.progress ?? 0,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -275,6 +279,31 @@ const toQuestion = (r: QuestionRow): Question => ({
   answer: r.answer,
   createdAt: r.created_at,
   answeredAt: r.answered_at,
+});
+
+interface NotificationRow {
+  id: string;
+  project_id: string;
+  type: string;
+  title: string;
+  body: string;
+  link: string;
+  work_item_id: string | null;
+  agent_id: string | null;
+  read: number;
+  created_at: string;
+}
+const toNotification = (r: NotificationRow): Notification => ({
+  id: r.id,
+  projectId: r.project_id,
+  type: r.type as NotificationType,
+  title: r.title,
+  body: r.body,
+  link: r.link,
+  workItemId: r.work_item_id,
+  agentId: r.agent_id,
+  read: Boolean(r.read),
+  createdAt: r.created_at,
 });
 
 /* -------------------------------------------------------------------- store */
@@ -447,6 +476,7 @@ export class Store {
     branch?: string | null;
     scheduledAt?: number | null;
     recurrence?: WorkItem['recurrence'];
+    progress?: number;
     order?: number;
   }): WorkItem {
     const ts = now();
@@ -474,14 +504,15 @@ export class Store {
       branch: w.branch ?? null,
       scheduled_at: w.scheduledAt ?? null,
       recurrence: w.recurrence ?? 'none',
+      progress: 0,
       ord: order,
       created_at: ts,
       updated_at: ts,
     };
     this.db
       .prepare(
-        `INSERT INTO work_items (id,project_id,kind,parent_id,title,description,status,priority,stream,depends_on,assignee_agent_id,branch,scheduled_at,recurrence,ord,created_at,updated_at)
-         VALUES (@id,@project_id,@kind,@parent_id,@title,@description,@status,@priority,@stream,@depends_on,@assignee_agent_id,@branch,@scheduled_at,@recurrence,@ord,@created_at,@updated_at)`,
+        `INSERT INTO work_items (id,project_id,kind,parent_id,title,description,status,priority,stream,depends_on,assignee_agent_id,branch,scheduled_at,recurrence,progress,ord,created_at,updated_at)
+         VALUES (@id,@project_id,@kind,@parent_id,@title,@description,@status,@priority,@stream,@depends_on,@assignee_agent_id,@branch,@scheduled_at,@recurrence,@progress,@ord,@created_at,@updated_at)`,
       )
       .run(row);
     return toWorkItem(row);
@@ -530,6 +561,7 @@ export class Store {
         | 'stream'
         | 'branch'
         | 'dependsOn'
+        | 'progress'
       >
     >,
   ): WorkItem | undefined {
@@ -538,7 +570,7 @@ export class Store {
     const m = { ...existing, ...patch };
     this.db
       .prepare(
-        `UPDATE work_items SET title=?, description=?, status=?, priority=?, assignee_agent_id=?, ord=?, stream=?, branch=?, depends_on=?, updated_at=? WHERE id=?`,
+        `UPDATE work_items SET title=?, description=?, status=?, priority=?, assignee_agent_id=?, ord=?, stream=?, branch=?, depends_on=?, progress=?, updated_at=? WHERE id=?`,
       )
       .run(
         m.title,
@@ -550,6 +582,7 @@ export class Store {
         m.stream,
         m.branch,
         JSON.stringify(m.dependsOn ?? []),
+        Math.max(0, Math.min(100, Math.round(m.progress ?? 0))),
         now(),
         workItemId,
       );
@@ -956,5 +989,53 @@ export class Store {
       .prepare(`SELECT * FROM questions WHERE project_id=? ORDER BY created_at ASC`)
       .all(projectId)
       .map((r) => toQuestion(r as QuestionRow));
+  }
+
+  /* notifications */
+  createNotification(n: {
+    projectId: string;
+    type: NotificationType;
+    title: string;
+    body: string;
+    link?: string;
+    workItemId?: string | null;
+    agentId?: string | null;
+  }): Notification {
+    const row = {
+      id: id('ntf'),
+      project_id: n.projectId,
+      type: n.type,
+      title: n.title,
+      body: n.body,
+      link: n.link ?? 'chat',
+      work_item_id: n.workItemId ?? null,
+      agent_id: n.agentId ?? null,
+      read: 0,
+      created_at: now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO notifications (id,project_id,type,title,body,link,work_item_id,agent_id,read,created_at)
+         VALUES (@id,@project_id,@type,@title,@body,@link,@work_item_id,@agent_id,@read,@created_at)`,
+      )
+      .run(row);
+    return toNotification(row as NotificationRow);
+  }
+
+  listNotifications(projectId: string, limit = 200): Notification[] {
+    return this.db
+      .prepare(`SELECT * FROM notifications WHERE project_id=? ORDER BY created_at DESC LIMIT ?`)
+      .all(projectId, limit)
+      .map((r) => toNotification(r as NotificationRow));
+  }
+
+  markNotificationRead(notificationId: string): Notification | undefined {
+    this.db.prepare(`UPDATE notifications SET read=1 WHERE id=?`).run(notificationId);
+    const r = this.db.prepare(`SELECT * FROM notifications WHERE id=?`).get(notificationId);
+    return r ? toNotification(r as NotificationRow) : undefined;
+  }
+
+  markAllNotificationsRead(projectId: string): void {
+    this.db.prepare(`UPDATE notifications SET read=1 WHERE project_id=?`).run(projectId);
   }
 }

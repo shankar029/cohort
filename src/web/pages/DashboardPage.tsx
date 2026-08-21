@@ -217,7 +217,7 @@ function EpicRow({
 }): React.JSX.Element {
   const children = tasks.filter((t) => t.parentId === epic.id);
   const done = children.filter((t) => t.status === 'done').length;
-  const pct = children.length ? (done / children.length) * 100 : epic.status === 'done' ? 100 : 0;
+  const pct = epic.progress || (children.length ? (done / children.length) * 100 : 0);
   return (
     <Link
       to={`/p/${projectId}/board`}
@@ -226,7 +226,7 @@ function EpicRow({
       <div className="flex items-center justify-between gap-2">
         <p className="truncate text-sm font-medium text-slate-100">{epic.title}</p>
         <span className="shrink-0 text-xs text-slate-500">
-          {done}/{children.length}
+          {Math.round(pct)}% · {done}/{children.length}
         </span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-3">

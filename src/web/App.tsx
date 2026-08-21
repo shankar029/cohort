@@ -10,6 +10,7 @@ import { AgentDetailPage } from './pages/AgentDetailPage';
 import { ActivityPage } from './pages/ActivityPage';
 import { PullRequestsPage } from './pages/PullRequestsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { NotificationsPage } from './pages/NotificationsPage';
 
 const NAV = [
   { to: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -18,6 +19,7 @@ const NAV = [
   { to: 'agents', label: 'Agents', icon: '🤖' },
   { to: 'pulls', label: 'Pull Requests', icon: '🔃' },
   { to: 'activity', label: 'Activity', icon: '📡' },
+  { to: 'notifications', label: 'Notifications', icon: '🔔' },
   { to: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -27,6 +29,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
   const project = state.projects.find((p) => p.id === projectId);
   const working = bundle.agents.filter((a) => a.status === 'working').length;
   const needsInput = bundle.questions.filter((q) => q.status === 'pending').length;
+  const unread = bundle.notifications.filter((n) => !n.read).length;
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-surface-border bg-surface-1">
@@ -96,6 +99,14 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
                     {needsInput}
                   </span>
                 )}
+                {item.to === 'notifications' && unread > 0 && (
+                  <span
+                    className="rounded-full bg-accent-500 px-1.5 text-xs font-semibold text-white"
+                    data-testid="unread-badge"
+                  >
+                    {unread}
+                  </span>
+                )}
               </>
             )}
           </NavLink>
@@ -163,6 +174,7 @@ export function App(): React.JSX.Element {
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:agentId" element={<AgentDetailPage />} />
         <Route path="activity" element={<ActivityPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="pulls" element={<PullRequestsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

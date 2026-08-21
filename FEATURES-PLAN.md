@@ -11,9 +11,9 @@
 - [x] 5. Agent editing — Edit form (name/description/prompt/model/skills) in AgentDetailPage.
 
 ## Phase 2 (new requirements)
-- [ ] 6. Work-item progress (0-100%) — schema field, agent app tool to update it, shown on board cards + detail.
-- [ ] 7. Dashboard shows progress (epic/task rollups).
-- [ ] 8. Notifications — entity + store + WS + bell/page; click routes to chat/board; major updates emit notifications.
+- [x] 6. Work-item progress (0-100%) — schema field, `update_progress` app tool + `[[PROGRESS:n]]` marker, lifecycle (10% start → 100% done), epic roll-up, shown on cards + detail slider.
+- [x] 7. Dashboard shows progress (epic roll-ups, task distribution).
+- [x] 8. Notifications — entity + store + WS + nav bell w/ unread badge + page; click routes to chat/board/pulls; epic/plan/task/pr/review/merge/question emit notifications.
 
 ## Verification
 - Gate: tsc + eslint + prettier + vitest + playwright build. Add tests for resume + markdown.

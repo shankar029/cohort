@@ -64,6 +64,7 @@ export const updateWorkItemSchema = z.object({
   status: z.enum(WORK_ITEM_STATUSES).optional(),
   assigneeAgentId: z.string().nullable().optional(),
   order: z.number().optional(),
+  progress: z.number().int().min(0).max(100).optional(),
 });
 export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;
 

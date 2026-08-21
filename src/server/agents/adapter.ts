@@ -49,6 +49,9 @@ export interface AgentAppTools {
     acceptanceCriteria?: string;
   }): { id: string; title: string };
   moveWorkItem(input: { workItemId: string; status: string }): { ok: boolean };
+  updateProgress(input: { progress: number; workItemId?: string | null; note?: string }): {
+    ok: boolean;
+  };
   postMessage(input: { content: string; threadId?: string }): { ok: boolean };
   requestGroupChat(input: { topic: string }): { ok: boolean };
   writeNote(input: { content: string; workItemId?: string | null }): { ok: boolean };

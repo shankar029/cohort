@@ -89,6 +89,8 @@ export interface WorkItem {
   recurrence: WorkItemRecurrence;
   /** Sort order within a column. */
   order: number;
+  /** Completion percentage 0-100, kept current by the assignee agent. */
+  progress: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -227,4 +229,32 @@ export interface SkillInfo {
   path: string;
   /** 'home' = user/global roots, 'project' = inside the project's repo. */
   source: 'home' | 'project';
+}
+
+export const NOTIFICATION_TYPES = [
+  'epic',
+  'plan',
+  'progress',
+  'task',
+  'pr',
+  'review',
+  'merge',
+  'question',
+  'system',
+] as const;
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+/** A user-facing notification recorded for the notifications panel. */
+export interface Notification {
+  id: string;
+  projectId: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  /** In-project route to open when clicked, e.g. 'chat', 'board', 'pulls', 'agents/<id>'. */
+  link: string;
+  workItemId: string | null;
+  agentId: string | null;
+  read: boolean;
+  createdAt: string;
 }
