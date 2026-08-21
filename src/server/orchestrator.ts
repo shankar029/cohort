@@ -417,6 +417,30 @@ class ProjectOrchestrator {
       );
     }
 
+    // 2b. The Architect designs the epic before the team builds it: approach,
+    //     components, risks, and a stream-tagged breakdown. Recorded as the
+    //     epic's living plan and posted to the team.
+    const architect = specs.find((s) => s.name === 'architect');
+    if (architect) {
+      await this.actor(architect).ask(
+        `Design epic “${epic.title}” before the team builds it.\nRequest: ${content}\n` +
+          `Produce a concise technical design: approach and key decisions, the components/` +
+          `interfaces, risks and mitigations, and a dependency-ordered breakdown into small ` +
+          `stream-tagged tasks. Record it with update_plan and post a short design summary for ` +
+          `the team. Ground it in the existing codebase and conventions.`,
+        main.id,
+        epic.id,
+      );
+      this.notify(
+        'plan',
+        `Architecture ready: ${epic.title}`,
+        `${architect.displayName} designed the epic; the Team Lead is assigning the work.`,
+        'chat',
+        epic.id,
+        architect.id,
+      );
+    }
+
     // 3. Lead frames the plan for the team.
     await this.actor(lead).ask(
       `You own epic “${epic.title}”. Break it into parallel tasks by stream for the team, ` +
@@ -428,7 +452,9 @@ class ProjectOrchestrator {
     // 4. Decompose into stream-tagged task cards. Builders run in parallel now;
     //    verifiers (QA/review/security) wait on the build tasks (dependency-gated in Phase 3).
     const verifiers = specs.filter((s) => /^(qa|reviewer|security)$/.test(s.name));
-    const builders = specs.filter((s) => s.name !== 'pm' && !verifiers.includes(s));
+    const builders = specs.filter(
+      (s) => s.name !== 'pm' && s.name !== 'architect' && !verifiers.includes(s),
+    );
     const goal = shortGoal(content);
     const builderTaskIds: string[] = [];
     for (const s of builders) {
