@@ -262,6 +262,9 @@ export function buildApp(ctx: AppContext): FastifyInstance {
         .get(id)
         .onItemAssigned(item.id)
         .catch(() => undefined);
+    } else if (item.status === 'todo') {
+      // Unassigned ready work: let the Team Lead assign it.
+      orchestrators.get(id).pokeLead();
     }
     return { workItem: item };
   });

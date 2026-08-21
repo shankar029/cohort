@@ -434,3 +434,30 @@ describe('epic planning & decomposition', () => {
     expect(ctx.store.listWorkItems(projectId).some((i) => i.kind === 'epic')).toBe(false);
   });
 });
+
+describe('Team Lead ownership', () => {
+  it('the Lead assigns an unassigned ready item to a matching specialist', async () => {
+    const { projectId } = await createProject();
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    // A user drops an unassigned card in To Do; the Lead — not the agent — assigns it.
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: '[frontend] tidy the header', status: 'todo' },
+    });
+    expect(res.statusCode).toBe(201);
+    const itemId = (res.json() as { workItem: { id: string } }).workItem.id;
+
+    const assigned = await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.id === itemId &&
+        m.workItem.assigneeAgentId != null,
+      5000,
+    );
+    expect(assigned.type === 'workitem.updated' && assigned.workItem.assigneeAgentId).toBeTruthy();
+    const fe = ctx.store.listAgents(projectId).find((a) => a.name === 'frontend')!;
+    expect(ctx.store.getWorkItem(itemId)?.assigneeAgentId).toBe(fe.id);
+  });
+});

@@ -13,7 +13,7 @@ import type {
 } from './agents/adapter.js';
 import { buildSystemPrompt } from './agents/context.js';
 import { discoverSkills, skillDirectories } from './agents/skillScanner.js';
-import type { SchedulerService } from './scheduler.js';
+import type { Cancel, SchedulerService } from './scheduler.js';
 import type { GitService } from './git.js';
 
 interface Deps {
@@ -147,9 +147,19 @@ class ProjectOrchestrator {
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
   private readonly epicReviewing = new Set<string>();
+  /** In-flight background reviews, awaited on dispose so nothing touches a closed DB. */
+  private readonly pendingReviews = new Set<Promise<unknown>>();
   /** Per-message accumulated streamed text, so deltas survive a re-sync. */
   private readonly streamBuffers = new Map<string, string>();
   private static readonly MAX_REVIEW_ITER = 3;
+
+  /** Team Lead proactive manager loop. */
+  private static readonly LEAD_TICK_MS = Number(process.env.ATEAM_LEAD_TICK_MS ?? 15000);
+  private leadStarted = false;
+  private disposed = false;
+  private leadPoke?: Cancel;
+  /** agentId -> last time the Lead nudged them, so guidance stays low-noise. */
+  private readonly leadNudges = new Map<string, number>();
 
   constructor(
     private readonly projectId: string,
@@ -665,6 +675,132 @@ class ProjectOrchestrator {
     for (const item of this.deps.store.listScheduledWorkItems(this.projectId)) {
       this.scheduleWorkItem(item);
     }
+    this.startLeadManager();
+  }
+
+  /**
+   * The Team Lead proactively owns delivery: on a heartbeat (and whenever the
+   * board changes) they assign ready unassigned work to the best-matching
+   * specialist, and keep an eye on the team — nudging blocked agents. Agents
+   * never self-assign; the Lead hands out the work.
+   */
+  startLeadManager(): void {
+    if (this.leadStarted) return;
+    this.leadStarted = true;
+    const tick = (): void => {
+      if (this.disposed) return;
+      try {
+        this.leadTick();
+      } catch {
+        /* a manager tick must never crash the process */
+      }
+      this.deps.scheduler.after(ProjectOrchestrator.LEAD_TICK_MS, tick, this.projectId);
+    };
+    this.deps.scheduler.after(ProjectOrchestrator.LEAD_TICK_MS, tick, this.projectId);
+  }
+
+  /** Debounced immediate Lead pass, e.g. right after an unassigned card appears. */
+  pokeLead(): void {
+    if (this.disposed || this.leadPoke) return;
+    this.leadPoke = this.deps.scheduler.after(
+      50,
+      () => {
+        this.leadPoke = undefined;
+        try {
+          this.leadTick();
+        } catch {
+          /* swallow */
+        }
+      },
+      this.projectId,
+    );
+  }
+
+  private leadTick(): void {
+    if (this.disposed) return;
+    this.assignUnassignedWork();
+    this.superviseAgents();
+  }
+
+  /**
+   * Assign every ready (todo, dependency-satisfied) unassigned task to the
+   * best-matching specialist. Runs in a single synchronous pass on one process,
+   * so there is no claim race. Returns the number assigned.
+   */
+  private assignUnassignedWork(): number {
+    const items = this.deps.store.listWorkItems(this.projectId);
+    const status = new Map(items.map((i) => [i.id, i.status]));
+    const specs = this.assignableSpecialists();
+    if (specs.length === 0) return 0;
+    let assigned = 0;
+    for (const item of items) {
+      if (item.kind === 'epic' || item.assigneeAgentId || item.status !== 'todo') continue;
+      const depsMet =
+        item.dependsOn.length === 0 ||
+        item.dependsOn.every((d) => {
+          const s = status.get(d);
+          return s === 'review' || s === 'done';
+        });
+      if (!depsMet) continue;
+      const agent = this.pickAgentForItem(item, specs);
+      if (!agent) continue;
+      const updated = this.deps.store.updateWorkItem(item.id, { assigneeAgentId: agent.id });
+      if (!updated) continue;
+      this.deps.bus.publish({
+        type: 'workitem.updated',
+        projectId: this.projectId,
+        workItem: updated,
+      });
+      this.emitEvent(
+        this.lead().id,
+        'system',
+        `Assigned “${item.title}” → ${agent.displayName}`,
+        null,
+        item.id,
+      );
+      assigned += 1;
+      void this.onItemAssigned(item.id).catch(() => undefined);
+    }
+    return assigned;
+  }
+
+  /** Specialists eligible to build (excludes the design/product advisory roles). */
+  private assignableSpecialists(): Agent[] {
+    return this.specialists().filter((s) => s.name !== 'pm' && s.name !== 'architect');
+  }
+
+  /** Route a task to a specialist by stream tag, else to the least-loaded one. */
+  private pickAgentForItem(item: WorkItem, specs: Agent[]): Agent | undefined {
+    const stream = item.stream ?? /^\[(\w[\w-]*)\]/.exec(item.title)?.[1] ?? null;
+    if (stream) {
+      const byStream = specs.find((s) => s.name === stream);
+      if (byStream) return byStream;
+    }
+    const all = this.deps.store.listWorkItems(this.projectId);
+    const load = (a: Agent): number =>
+      all.filter(
+        (w) => w.assigneeAgentId === a.id && (w.status === 'todo' || w.status === 'in_progress'),
+      ).length;
+    return [...specs].sort((a, b) => load(a) - load(b))[0];
+  }
+
+  /** Keep an eye on the team: nudge blocked agents (throttled per agent). */
+  private superviseAgents(): void {
+    const now = Date.now();
+    const main = this.ensureMainThread();
+    const lead = this.lead();
+    for (const a of this.specialists()) {
+      if (a.status !== 'blocked') continue;
+      const last = this.leadNudges.get(a.id) ?? 0;
+      if (now - last < 60_000) continue;
+      this.leadNudges.set(a.id, now);
+      this.postMessage(
+        main.id,
+        lead,
+        `@${a.displayName} you look blocked — tell me the specific blocker and what you’ve ` +
+          `tried, and I’ll unblock you or pull the right people into a quick discussion.`,
+      );
+    }
   }
 
   /**
@@ -913,10 +1049,16 @@ class ProjectOrchestrator {
     if (children.length === 0) return;
     if (!children.every((c) => c.status === 'review' || c.status === 'done')) return;
     this.epicReviewing.add(parentId);
-    void this.runEpicReview(epic).finally(() => this.epicReviewing.delete(parentId));
+    const p = this.runEpicReview(epic).finally(() => {
+      this.epicReviewing.delete(parentId);
+      this.pendingReviews.delete(p);
+    });
+    this.pendingReviews.add(p);
+    void p;
   }
 
   private async runEpicReview(epic: WorkItem): Promise<void> {
+    if (this.disposed) return;
     const iter = (this.epicReviewIter.get(epic.id) ?? 0) + 1;
     this.epicReviewIter.set(epic.id, iter);
     const main = this.ensureMainThread();
@@ -1154,6 +1296,8 @@ class ProjectOrchestrator {
         this.emitEvent(agent.id, 'system', `Created task “${item.title}”`, null, item.id);
         if (item.assigneeAgentId && (item.status === 'todo' || item.status === 'backlog')) {
           void this.onItemAssigned(item.id).catch(() => undefined);
+        } else if (!item.assigneeAgentId && item.status === 'todo') {
+          this.pokeLead();
         }
         return { id: item.id, title: item.title };
       },
@@ -1443,6 +1587,9 @@ class ProjectOrchestrator {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
+    this.leadPoke?.();
+    await Promise.allSettled([...this.pendingReviews]);
     await this.invalidateSession();
   }
 }
