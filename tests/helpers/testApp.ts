@@ -3,9 +3,13 @@ import { Store } from '../../src/server/db/store.js';
 import { Bus } from '../../src/server/bus.js';
 import { OrchestratorManager } from '../../src/server/orchestrator.js';
 import { SchedulerService } from '../../src/server/scheduler.js';
+import { GitService } from '../../src/server/git.js';
 import { buildApp } from '../../src/server/app.js';
 import { FakeCopilotAdapter } from '../../src/server/agents/fakeAdapter.js';
 import type { ServerMessage } from '../../src/shared/index.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 export interface TestApp {
   app: ReturnType<typeof buildApp>;
@@ -24,12 +28,15 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
   const bus = new Bus();
   const adapter = new FakeCopilotAdapter();
   const scheduler = new SchedulerService();
+  const worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-wt-'));
+  const git = new GitService(worktreeRoot);
   const orchestrators = new OrchestratorManager({
     store,
     bus,
     adapter,
     skillHomeRoots: homeRoots,
     scheduler,
+    git,
   });
   const app = buildApp({
     store,
@@ -81,4 +88,23 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
       db.close();
     },
   };
+}
+
+/**
+ * Remove a directory, retrying on Windows EPERM (git child processes may briefly
+ * hold handles just after a merge/commit).
+ */
+export function rmDir(dir: string): void {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch {
+      // Busy-wait briefly, then retry.
+      const until = Date.now() + 100;
+      while (Date.now() < until) {
+        /* spin */
+      }
+    }
+  }
 }

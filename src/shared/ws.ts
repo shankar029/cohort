@@ -2,6 +2,7 @@ import type {
   Agent,
   AgentEvent,
   AgentStatus,
+  AgentNote,
   AgentTask,
   ChatMessage,
   Project,
@@ -22,6 +23,8 @@ export type ServerMessage =
   | { type: 'workitem.updated'; projectId: string; workItem: WorkItem }
   | { type: 'workitem.deleted'; projectId: string; workItemId: string }
   | { type: 'task.updated'; projectId: string; task: AgentTask }
+  | { type: 'agent_note.appended'; projectId: string; agentId: string; note: AgentNote }
+  | { type: 'agent_plan.updated'; projectId: string; agentId: string; plan: string }
   | { type: 'chat.message'; projectId: string; message: ChatMessage }
   | { type: 'chat.delta'; projectId: string; messageId: string; delta: string }
   | { type: 'thread.updated'; projectId: string; thread: Thread }

@@ -1,13 +1,16 @@
 import type {
   Agent,
   AgentEvent,
+  AgentNote,
   AgentTask,
   ChatMessage,
   CreateAgentInput,
   CreateProjectInput,
   CreateWorkItemInput,
   Project,
+  PullRequest,
   Question,
+  Thread,
   SkillInfo,
   UpdateProjectSettingsInput,
   UpdateWorkItemInput,
@@ -49,9 +52,14 @@ export const api = {
       body: JSON.stringify(input),
     }),
   getProject: (id: string) =>
-    request<{ project: Project; agents: Agent[]; workItems: WorkItem[]; questions: Question[] }>(
-      `/api/projects/${id}`,
-    ),
+    request<{
+      project: Project;
+      agents: Agent[];
+      workItems: WorkItem[];
+      questions: Question[];
+      pulls: PullRequest[];
+      threads: Thread[];
+    }>(`/api/projects/${id}`),
   updateProject: (id: string, input: UpdateProjectSettingsInput) =>
     request<{ project: Project }>(`/api/projects/${id}`, {
       method: 'PATCH',
@@ -75,6 +83,8 @@ export const api = {
     }),
   deleteAgent: (agentId: string) => request<void>(`/api/agents/${agentId}`, { method: 'DELETE' }),
   agentTasks: (agentId: string) => request<{ tasks: AgentTask[] }>(`/api/agents/${agentId}/tasks`),
+  agentNotes: (agentId: string) =>
+    request<{ plan: string; notes: AgentNote[] }>(`/api/agents/${agentId}/notes`),
   agentEvents: (agentId: string) =>
     request<{ events: AgentEvent[] }>(`/api/agents/${agentId}/events`),
 

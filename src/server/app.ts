@@ -215,6 +215,13 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     return { tasks: store.listTasks(existing.projectId, agentId) };
   });
 
+  app.get('/api/agents/:agentId/notes', async (req) => {
+    const { agentId } = req.params as { agentId: string };
+    const existing = store.getAgent(agentId);
+    if (!existing) throw new HttpError(404, 'Agent not found');
+    return { plan: store.getPlan(agentId), notes: store.listNotes(agentId) };
+  });
+
   app.get('/api/agents/:agentId/events', async (req) => {
     const { agentId } = req.params as { agentId: string };
     const existing = store.getAgent(agentId);

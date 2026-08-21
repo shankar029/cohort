@@ -312,6 +312,30 @@ export class RealCopilotAdapter implements CopilotAdapter {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             handler: async (args: any) => app.requestGroupChat(args),
           }),
+          sdk.defineTool('write_note', {
+            description:
+              'Append a short note to your personal scratchpad (observations, findings, decisions). Optionally attach a workItemId.',
+            parameters: {
+              type: 'object',
+              properties: { content: { type: 'string' }, workItemId: { type: 'string' } },
+              required: ['content'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.writeNote(args),
+          }),
+          sdk.defineTool('update_plan', {
+            description:
+              'Replace your living plan / checklist (markdown). Keep it current as you work so teammates can see your approach and progress.',
+            parameters: {
+              type: 'object',
+              properties: { content: { type: 'string' } },
+              required: ['content'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => app.updatePlan(args),
+          }),
           sdk.defineTool('list_board', {
             description:
               'List the current project board (work items with status, stream, assignee).',

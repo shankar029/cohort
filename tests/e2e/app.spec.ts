@@ -74,6 +74,21 @@ test('chat: a build request becomes an epic and a specialist contributes', async
   });
 });
 
+test('pull requests: a completed epic raises a PR that merges', async ({ page }) => {
+  await createProject(page, 'E2E PR');
+  await addSpecialist(page, 'frontend-engineer');
+  await addSpecialist(page, 'qa-engineer');
+
+  await page.getByRole('link', { name: 'Chat' }).click();
+  await page.getByTestId('chat-input').fill('Please build a profile page.');
+  await page.getByTestId('chat-send').click();
+
+  await page.getByRole('link', { name: 'Pull Requests' }).click();
+  // A PR card appears and reaches the merged state after review.
+  await expect(page.getByTestId('pr-card').first()).toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId('pr-card').first()).toContainText('Merged', { timeout: 30000 });
+});
+
 test('escalation: a specialist question is surfaced and answering resumes the work', async ({
   page,
 }) => {

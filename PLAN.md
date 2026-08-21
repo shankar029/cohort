@@ -309,13 +309,13 @@ work items, Lead ownership grounding, startup-migration fix.
 - [x] **Phase 2 — Epic planning & decomposition (M9).** Every user request → an Epic. Lead
       clarifies (batched) + consults the PM, then decomposes into stream-tagged task cards with
       acceptance criteria + dependencies, and assigns for parallelism.
-- [ ] **Phase 3 — Async task execution + GitService (M10).** `GitService` (init/branch/commit/
+- [x] **Phase 3 — Async task execution + GitService (M10) + git worktrees per epic.** `GitService` (init/branch/commit/
       merge/diff). Agents pick up ready tasks concurrently (respecting deps), post updates as
       themselves, move cards, commit on a per-task branch.
-- [ ] **Phase 4 — PR + review + iterate-to-quality (M11).** In-app PR objects (diff); reviewer/QA
+- [x] **Phase 4 — PR + review + iterate-to-quality (M11).** In-app PR objects (diff); reviewer/QA
       agent reviews → approve/changes_requested → merge to the epic branch; loop
       in_progress→review→changes_requested until the quality bar passes.
-- [ ] **Phase 5 — Agent scratchpads / planning surface.** `agent_notes` store + `write_note` /
+- [x] **Phase 5 — Agent scratchpads / planning surface.** `agent_notes` store + `write_note` /
       `update_plan` tools; free-form notepad + checklist surfaced on the Agent detail page.
 - [ ] **Phase 6 — UX modernization + UI features (M12 + UX).** Redesign the whole app to a
       minimalist, aesthetic, modern look & feel (current UI looks dated). Plus: Threads/group-chat

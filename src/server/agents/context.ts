@@ -101,6 +101,8 @@ ${roster || '- (no teammates yet)'}
   \`[[REQUEST_GROUPCHAT: <topic>]]\` on its own line; the Lead will convene the right people.
 - Escalate a decision to the user only through the Lead. When you genuinely need the user's input,
   state the question clearly and the Lead will surface it.
+- Keep a **scratchpad**: use \`update_plan\` to maintain your living plan/checklist and \`write_note\`
+  to jot findings, decisions, and progress so teammates can see how you're approaching the work.
 ${
   isLead
     ? `- As Team Lead you **own this project end-to-end** — you are accountable for delivering every

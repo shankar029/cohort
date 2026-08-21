@@ -7,6 +7,7 @@ import { Store } from './db/store.js';
 import { Bus } from './bus.js';
 import { OrchestratorManager } from './orchestrator.js';
 import { SchedulerService } from './scheduler.js';
+import { GitService } from './git.js';
 import { buildApp } from './app.js';
 import { FakeCopilotAdapter } from './agents/fakeAdapter.js';
 import { RealCopilotAdapter } from './agents/realAdapter.js';
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
   const store = new Store(db);
   const bus = new Bus();
   const scheduler = new SchedulerService();
+  const git = new GitService(config.worktreeRoot);
   const adapter: CopilotAdapter = config.fakeSdk
     ? new FakeCopilotAdapter()
     : new RealCopilotAdapter();
@@ -38,6 +40,7 @@ async function main(): Promise<void> {
     adapter,
     skillHomeRoots: config.skillHomeRoots,
     scheduler,
+    git,
   });
 
   const app = buildApp({

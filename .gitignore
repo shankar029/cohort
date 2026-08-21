@@ -12,3 +12,5 @@ playwright-report/
 coverage/
 .DS_Store
 *.log
+data/worktrees
+worktrees/

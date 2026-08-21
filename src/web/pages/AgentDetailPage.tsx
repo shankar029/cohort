@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { AgentTask, AgentTaskStatus } from '@shared/index';
+import type { AgentNote, AgentTask, AgentTaskStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, EmptyState, StatusPill } from '../components/ui';
 
@@ -13,14 +13,19 @@ const TASK_COLUMNS: { status: AgentTaskStatus; label: string }[] = [
 export function AgentDetailPage(): React.JSX.Element {
   const { projectId, agentId } = useParams<{ projectId: string; agentId: string }>();
   const navigate = useNavigate();
-  const { loadAgentTasks, deleteAgent } = useApp();
+  const { loadAgentTasks, loadAgentNotes, deleteAgent } = useApp();
   const bundle = useBundle(projectId);
   const agent = bundle.agents.find((a) => a.id === agentId);
   const tasks = (agentId && bundle.tasksByAgent[agentId]) || [];
+  const notes = (agentId && bundle.notesByAgent[agentId]) || [];
+  const plan = (agentId && bundle.plansByAgent[agentId]) || '';
 
   useEffect(() => {
-    if (projectId && agentId) void loadAgentTasks(projectId, agentId);
-  }, [projectId, agentId, loadAgentTasks]);
+    if (projectId && agentId) {
+      void loadAgentTasks(projectId, agentId);
+      void loadAgentNotes(projectId, agentId);
+    }
+  }, [projectId, agentId, loadAgentTasks, loadAgentNotes]);
 
   if (!agent) {
     return (
@@ -90,6 +95,8 @@ export function AgentDetailPage(): React.JSX.Element {
           )}
         </section>
 
+        <Scratchpad plan={plan} notes={notes} />
+
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-200">Configuration</h2>
           <dl className="card space-y-3 p-4 text-sm">
@@ -124,6 +131,44 @@ function TaskColumn({ label, tasks }: { label: string; tasks: AgentTask[] }): Re
         ))}
       </div>
     </div>
+  );
+}
+
+function Scratchpad({ plan, notes }: { plan: string; notes: AgentNote[] }): React.JSX.Element {
+  return (
+    <section data-testid="scratchpad">
+      <h2 className="mb-3 text-sm font-semibold text-slate-200">Scratchpad</h2>
+      <div className="card p-4">
+        <h3 className="label mb-1">Living plan</h3>
+        {plan ? (
+          <pre
+            className="mb-4 whitespace-pre-wrap rounded bg-surface-2 p-2 text-xs text-slate-300"
+            data-testid="agent-plan"
+          >
+            {plan}
+          </pre>
+        ) : (
+          <p className="mb-4 text-xs text-slate-500">
+            No plan yet — the agent maintains this as it works.
+          </p>
+        )}
+        <h3 className="label mb-1">Notes</h3>
+        {notes.length === 0 ? (
+          <p className="text-xs text-slate-500">No notes yet.</p>
+        ) : (
+          <ul className="space-y-2" data-testid="agent-notes">
+            {notes.map((n) => (
+              <li key={n.id} className="rounded bg-surface-2 p-2 text-xs text-slate-300">
+                <span className="mr-2 text-slate-600">
+                  {new Date(n.createdAt).toLocaleTimeString()}
+                </span>
+                {n.content}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

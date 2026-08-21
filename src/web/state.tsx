@@ -2,12 +2,15 @@ import React, { createContext, useContext, useEffect, useMemo, useReducer, useRe
 import type {
   Agent,
   AgentEvent,
+  AgentNote,
   AgentTask,
   ChatMessage,
   Project,
   Question,
   ServerMessage,
   WorkItem,
+  PullRequest,
+  Thread,
 } from '@shared/index';
 import { api } from './api';
 
@@ -17,7 +20,11 @@ export interface ProjectBundle {
   chat: ChatMessage[];
   questions: Question[];
   tasksByAgent: Record<string, AgentTask[]>;
+  notesByAgent: Record<string, AgentNote[]>;
+  plansByAgent: Record<string, string>;
   events: AgentEvent[];
+  pulls: PullRequest[];
+  threads: Thread[];
   loaded: boolean;
 }
 
@@ -34,7 +41,11 @@ const emptyBundle = (): ProjectBundle => ({
   chat: [],
   questions: [],
   tasksByAgent: {},
+  notesByAgent: {},
+  plansByAgent: {},
   events: [],
+  pulls: [],
+  threads: [],
   loaded: false,
 });
 
@@ -114,6 +125,23 @@ function applyWs(state: State, message: ServerMessage): State {
         };
       case 'question.updated':
         return { ...b, questions: upsert(b.questions, message.question) };
+      case 'pull_request.updated':
+        return { ...b, pulls: upsert(b.pulls, message.pr) };
+      case 'agent_note.appended':
+        return {
+          ...b,
+          notesByAgent: {
+            ...b.notesByAgent,
+            [message.agentId]: [message.note, ...(b.notesByAgent[message.agentId] ?? [])],
+          },
+        };
+      case 'agent_plan.updated':
+        return {
+          ...b,
+          plansByAgent: { ...b.plansByAgent, [message.agentId]: message.plan },
+        };
+      case 'thread.updated':
+        return { ...b, threads: upsert(b.threads, message.thread) };
       case 'event.appended':
         return { ...b, events: [...b.events, message.event].slice(-1000) };
       default:
@@ -163,6 +191,7 @@ interface AppContextValue {
   deleteProject: (id: string) => Promise<void>;
   ensureBundle: (projectId: string) => Promise<void>;
   loadAgentTasks: (projectId: string, agentId: string) => Promise<void>;
+  loadAgentNotes: (projectId: string, agentId: string) => Promise<void>;
   sendChat: (projectId: string, content: string) => Promise<void>;
   createWorkItem: (
     projectId: string,
@@ -259,6 +288,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           questions: detail.questions,
           chat: chat.messages,
           events: events.events,
+          pulls: detail.pulls,
+          threads: detail.threads,
           loaded: true,
         },
       });
@@ -287,6 +318,18 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           type: 'SET_BUNDLE',
           projectId,
           bundle: { tasksByAgent: { ...bundle.tasksByAgent, [agentId]: tasks } },
+        });
+      },
+      loadAgentNotes: async (projectId, agentId) => {
+        const { plan, notes } = await api.agentNotes(agentId);
+        const bundle = stateRef.current.bundles[projectId] ?? emptyBundle();
+        dispatch({
+          type: 'SET_BUNDLE',
+          projectId,
+          bundle: {
+            notesByAgent: { ...bundle.notesByAgent, [agentId]: notes },
+            plansByAgent: { ...bundle.plansByAgent, [agentId]: plan },
+          },
         });
       },
       sendChat: async (projectId, content) => {

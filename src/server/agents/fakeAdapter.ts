@@ -13,6 +13,9 @@ const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
  *   [[NEEDS_DISCUSSION]] → the agent asks the Lead to open a group chat
  *   [[CREATE_TASK: t]]   → the agent creates a board work item via its app tools
  *   [[POST: text]]       → the agent posts a message to the team via its app tools
+ *   [[NOTE: text]]       → the agent appends a note to its scratchpad
+ *   [[PLAN: text]]       → the agent updates its living plan
+ *   [[REVIEW: iteration=N]] → reviewer verdict: request changes on iter 1, approve after
  */
 class FakeAgentSession implements AgentSession {
   constructor(private readonly config: AgentSessionConfig) {}
@@ -35,6 +38,16 @@ class FakeAgentSession implements AgentSession {
       if (posted) {
         app.postMessage({ content: posted[1]!.trim() });
         onEvent({ kind: 'tool_call', toolName: 'post_message', detail: {} });
+      }
+      const noted = /\[\[NOTE:\s*([^\]]+)\]\]/.exec(prompt);
+      if (noted) {
+        app.writeNote({ content: noted[1]!.trim() });
+        onEvent({ kind: 'tool_call', toolName: 'write_note', detail: {} });
+      }
+      const planned = /\[\[PLAN:\s*([^\]]+)\]\]/.exec(prompt);
+      if (planned) {
+        app.updatePlan({ content: planned[1]!.trim() });
+        onEvent({ kind: 'tool_call', toolName: 'update_plan', detail: {} });
       }
     }
 
@@ -61,7 +74,14 @@ class FakeAgentSession implements AgentSession {
     }
 
     let text: string;
-    if (role === 'lead') {
+    const review = /\[\[REVIEW:\s*iteration=(\d+)\]\]/.exec(prompt);
+    if (review) {
+      const iter = Number(review[1]);
+      text =
+        iter >= 2
+          ? `Reviewed the diff; correctness and tests look good. [[APPROVE]]`
+          : `Reviewed the diff; needs coverage before merge. [[REQUEST_CHANGES: add tests for edge cases]]`;
+    } else if (role === 'lead') {
       text = `Here's my read as Team Lead: ${summarize(prompt)}.${extra}`;
     } else {
       text = `As the ${displayName}, my recommendation: ${idea(displayName, prompt)}.${extra}`;

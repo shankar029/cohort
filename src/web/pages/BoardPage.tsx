@@ -24,11 +24,17 @@ export function BoardPage(): React.JSX.Element {
   const bundle = useBundle(projectId);
   const [showCreate, setShowCreate] = useState<WorkItemStatus | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [epicFilter, setEpicFilter] = useState<string>('all');
+
+  const epics = bundle.workItems.filter((w) => w.kind === 'epic');
 
   const onDrop = (status: WorkItemStatus): void => {
     if (dragId && projectId) void updateWorkItem(projectId, dragId, { status });
     setDragId(null);
   };
+
+  const inFilter = (w: WorkItem): boolean =>
+    epicFilter === 'all' ? true : w.id === epicFilter || w.parentId === epicFilter;
 
   return (
     <div className="flex h-full flex-col">
@@ -49,21 +55,51 @@ export function BoardPage(): React.JSX.Element {
         </button>
       </header>
 
+      {epics.length > 0 && (
+        <div
+          className="flex items-center gap-2 overflow-x-auto border-b border-surface-border px-6 py-3"
+          data-testid="epic-filter"
+        >
+          <EpicChip
+            label="All work"
+            active={epicFilter === 'all'}
+            onClick={() => setEpicFilter('all')}
+          />
+          {epics.map((epic) => {
+            const children = bundle.workItems.filter((w) => w.parentId === epic.id);
+            const done = children.filter((c) => c.status === 'done').length;
+            return (
+              <EpicChip
+                key={epic.id}
+                label={epic.title}
+                progress={children.length ? `${done}/${children.length}` : undefined}
+                branch={epic.branch}
+                active={epicFilter === epic.id}
+                onClick={() => setEpicFilter(epic.id)}
+              />
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex flex-1 gap-4 overflow-x-auto p-6" data-testid="board">
         {COLUMNS.map((col) => {
-          const items = bundle.workItems.filter((w) => w.status === col.status);
+          const items = bundle.workItems.filter((w) => w.status === col.status && inFilter(w));
           return (
             <section
               key={col.status}
-              className="flex w-72 shrink-0 flex-col rounded-lg bg-surface-1/60"
+              className="flex w-72 shrink-0 flex-col rounded-xl border border-surface-border bg-surface-1/50"
               data-testid={`column-${col.status}`}
               aria-label={col.label}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => onDrop(col.status)}
             >
-              <div className="flex items-center justify-between px-3 py-2">
+              <div className="flex items-center justify-between px-3 py-2.5">
                 <h2 className="text-sm font-semibold text-slate-200">
-                  {col.label} <span className="text-slate-500">{items.length}</span>
+                  {col.label}{' '}
+                  <span className="ml-1 rounded-full bg-surface-2 px-1.5 text-xs text-slate-500">
+                    {items.length}
+                  </span>
                 </h2>
                 <button
                   className="btn-ghost !min-h-0 px-2 py-1 text-xs"
@@ -91,6 +127,42 @@ export function BoardPage(): React.JSX.Element {
   );
 }
 
+function EpicChip({
+  label,
+  progress,
+  branch,
+  active,
+  onClick,
+}: {
+  label: string;
+  progress?: string;
+  branch?: string | null;
+  active: boolean;
+  onClick: () => void;
+}): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+        active
+          ? 'border-accent-500/60 bg-accent-500/15 text-accent-400'
+          : 'border-surface-border bg-surface-1 text-slate-400 hover:bg-surface-2'
+      }`}
+      data-testid="epic-chip"
+    >
+      <span className="max-w-[16rem] truncate font-medium">{label}</span>
+      {progress && (
+        <span className="rounded-full bg-surface-3 px-1.5 py-0.5 text-slate-300">{progress}</span>
+      )}
+      {branch && (
+        <span className="font-mono text-[0.65rem] text-slate-600">
+          ⌥ {branch.replace('ateam/', '')}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function WorkItemCard({
   item,
   onDragStart,
@@ -103,14 +175,38 @@ function WorkItemCard({
   const bundle = useBundle(projectId);
   const assignee = bundle.agents.find((a) => a.id === item.assigneeAgentId);
   const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
+  const isEpic = item.kind === 'epic';
+  const parentEpic = item.parentId
+    ? bundle.workItems.find((w) => w.id === item.parentId)
+    : undefined;
+  const childCount = isEpic ? bundle.workItems.filter((w) => w.parentId === item.id).length : 0;
+  const doneChildren = isEpic
+    ? bundle.workItems.filter((w) => w.parentId === item.id && w.status === 'done').length
+    : 0;
 
   return (
     <div
-      className="card cursor-grab p-3 active:cursor-grabbing"
+      className={`card cursor-grab p-3 transition-shadow hover:shadow-pop active:cursor-grabbing ${
+        isEpic ? 'border-l-2 border-l-accent-500 bg-surface-2/60' : ''
+      }`}
       draggable
       onDragStart={onDragStart}
       data-testid="workitem"
     >
+      <div className="mb-1 flex flex-wrap items-center gap-1">
+        {isEpic && <span className="badge-accent">EPIC</span>}
+        {item.stream && <span className="badge-muted">{item.stream}</span>}
+        {parentEpic && (
+          <span className="badge-muted max-w-[9rem] truncate" title={parentEpic.title}>
+            ↳ {parentEpic.title}
+          </span>
+        )}
+        {item.dependsOn.length > 0 && (
+          <span className="badge-muted" title={`${item.dependsOn.length} dependencies`}>
+            🔗 {item.dependsOn.length}
+          </span>
+        )}
+      </div>
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium text-slate-100">{item.title}</p>
         <button
@@ -124,6 +220,22 @@ function WorkItemCard({
       {item.description && (
         <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description}</p>
       )}
+      {isEpic && childCount > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 flex items-center justify-between text-[0.7rem] text-slate-500">
+            <span>Progress</span>
+            <span>
+              {doneChildren}/{childCount}
+            </span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
+            <div
+              className="h-full rounded-full bg-accent-500 transition-all"
+              style={{ width: `${childCount ? (doneChildren / childCount) * 100 : 0}%` }}
+            />
+          </div>
+        </div>
+      )}
       {item.scheduledAt && item.status === 'backlog' && (
         <p className="mt-1 text-xs text-cyan-300">
           ⏰ {new Date(item.scheduledAt).toLocaleString()}
@@ -136,26 +248,30 @@ function WorkItemCard({
         </span>
         {assignee && <Avatar emoji={assignee.emoji} color={assignee.color} size={22} />}
       </div>
-      <label className="sr-only" htmlFor={`assign-${item.id}`}>
-        Assign agent
-      </label>
-      <select
-        id={`assign-${item.id}`}
-        className="input mt-2 !min-h-0 py-1 text-xs"
-        data-testid="assign-select"
-        value={item.assigneeAgentId ?? ''}
-        onChange={(e) =>
-          projectId &&
-          void updateWorkItem(projectId, item.id, { assigneeAgentId: e.target.value || null })
-        }
-      >
-        <option value="">Unassigned</option>
-        {specialists.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.emoji} {a.displayName}
-          </option>
-        ))}
-      </select>
+      {!isEpic && (
+        <>
+          <label className="sr-only" htmlFor={`assign-${item.id}`}>
+            Assign agent
+          </label>
+          <select
+            id={`assign-${item.id}`}
+            className="input mt-2 !min-h-0 py-1 text-xs"
+            data-testid="assign-select"
+            value={item.assigneeAgentId ?? ''}
+            onChange={(e) =>
+              projectId &&
+              void updateWorkItem(projectId, item.id, { assigneeAgentId: e.target.value || null })
+            }
+          >
+            <option value="">Unassigned</option>
+            {specialists.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.emoji} {a.displayName}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
     </div>
   );
 }

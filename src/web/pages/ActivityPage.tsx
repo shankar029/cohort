@@ -26,6 +26,7 @@ export function ActivityPage(): React.JSX.Element {
   const bundle = useBundle(projectId);
   const filterAgent = searchParams.get('agent') ?? '';
   const [typeFilter, setTypeFilter] = useState<string>('');
+  const [groupBy, setGroupBy] = useState<'none' | 'agent' | 'type'>('none');
 
   const nameById = useMemo(() => {
     const map = new Map<string, { name: string; emoji: string; color: string }>();
@@ -92,6 +93,20 @@ export function ActivityPage(): React.JSX.Element {
             </option>
           ))}
         </select>
+        <label className="text-xs text-slate-500" htmlFor="group-by">
+          Group by
+        </label>
+        <select
+          id="group-by"
+          className="input !min-h-0 w-32 py-1 text-xs"
+          data-testid="activity-group"
+          value={groupBy}
+          onChange={(e) => setGroupBy(e.target.value as 'none' | 'agent' | 'type')}
+        >
+          <option value="none">Nothing</option>
+          <option value="agent">Agent</option>
+          <option value="type">Type</option>
+        </select>
       </div>
 
       <div className="flex-1 overflow-auto px-6 pb-6" data-testid="activity-log">
@@ -100,7 +115,7 @@ export function ActivityPage(): React.JSX.Element {
             title="No activity yet"
             hint="Assign work or chat with the Team Lead to see agents in action."
           />
-        ) : (
+        ) : groupBy === 'none' ? (
           <ol className="space-y-1">
             {events
               .slice()
@@ -113,8 +128,60 @@ export function ActivityPage(): React.JSX.Element {
                 />
               ))}
           </ol>
+        ) : (
+          <GroupedLog events={events} groupBy={groupBy} nameById={nameById} />
         )}
       </div>
+    </div>
+  );
+}
+
+function GroupedLog({
+  events,
+  groupBy,
+  nameById,
+}: {
+  events: AgentEvent[];
+  groupBy: 'agent' | 'type';
+  nameById: Map<string, { name: string; emoji: string; color: string }>;
+}): React.JSX.Element {
+  const groups = new Map<string, AgentEvent[]>();
+  for (const e of events) {
+    const key =
+      groupBy === 'type'
+        ? e.type
+        : e.agentId
+          ? (nameById.get(e.agentId)?.name ?? 'Agent')
+          : 'Team Lead';
+    const list = groups.get(key) ?? [];
+    list.push(e);
+    groups.set(key, list);
+  }
+  return (
+    <div className="space-y-4">
+      {[...groups.entries()].map(([key, list]) => (
+        <section key={key} data-testid="activity-group">
+          <h3 className="mb-1 flex items-center gap-2 px-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <span>
+              {groupBy === 'type' ? (TYPE_STYLE[key as AgentEventType]?.icon ?? '•') : '👤'}
+            </span>
+            {key}
+            <span className="rounded-full bg-surface-2 px-1.5 text-slate-500">{list.length}</span>
+          </h3>
+          <ol className="space-y-1">
+            {list
+              .slice()
+              .reverse()
+              .map((e) => (
+                <LogLine
+                  key={e.id}
+                  event={e}
+                  who={e.agentId ? nameById.get(e.agentId) : undefined}
+                />
+              ))}
+          </ol>
+        </section>
+      ))}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createTestApp, type TestApp } from '../helpers/testApp.js';
+import { createTestApp, rmDir, type TestApp } from '../helpers/testApp.js';
 import type { WorkItem, Question, AgentTask } from '../../src/shared/index.js';
 
 let ctx: TestApp;
@@ -15,7 +15,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await ctx.close();
-  fs.rmSync(repoDir, { recursive: true, force: true });
+  rmDir(repoDir);
 });
 
 async function createProject(name = 'Demo'): Promise<{ projectId: string; leadId: string }> {
@@ -309,6 +309,39 @@ describe('agents as first-class app users (tool layer)', () => {
       8000,
     );
   });
+
+  it('an agent maintains a scratchpad (plan + notes) via its app tools', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId);
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: {
+        title: 'Design schema [[PLAN: 1. model tables 2. migrate]] [[NOTE: chose sqlite]]',
+        status: 'todo',
+        assigneeAgentId: agentId,
+      },
+    });
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'agent_plan.updated' && m.agentId === agentId && m.plan.includes('model tables'),
+      8000,
+    );
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'agent_note.appended' &&
+        m.agentId === agentId &&
+        m.note.content.includes('sqlite'),
+      8000,
+    );
+
+    const res = await ctx.app.inject({ method: 'GET', url: `/api/agents/${agentId}/notes` });
+    const body = res.json() as { plan: string; notes: Array<{ content: string }> };
+    expect(body.plan).toContain('model tables');
+    expect(body.notes.some((n) => n.content.includes('sqlite'))).toBe(true);
+  });
 });
 
 describe('epic planning & decomposition', () => {
@@ -345,14 +378,27 @@ describe('epic planning & decomposition', () => {
     const children = ctx.store.listChildTasks(epicId);
     const streams = children.map((c) => c.stream);
     expect(streams).toEqual(expect.arrayContaining(['frontend', 'backend', 'qa']));
-    // Builders assigned + auto-run; verifier (qa) waits on the builders.
     const fe = children.find((c) => c.stream === 'frontend')!;
     const qa = children.find((c) => c.stream === 'qa')!;
     expect(fe.assigneeAgentId).toBe(feId);
-    expect(qa.status).toBe('backlog');
+    // QA was created dependency-gated on the builder tasks.
     expect(qa.dependsOn.length).toBeGreaterThanOrEqual(2);
     expect(qa.dependsOn).toContain(fe.id);
     expect(beId).toBeTruthy();
+
+    // Once the builders reach review, the gated QA task is promoted and worked too.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.id === qa.id && m.workItem.status === 'review',
+      8000,
+    );
+
+    // Let the review-to-merge loop finish so the temp repo is safe to clean up.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.id === epicId && m.workItem.status === 'done',
+      15000,
+    );
   });
 
   it('a casual message does not spawn an epic', async () => {

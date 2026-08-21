@@ -108,6 +108,16 @@ export interface AgentTask {
   updatedAt: string;
 }
 
+/** A free-form note an agent writes to its own scratchpad (append-only). */
+export interface AgentNote {
+  id: string;
+  projectId: string;
+  agentId: string;
+  workItemId: string | null;
+  content: string;
+  createdAt: string;
+}
+
 /** Types of entries in an agent's activity log. */
 export const AGENT_EVENT_TYPES = [
   'message',

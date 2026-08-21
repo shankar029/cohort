@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import type { Agent, Project, Thread, WorkItem } from '@shared/index';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
@@ -13,6 +14,7 @@ import type {
 import { buildSystemPrompt } from './agents/context.js';
 import { discoverSkills, skillDirectories } from './agents/skillScanner.js';
 import type { SchedulerService } from './scheduler.js';
+import type { GitService } from './git.js';
 
 interface Deps {
   store: Store;
@@ -20,6 +22,7 @@ interface Deps {
   adapter: CopilotAdapter;
   skillHomeRoots: string[];
   scheduler: SchedulerService;
+  git: GitService;
 }
 
 function isInsideWorkspace(repoDir: string, filePath: string | undefined): boolean {
@@ -39,7 +42,7 @@ const GROUPCHAT_RE = /\[\[REQUEST_GROUPCHAT:\s*([^\]]+)\]\]/i;
  * parallel — the team is truly async.
  */
 class AgentActor {
-  private session: AgentSession | null = null;
+  private sessions = new Map<string, AgentSession>();
   private mailbox: Promise<unknown> = Promise.resolve();
   private currentWorkItemId: string | null = null;
 
@@ -49,10 +52,15 @@ class AgentActor {
   ) {}
 
   /** Ask this agent something in a thread; returns its final message text. */
-  ask(prompt: string, threadId: string, workItemId: string | null): Promise<string> {
+  ask(
+    prompt: string,
+    threadId: string,
+    workItemId: string | null,
+    workingDirectory?: string,
+  ): Promise<string> {
     const run = this.mailbox.then(
-      () => this.runTurn(prompt, threadId, workItemId),
-      () => this.runTurn(prompt, threadId, workItemId),
+      () => this.runTurn(prompt, threadId, workItemId, workingDirectory),
+      () => this.runTurn(prompt, threadId, workItemId, workingDirectory),
     );
     this.mailbox = run.catch(() => undefined);
     return run;
@@ -62,9 +70,12 @@ class AgentActor {
     prompt: string,
     threadId: string,
     workItemId: string | null,
+    workingDirectory?: string,
   ): Promise<string> {
     this.currentWorkItemId = workItemId;
-    const session = await this.ensureSession();
+    const { project } = this.orch.snapshot();
+    const cwd = workingDirectory ?? project.repoDir;
+    const session = await this.ensureSession(cwd);
     const placeholder = this.orch.postMessage(threadId, this.agent, '');
     this.orch.setStatus(this.agent.id, 'working');
     try {
@@ -78,8 +89,10 @@ class AgentActor {
     }
   }
 
-  private async ensureSession(): Promise<AgentSession> {
-    if (this.session) return this.session;
+  /** One session per working directory, so cross-epic worktrees stay isolated. */
+  private async ensureSession(cwd: string): Promise<AgentSession> {
+    const existing = this.sessions.get(cwd);
+    if (existing) return existing;
     const { project, team } = this.orch.snapshot();
     const skills = discoverSkills(
       this.orch.deps.skillHomeRoots,
@@ -87,7 +100,7 @@ class AgentActor {
       project.settings.extraSkillRoots,
     );
     const persona = buildSystemPrompt({ project, self: this.agent, team });
-    this.session = await this.orch.deps.adapter.createAgentSession({
+    const session = await this.orch.deps.adapter.createAgentSession({
       projectId: project.id,
       agentId: this.agent.id,
       agentName: this.agent.name,
@@ -97,7 +110,7 @@ class AgentActor {
       model: this.agent.model || project.settings.defaultModel,
       tools: this.agent.tools,
       skills: this.agent.skills,
-      workingDirectory: project.repoDir,
+      workingDirectory: cwd,
       skillDirectories: skillDirectories(skills),
       approvalMode: project.settings.approvalMode,
       scheduler: this.orch.deps.scheduler,
@@ -106,12 +119,13 @@ class AgentActor {
       onPermission: (ask) => this.orch.handlePermission(ask),
       onUserInput: (ask) => this.orch.handleUserInput(this.agent, ask),
     });
-    return this.session;
+    this.sessions.set(cwd, session);
+    return session;
   }
 
   async dispose(): Promise<void> {
-    if (this.session) await this.session.dispose().catch(() => undefined);
-    this.session = null;
+    for (const s of this.sessions.values()) await s.dispose().catch(() => undefined);
+    this.sessions.clear();
   }
 }
 
@@ -121,6 +135,13 @@ class ProjectOrchestrator {
   private mainThreadId: string | null = null;
   private readonly pending = new Map<string, (answer: string) => void>();
   private groupDepth = 0;
+  /** Per-epic isolated git worktree (branch + path), so epics don't collide. */
+  private readonly epicWorktrees = new Map<string, { branch: string; path: string }>();
+  /** PR/review state per epic for the iterate-to-quality loop. */
+  private readonly epicPr = new Map<string, string>();
+  private readonly epicReviewIter = new Map<string, number>();
+  private readonly epicReviewing = new Set<string>();
+  private static readonly MAX_REVIEW_ITER = 3;
 
   constructor(
     private readonly projectId: string,
@@ -317,6 +338,39 @@ class ProjectOrchestrator {
     });
     this.deps.bus.publish({ type: 'workitem.updated', projectId: this.projectId, workItem: epic });
     this.emitEvent(lead.id, 'system', `Opened epic “${epic.title}”`, null, epic.id);
+
+    // Isolate the epic in its own git branch + worktree so parallel epics never
+    // share a filesystem. Best-effort: fall back to the repo dir if git is unavailable.
+    try {
+      const wt = await this.deps.git.createEpicWorktree(
+        this.project().repoDir,
+        this.projectId,
+        epic.id,
+      );
+      this.epicWorktrees.set(epic.id, wt);
+      const withBranch = this.deps.store.updateWorkItem(epic.id, { branch: wt.branch });
+      if (withBranch)
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: withBranch,
+        });
+      this.emitEvent(
+        lead.id,
+        'git',
+        `Created branch ${wt.branch} + isolated worktree`,
+        null,
+        epic.id,
+      );
+    } catch (err) {
+      this.emitEvent(
+        lead.id,
+        'git',
+        `Worktree setup skipped: ${err instanceof Error ? err.message : String(err)}`,
+        null,
+        epic.id,
+      );
+    }
 
     // 2. Consult the Product Manager for outcome + acceptance criteria (if present).
     const pm = specs.find((s) => s.name === 'pm');
@@ -602,11 +656,48 @@ class ProjectOrchestrator {
       status: 'doing',
     });
     this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: startTask });
+
+    // Run in the epic's isolated worktree when this task belongs to an epic.
+    const worktree = item.parentId ? this.epicWorktrees.get(item.parentId) : undefined;
+    const cwd = worktree?.path;
     const prompt =
       `The Team Lead assigned you this task. Work on it and report progress to the team.\n\n` +
       `Task: ${item.title}\nDetails: ${item.description || '(none)'}\n` +
+      (worktree ? `You are on branch ${worktree.branch} in an isolated worktree.\n` : '') +
       `When done, summarize what you did.`;
-    await this.actor(agent).ask(prompt, main.id, item.id);
+    const summary = await this.actor(agent).ask(prompt, main.id, item.id, cwd);
+
+    // Record an audit note and commit the task's work on the epic branch.
+    if (worktree) {
+      try {
+        const noteDir = path.join(worktree.path, '.ateam', 'tasks');
+        fs.mkdirSync(noteDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(noteDir, `${item.id}.md`),
+          `# ${item.title}\n\n- Stream: ${item.stream ?? '-'}\n- Agent: ${agent.displayName}\n\n${summary}\n`,
+        );
+        const res = await this.deps.git.commitWork(
+          worktree.path,
+          `task(${item.stream ?? 'task'}): ${item.title}`,
+        );
+        if (res.committed)
+          this.emitEvent(
+            agent.id,
+            'git',
+            `Committed ${res.hash?.slice(0, 8)} on ${worktree.branch}`,
+            null,
+            item.id,
+          );
+      } catch (err) {
+        this.emitEvent(
+          agent.id,
+          'git',
+          `Commit skipped: ${err instanceof Error ? err.message : String(err)}`,
+          null,
+          item.id,
+        );
+      }
+    }
 
     const doneTask = this.deps.store.upsertTask({
       projectId: this.projectId,
@@ -618,7 +709,244 @@ class ProjectOrchestrator {
     this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: doneTask });
     const latest = this.deps.store.getWorkItem(item.id);
     if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
+    // A finished task may unblock dependency-gated siblings (e.g. QA/review).
+    this.maybePromoteDependents(item.parentId);
+    // When every task in the epic is reviewed, raise a PR and run review-to-merge.
+    this.maybeFinishEpic(item.parentId);
     await this.pullNext(agent.id);
+  }
+
+  /** Promote backlog tasks whose dependencies are all satisfied (review/done). */
+  private maybePromoteDependents(parentId: string | null): void {
+    if (!parentId) return;
+    const siblings = this.deps.store.listChildTasks(parentId);
+    const satisfied = new Set(
+      siblings.filter((s) => s.status === 'review' || s.status === 'done').map((s) => s.id),
+    );
+    for (const t of siblings) {
+      if (
+        t.status === 'backlog' &&
+        t.dependsOn.length > 0 &&
+        t.dependsOn.every((d) => satisfied.has(d))
+      ) {
+        this.moveItem(t.id, 'todo');
+        this.emitEvent(
+          t.assigneeAgentId,
+          'system',
+          `Dependencies met — starting ${t.title}`,
+          null,
+          t.id,
+        );
+        if (t.assigneeAgentId) void this.onItemAssigned(t.id).catch(() => undefined);
+      }
+    }
+  }
+
+  /* ---------------------------------------------- PR + review + iterate */
+
+  private findReviewer(lead: Agent): Agent {
+    const specialists = this.specialists();
+    for (const name of ['reviewer', 'qa', 'security']) {
+      const found = specialists.find((s) => s.name === name);
+      if (found) return found;
+    }
+    return specialists[0] ?? lead;
+  }
+
+  /** If every task in the epic is reviewed, open a PR and drive review-to-merge. */
+  private maybeFinishEpic(parentId: string | null): void {
+    if (!parentId) return;
+    const epic = this.deps.store.getWorkItem(parentId);
+    if (!epic || epic.kind !== 'epic' || epic.status === 'done') return;
+    if (this.epicReviewing.has(parentId)) return;
+    const children = this.deps.store.listChildTasks(parentId);
+    if (children.length === 0) return;
+    if (!children.every((c) => c.status === 'review' || c.status === 'done')) return;
+    this.epicReviewing.add(parentId);
+    void this.runEpicReview(epic).finally(() => this.epicReviewing.delete(parentId));
+  }
+
+  private async runEpicReview(epic: WorkItem): Promise<void> {
+    const iter = (this.epicReviewIter.get(epic.id) ?? 0) + 1;
+    this.epicReviewIter.set(epic.id, iter);
+    const main = this.ensureMainThread();
+    const lead = this.lead();
+    const repoDir = this.project().repoDir;
+    const branch = epic.branch ?? '';
+    const wt = this.epicWorktrees.get(epic.id);
+
+    if (this.deps.store.getWorkItem(epic.id)?.status !== 'review') this.moveItem(epic.id, 'review');
+
+    let diff = '';
+    if (branch) {
+      try {
+        diff = await this.deps.git.branchDiff(repoDir, branch);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const reviewer = this.findReviewer(lead);
+
+    // Raise the PR once; reuse it across review rounds.
+    let prId = this.epicPr.get(epic.id);
+    if (!prId) {
+      let base = 'main';
+      try {
+        base = await this.deps.git.currentBranch(repoDir);
+      } catch {
+        /* ignore */
+      }
+      const pr = this.deps.store.createPR({
+        projectId: this.projectId,
+        workItemId: epic.id,
+        authorAgentId: lead.id,
+        title: `PR: ${epic.title}`,
+        description: `Epic “${epic.title}” ready for review.`,
+        branch,
+        baseBranch: base,
+        diff,
+      });
+      prId = pr.id;
+      this.epicPr.set(epic.id, prId);
+      this.emitEvent(lead.id, 'pull_request', `Raised PR for “${epic.title}”`, null, epic.id);
+    } else {
+      this.deps.store.updatePR(prId, { status: 'open', diff });
+    }
+    const withReviewer = this.deps.store.updatePR(prId, {
+      reviewerAgentId: reviewer.id,
+      status: 'open',
+    });
+    if (withReviewer)
+      this.deps.bus.publish({
+        type: 'pull_request.updated',
+        projectId: this.projectId,
+        pr: withReviewer,
+      });
+
+    // No independent reviewer available → Lead self-approves and merges.
+    if (reviewer.id === lead.id) {
+      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+      return;
+    }
+
+    const prompt =
+      `Please review the pull request for epic “${epic.title}”.\n` +
+      `[[REVIEW: iteration=${iter}]]\n\n` +
+      `Diff:\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
+      `Reply APPROVE if it meets the quality bar, or REQUEST_CHANGES: <reason> otherwise.`;
+    const verdict = await this.actor(reviewer).ask(prompt, main.id, epic.id, wt?.path);
+
+    const approved =
+      /\[\[APPROVE\]\]/i.test(verdict) ||
+      (!/REQUEST_CHANGES/i.test(verdict) && /\bapprove\b/i.test(verdict));
+    if (approved) {
+      await this.approveAndMerge(epic, prId, reviewer, repoDir, branch);
+      return;
+    }
+
+    const reasonMatch = /\[\[REQUEST_CHANGES:\s*([^\]]+)\]\]/i.exec(verdict);
+    const reason = reasonMatch ? reasonMatch[1]!.trim() : 'address review feedback';
+    const changed = this.deps.store.updatePR(prId, { status: 'changes_requested' });
+    if (changed)
+      this.deps.bus.publish({
+        type: 'pull_request.updated',
+        projectId: this.projectId,
+        pr: changed,
+      });
+    this.emitEvent(reviewer.id, 'pull_request', `Requested changes: ${reason}`, null, epic.id);
+
+    if (iter >= ProjectOrchestrator.MAX_REVIEW_ITER) {
+      this.emitEvent(
+        lead.id,
+        'pull_request',
+        `Merging after ${iter} review rounds (cap reached)`,
+        null,
+        epic.id,
+      );
+      await this.approveAndMerge(epic, prId, reviewer, repoDir, branch);
+      return;
+    }
+
+    // Iterate: bounce a builder task back so the team addresses the feedback.
+    const children = this.deps.store.listChildTasks(epic.id);
+    const target =
+      children.find((c) => !/^(qa|reviewer|security)$/.test(c.stream ?? '')) ?? children[0];
+    if (target && target.assigneeAgentId) {
+      const reopened = this.deps.store.updateWorkItem(target.id, { status: 'todo' });
+      if (reopened) {
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: reopened,
+        });
+        this.emitEvent(
+          target.assigneeAgentId,
+          'system',
+          `Reworking “${target.title}” per review`,
+          null,
+          target.id,
+        );
+        void this.onItemAssigned(target.id).catch(() => undefined);
+      }
+    }
+  }
+
+  private async approveAndMerge(
+    epic: WorkItem,
+    prId: string,
+    approver: Agent,
+    repoDir: string,
+    branch: string,
+  ): Promise<void> {
+    const approved = this.deps.store.updatePR(prId, { status: 'approved' });
+    if (approved)
+      this.deps.bus.publish({
+        type: 'pull_request.updated',
+        projectId: this.projectId,
+        pr: approved,
+      });
+    this.emitEvent(approver.id, 'pull_request', `Approved PR for “${epic.title}”`, null, epic.id);
+
+    if (branch) {
+      try {
+        const m = await this.deps.git.mergeEpic(repoDir, branch);
+        this.emitEvent(
+          approver.id,
+          'git',
+          m.ok ? m.detail : `Merge failed: ${m.detail}`,
+          null,
+          epic.id,
+        );
+      } catch (err) {
+        this.emitEvent(
+          approver.id,
+          'git',
+          `Merge error: ${err instanceof Error ? err.message : String(err)}`,
+          null,
+          epic.id,
+        );
+      }
+    }
+    const merged = this.deps.store.updatePR(prId, { status: 'merged' });
+    if (merged)
+      this.deps.bus.publish({
+        type: 'pull_request.updated',
+        projectId: this.projectId,
+        pr: merged,
+      });
+
+    for (const c of this.deps.store.listChildTasks(epic.id)) {
+      if (c.status !== 'done') this.moveItem(c.id, 'done');
+    }
+    this.moveItem(epic.id, 'done');
+    this.emitEvent(
+      this.lead().id,
+      'system',
+      `Epic “${epic.title}” merged and closed`,
+      null,
+      epic.id,
+    );
   }
 
   private async pullNext(agentId: string): Promise<void> {
@@ -679,6 +1007,43 @@ class ProjectOrchestrator {
           `[[REQUEST_GROUPCHAT: ${input.topic}]]`,
           null,
         ).catch(() => undefined);
+        return { ok: true };
+      },
+      writeNote: (input) => {
+        const note = this.deps.store.appendNote({
+          projectId: pid,
+          agentId: agent.id,
+          workItemId: input.workItemId ?? null,
+          content: input.content,
+        });
+        this.deps.bus.publish({
+          type: 'agent_note.appended',
+          projectId: pid,
+          agentId: agent.id,
+          note,
+        });
+        this.emitEvent(
+          agent.id,
+          'system',
+          `Noted: ${input.content.slice(0, 80)}`,
+          null,
+          note.workItemId,
+        );
+        return { ok: true };
+      },
+      updatePlan: (input) => {
+        const plan = this.deps.store.setPlan({
+          projectId: pid,
+          agentId: agent.id,
+          content: input.content,
+        });
+        this.deps.bus.publish({
+          type: 'agent_plan.updated',
+          projectId: pid,
+          agentId: agent.id,
+          plan,
+        });
+        this.emitEvent(agent.id, 'system', 'Updated its plan', null, null);
         return { ok: true };
       },
       listBoard: () => ({
@@ -884,6 +1249,7 @@ export class OrchestratorManager {
       this.byProject.delete(projectId);
     }
     this.deps.scheduler.cancelOwner(projectId);
+    this.deps.git.removeProjectWorktrees(projectId);
   }
 
   answer(projectId: string, questionId: string, answer: string): boolean {

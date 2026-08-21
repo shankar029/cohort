@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   AgentEventType,
   AgentStatus,
+  AgentNote,
   AgentTask,
   AgentTaskStatus,
   ChatMessage,
@@ -136,6 +137,25 @@ const toTask = (r: AgentTaskRow): AgentTask => ({
   status: r.status as AgentTaskStatus,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
+});
+
+interface AgentNoteRow {
+  id: string;
+  project_id: string;
+  agent_id: string;
+  work_item_id: string | null;
+  kind: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+const toNote = (r: AgentNoteRow): AgentNote => ({
+  id: r.id,
+  projectId: r.project_id,
+  agentId: r.agent_id,
+  workItemId: r.work_item_id,
+  content: r.content,
+  createdAt: r.created_at,
 });
 
 interface AgentEventRow {
@@ -408,6 +428,8 @@ export class Store {
 
   deleteAgent(agentId: string): void {
     this.db.prepare(`DELETE FROM agents WHERE id = ?`).run(agentId);
+    this.db.prepare(`DELETE FROM agent_notes WHERE agent_id = ?`).run(agentId);
+    this.db.prepare(`DELETE FROM agent_tasks WHERE agent_id = ?`).run(agentId);
   }
 
   /* work items */
@@ -593,6 +615,70 @@ export class Store {
       )
       .all(projectId, agentId)
       .map((r) => toTask(r as AgentTaskRow));
+  }
+
+  /* agent scratchpad: append-only notes + a single living plan */
+  appendNote(n: {
+    projectId: string;
+    agentId: string;
+    workItemId?: string | null;
+    content: string;
+  }): AgentNote {
+    const ts = now();
+    const row: AgentNoteRow = {
+      id: id('note'),
+      project_id: n.projectId,
+      agent_id: n.agentId,
+      work_item_id: n.workItemId ?? null,
+      kind: 'note',
+      content: n.content,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO agent_notes (id,project_id,agent_id,work_item_id,kind,content,created_at,updated_at)
+         VALUES (@id,@project_id,@agent_id,@work_item_id,@kind,@content,@created_at,@updated_at)`,
+      )
+      .run(row);
+    return toNote(row);
+  }
+
+  listNotes(agentId: string): AgentNote[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM agent_notes WHERE agent_id=? AND kind='note' ORDER BY created_at DESC`,
+      )
+      .all(agentId)
+      .map((r) => toNote(r as AgentNoteRow));
+  }
+
+  /** Replace the agent's living plan/scratchpad (a single row per agent). */
+  setPlan(p: { projectId: string; agentId: string; content: string }): string {
+    const ts = now();
+    const existing = this.db
+      .prepare(`SELECT id FROM agent_notes WHERE agent_id=? AND kind='plan' LIMIT 1`)
+      .get(p.agentId) as { id: string } | undefined;
+    if (existing) {
+      this.db
+        .prepare(`UPDATE agent_notes SET content=?, updated_at=? WHERE id=?`)
+        .run(p.content, ts, existing.id);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO agent_notes (id,project_id,agent_id,work_item_id,kind,content,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?)`,
+        )
+        .run(id('plan'), p.projectId, p.agentId, null, 'plan', p.content, ts, ts);
+    }
+    return p.content;
+  }
+
+  getPlan(agentId: string): string {
+    const row = this.db
+      .prepare(`SELECT content FROM agent_notes WHERE agent_id=? AND kind='plan' LIMIT 1`)
+      .get(agentId) as { content: string } | undefined;
+    return row?.content ?? '';
   }
 
   /* events */
@@ -818,6 +904,12 @@ export class Store {
       .prepare(`SELECT * FROM pull_requests WHERE project_id=? ORDER BY created_at ASC`)
       .all(projectId)
       .map((r) => toPr(r as PrRow));
+  }
+
+  getPR(prId: string): PullRequest | undefined {
+    const r = this.db.prepare(`SELECT * FROM pull_requests WHERE id=?`).get(prId) as
+      PrRow | undefined;
+    return r ? toPr(r) : undefined;
   }
 
   /* questions */

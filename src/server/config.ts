@@ -11,6 +11,8 @@ export interface Config {
   skillHomeRoots: string[];
   isProduction: boolean;
   webDistDir: string;
+  /** Base directory for per-epic git worktrees. */
+  worktreeRoot: string;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -36,5 +38,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     skillHomeRoots: [...defaultRoots, ...splitList(env.ATEAM_SKILL_HOME_ROOTS)],
     isProduction: env.NODE_ENV === 'production',
     webDistDir: path.join(process.cwd(), 'dist', 'web'),
+    // Git worktrees MUST live outside any project/app repo. Always resolve to an
+    // absolute temp location so `git` operations can never run inside this repo
+    // (a relative path here previously caused the app to commit into its own repo).
+    worktreeRoot: path.resolve(
+      env.ATEAM_WORKTREE_ROOT ?? path.join(os.tmpdir(), 'ateam-worktrees'),
+    ),
   };
 }

@@ -7,12 +7,14 @@ import { BoardPage } from './pages/BoardPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { ActivityPage } from './pages/ActivityPage';
+import { PullRequestsPage } from './pages/PullRequestsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const NAV = [
   { to: 'chat', label: 'Chat', icon: '💬' },
   { to: 'board', label: 'Board', icon: '🗂️' },
   { to: 'agents', label: 'Agents', icon: '🤖' },
+  { to: 'pulls', label: 'Pull Requests', icon: '🔃' },
   { to: 'activity', label: 'Activity', icon: '📡' },
   { to: 'settings', label: 'Settings', icon: '⚙️' },
 ];
@@ -26,9 +28,18 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-surface-border bg-surface-1">
-      <div className="border-b border-surface-border p-4">
-        <NavLink to="/" className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-          <span aria-hidden="true">🧭</span> ateam
+      <div className="border-b border-surface-border px-4 py-4">
+        <NavLink
+          to="/"
+          className="flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-100"
+        >
+          <span
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-600/20 text-accent-400"
+            aria-hidden="true"
+          >
+            🧭
+          </span>
+          <span>ateam</span>
         </NavLink>
       </div>
       <div className="border-b border-surface-border p-3">
@@ -55,24 +66,35 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
           </p>
         )}
       </div>
-      <nav className="flex-1 space-y-1 p-3" aria-label="Project navigation">
+      <nav className="flex-1 space-y-0.5 p-3" aria-label="Project navigation">
         {NAV.map((item) => (
           <NavLink
             key={item.to}
             to={`/p/${projectId}/${item.to}`}
             className={({ isActive }) =>
-              `flex items-center justify-between rounded-md px-3 py-2 text-sm ${
-                isActive ? 'bg-surface-3 text-white' : 'text-slate-300 hover:bg-surface-2'
-              }`
+              `nav-link ${isActive ? 'nav-link-active' : 'nav-link-idle'}`
             }
           >
-            <span className="flex items-center gap-2">
-              <span aria-hidden="true">{item.icon}</span> {item.label}
-            </span>
-            {item.to === 'board' && needsInput > 0 && (
-              <span className="rounded-full bg-status-input px-1.5 text-xs font-semibold text-black">
-                {needsInput}
-              </span>
+            {({ isActive }) => (
+              <>
+                {isActive && (
+                  <span
+                    className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent-500"
+                    aria-hidden="true"
+                  />
+                )}
+                <span className="flex items-center gap-2.5">
+                  <span aria-hidden="true" className="text-base">
+                    {item.icon}
+                  </span>{' '}
+                  {item.label}
+                </span>
+                {item.to === 'board' && needsInput > 0 && (
+                  <span className="rounded-full bg-status-input px-1.5 text-xs font-semibold text-black">
+                    {needsInput}
+                  </span>
+                )}
+              </>
             )}
           </NavLink>
         ))}
@@ -84,8 +106,15 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
           />
           {state.wsConnected ? 'Live' : 'Reconnecting…'}
         </div>
-        <div className="mt-1">
-          {working > 0 ? `${working} agent${working > 1 ? 's' : ''} working` : 'All agents idle'}
+        <div className="mt-1 flex items-center gap-1.5">
+          {working > 0 ? (
+            <>
+              <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-status-working" />
+              {`${working} agent${working > 1 ? 's' : ''} working`}
+            </>
+          ) : (
+            'All agents idle'
+          )}
         </div>
       </div>
     </aside>
@@ -131,6 +160,7 @@ export function App(): React.JSX.Element {
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:agentId" element={<AgentDetailPage />} />
         <Route path="activity" element={<ActivityPage />} />
+        <Route path="pulls" element={<PullRequestsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
