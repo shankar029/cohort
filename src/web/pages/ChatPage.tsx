@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import type { Thread } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, Banner, EmptyState } from '../components/ui';
+import { Markdown } from '../components/Markdown';
 
 const THREAD_META: Record<Thread['kind'], { icon: string; label: string }> = {
   main: { icon: '💬', label: 'Team Lead' },
@@ -166,9 +167,9 @@ export function ChatPage(): React.JSX.Element {
                     </span>
                   ))}
                 <div
-                  className={`max-w-[72%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm shadow-card ${
+                  className={`max-w-[72%] rounded-2xl px-4 py-2.5 text-sm shadow-card ${
                     isUser
-                      ? 'rounded-tr-sm bg-accent-600 text-white'
+                      ? 'whitespace-pre-wrap rounded-tr-sm bg-accent-600 text-white'
                       : 'rounded-tl-sm border border-surface-border bg-surface-1 text-slate-200'
                   }`}
                   data-testid={isUser ? 'user-message' : isLead ? 'lead-message' : 'agent-message'}
@@ -179,7 +180,15 @@ export function ChatPage(): React.JSX.Element {
                       {isLead && <span className="ml-1 text-slate-500">· Team Lead</span>}
                     </div>
                   )}
-                  {m.content ? m.content : <WorkingIndicator status={author?.status} />}
+                  {m.content ? (
+                    isUser ? (
+                      m.content
+                    ) : (
+                      <Markdown content={m.content} />
+                    )
+                  ) : (
+                    <WorkingIndicator status={author?.status} />
+                  )}
                 </div>
               </div>
             );

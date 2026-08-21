@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner } from '../components/ui';
+import { Avatar, Banner, Modal } from '../components/ui';
+import { Markdown } from '../components/Markdown';
 
 const COLUMNS: { status: WorkItemStatus; label: string }[] = [
   { status: 'backlog', label: 'Backlog' },
@@ -173,6 +174,7 @@ function WorkItemCard({
   const { projectId } = useParams<{ projectId: string }>();
   const { updateWorkItem, deleteWorkItem } = useApp();
   const bundle = useBundle(projectId);
+  const [showDetail, setShowDetail] = useState(false);
   const assignee = bundle.agents.find((a) => a.id === item.assigneeAgentId);
   const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
   const isEpic = item.kind === 'epic';
@@ -185,93 +187,293 @@ function WorkItemCard({
     : 0;
 
   return (
-    <div
-      className={`card cursor-grab p-3 transition-shadow hover:shadow-pop active:cursor-grabbing ${
-        isEpic ? 'border-l-2 border-l-accent-500 bg-surface-2/60' : ''
-      }`}
-      draggable
-      onDragStart={onDragStart}
-      data-testid="workitem"
-    >
-      <div className="mb-1 flex flex-wrap items-center gap-1">
-        {isEpic && <span className="badge-accent">EPIC</span>}
-        {item.stream && <span className="badge-muted">{item.stream}</span>}
-        {parentEpic && (
-          <span className="badge-muted max-w-[9rem] truncate" title={parentEpic.title}>
-            ↳ {parentEpic.title}
-          </span>
-        )}
-        {item.dependsOn.length > 0 && (
-          <span className="badge-muted" title={`${item.dependsOn.length} dependencies`}>
-            🔗 {item.dependsOn.length}
-          </span>
-        )}
-      </div>
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium text-slate-100">{item.title}</p>
-        <button
-          className="text-xs text-slate-600 hover:text-red-400"
-          aria-label="Delete work item"
-          onClick={() => void deleteWorkItem(item.id)}
-        >
-          ✕
-        </button>
-      </div>
-      {item.description && (
-        <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description}</p>
-      )}
-      {isEpic && childCount > 0 && (
-        <div className="mt-2">
-          <div className="mb-1 flex items-center justify-between text-[0.7rem] text-slate-500">
-            <span>Progress</span>
-            <span>
-              {doneChildren}/{childCount}
+    <>
+      <div
+        className={`card cursor-grab p-3 transition-shadow hover:shadow-pop active:cursor-grabbing ${
+          isEpic ? 'border-l-2 border-l-accent-500 bg-surface-2/60' : ''
+        }`}
+        draggable
+        onDragStart={onDragStart}
+        data-testid="workitem"
+      >
+        <div className="mb-1 flex flex-wrap items-center gap-1">
+          {isEpic && <span className="badge-accent">EPIC</span>}
+          {item.stream && <span className="badge-muted">{item.stream}</span>}
+          {parentEpic && (
+            <span className="badge-muted max-w-[9rem] truncate" title={parentEpic.title}>
+              ↳ {parentEpic.title}
             </span>
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
-            <div
-              className="h-full rounded-full bg-accent-500 transition-all"
-              style={{ width: `${childCount ? (doneChildren / childCount) * 100 : 0}%` }}
-            />
-          </div>
+          )}
+          {item.dependsOn.length > 0 && (
+            <span className="badge-muted" title={`${item.dependsOn.length} dependencies`}>
+              🔗 {item.dependsOn.length}
+            </span>
+          )}
         </div>
-      )}
-      {item.scheduledAt && item.status === 'backlog' && (
-        <p className="mt-1 text-xs text-cyan-300">
-          ⏰ {new Date(item.scheduledAt).toLocaleString()}
-          {item.recurrence !== 'none' && ` · ${item.recurrence}`}
-        </p>
-      )}
-      <div className="mt-2 flex items-center justify-between">
-        <span className={`text-xs font-medium ${PRIORITY_COLOR[item.priority]}`}>
-          ● {item.priority}
-        </span>
-        {assignee && <Avatar emoji={assignee.emoji} color={assignee.color} size={22} />}
-      </div>
-      {!isEpic && (
-        <>
-          <label className="sr-only" htmlFor={`assign-${item.id}`}>
-            Assign agent
-          </label>
-          <select
-            id={`assign-${item.id}`}
-            className="input mt-2 !min-h-0 py-1 text-xs"
-            data-testid="assign-select"
-            value={item.assigneeAgentId ?? ''}
-            onChange={(e) =>
-              projectId &&
-              void updateWorkItem(projectId, item.id, { assigneeAgentId: e.target.value || null })
-            }
+        <div className="flex items-start justify-between gap-2">
+          <button
+            type="button"
+            className="flex-1 text-left text-sm font-medium text-slate-100 hover:text-accent-300"
+            data-testid="workitem-title"
+            onClick={() => setShowDetail(true)}
           >
-            <option value="">Unassigned</option>
-            {specialists.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.emoji} {a.displayName}
-              </option>
-            ))}
-          </select>
-        </>
-      )}
+            {item.title}
+          </button>
+          <button
+            className="text-xs text-slate-600 hover:text-red-400"
+            aria-label="Delete work item"
+            onClick={() => void deleteWorkItem(item.id)}
+          >
+            ✕
+          </button>
+        </div>
+        {item.description && (
+          <p className="mt-1 line-clamp-2 text-xs text-slate-500">{item.description}</p>
+        )}
+        {isEpic && childCount > 0 && (
+          <div className="mt-2">
+            <div className="mb-1 flex items-center justify-between text-[0.7rem] text-slate-500">
+              <span>Progress</span>
+              <span>
+                {doneChildren}/{childCount}
+              </span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-surface-3">
+              <div
+                className="h-full rounded-full bg-accent-500 transition-all"
+                style={{ width: `${childCount ? (doneChildren / childCount) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
+        {item.scheduledAt && item.status === 'backlog' && (
+          <p className="mt-1 text-xs text-cyan-300">
+            ⏰ {new Date(item.scheduledAt).toLocaleString()}
+            {item.recurrence !== 'none' && ` · ${item.recurrence}`}
+          </p>
+        )}
+        <div className="mt-2 flex items-center justify-between">
+          <span className={`text-xs font-medium ${PRIORITY_COLOR[item.priority]}`}>
+            ● {item.priority}
+          </span>
+          {assignee && <Avatar emoji={assignee.emoji} color={assignee.color} size={22} />}
+        </div>
+        {!isEpic && (
+          <>
+            <label className="sr-only" htmlFor={`assign-${item.id}`}>
+              Assign agent
+            </label>
+            <select
+              id={`assign-${item.id}`}
+              className="input mt-2 !min-h-0 py-1 text-xs"
+              data-testid="assign-select"
+              value={item.assigneeAgentId ?? ''}
+              onChange={(e) =>
+                projectId &&
+                void updateWorkItem(projectId, item.id, { assigneeAgentId: e.target.value || null })
+              }
+            >
+              <option value="">Unassigned</option>
+              {specialists.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.emoji} {a.displayName}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+      </div>
+      {showDetail && <WorkItemDetailModal item={item} onClose={() => setShowDetail(false)} />}
+    </>
+  );
+}
+
+function WorkItemDetailModal({
+  item,
+  onClose,
+}: {
+  item: WorkItem;
+  onClose: () => void;
+}): React.JSX.Element {
+  const { projectId } = useParams<{ projectId: string }>();
+  const { updateWorkItem, deleteWorkItem } = useApp();
+  const bundle = useBundle(projectId);
+  const assignee = bundle.agents.find((a) => a.id === item.assigneeAgentId);
+  const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
+  const parentEpic = item.parentId
+    ? bundle.workItems.find((w) => w.id === item.parentId)
+    : undefined;
+  const children =
+    item.kind === 'epic' ? bundle.workItems.filter((w) => w.parentId === item.id) : [];
+  const deps = item.dependsOn
+    .map((d) => bundle.workItems.find((w) => w.id === d))
+    .filter((w): w is WorkItem => Boolean(w));
+  const pr = bundle.pulls.find((p) => p.workItemId === item.id);
+
+  const set = (patch: Record<string, unknown>): void => {
+    if (projectId) void updateWorkItem(projectId, item.id, patch);
+  };
+
+  return (
+    <Modal title={item.kind === 'epic' ? 'Epic details' : 'Task details'} onClose={onClose}>
+      <div className="max-h-[70vh] space-y-4 overflow-auto" data-testid="workitem-detail">
+        <div>
+          <div className="mb-1 flex flex-wrap items-center gap-1">
+            {item.kind === 'epic' && <span className="badge-accent">EPIC</span>}
+            {item.stream && <span className="badge-muted">{item.stream}</span>}
+            {parentEpic && <span className="badge-muted">↳ {parentEpic.title}</span>}
+          </div>
+          <h3 className="text-base font-semibold text-slate-100">{item.title}</h3>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="label">Status</span>
+            <select
+              className="input !min-h-0 py-1 text-sm"
+              value={item.status}
+              onChange={(e) => set({ status: e.target.value })}
+            >
+              {COLUMNS.map((c) => (
+                <option key={c.status} value={c.status}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="label">Priority</span>
+            <select
+              className="input !min-h-0 py-1 text-sm"
+              value={item.priority}
+              onChange={(e) => set({ priority: e.target.value })}
+            >
+              {['low', 'medium', 'high'].map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          {item.kind !== 'epic' && (
+            <label className="col-span-2 block">
+              <span className="label">Assignee</span>
+              <select
+                className="input !min-h-0 py-1 text-sm"
+                value={item.assigneeAgentId ?? ''}
+                onChange={(e) => set({ assigneeAgentId: e.target.value || null })}
+              >
+                <option value="">Unassigned</option>
+                {specialists.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.emoji} {a.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+
+        <div>
+          <span className="label">Description</span>
+          {item.description ? (
+            <div className="rounded bg-surface-2 p-2 text-sm text-slate-300">
+              <Markdown content={item.description} />
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">No description.</p>
+          )}
+        </div>
+
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          {assignee && (
+            <DetailField label="Assignee" value={`${assignee.emoji} ${assignee.displayName}`} />
+          )}
+          {item.branch && <DetailField label="Branch" value={item.branch} mono />}
+          {item.scheduledAt && (
+            <DetailField
+              label="Scheduled"
+              value={`${new Date(item.scheduledAt).toLocaleString()}${
+                item.recurrence !== 'none' ? ` · ${item.recurrence}` : ''
+              }`}
+            />
+          )}
+          <DetailField label="Created" value={new Date(item.createdAt).toLocaleString()} />
+          <DetailField label="Updated" value={new Date(item.updatedAt).toLocaleString()} />
+        </dl>
+
+        {deps.length > 0 && (
+          <div>
+            <span className="label">Depends on</span>
+            <ul className="space-y-1">
+              {deps.map((d) => (
+                <li key={d.id} className="flex items-center gap-2 text-sm text-slate-300">
+                  <span className="badge-muted">{d.status}</span>
+                  <span className="truncate">{d.title}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {children.length > 0 && (
+          <div>
+            <span className="label">Tasks ({children.length})</span>
+            <ul className="space-y-1">
+              {children.map((c) => (
+                <li key={c.id} className="flex items-center gap-2 text-sm text-slate-300">
+                  <span className="badge-muted">{c.status}</span>
+                  {c.stream && <span className="badge-muted">{c.stream}</span>}
+                  <span className="truncate">{c.title}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {pr && (
+          <div>
+            <span className="label">Pull request</span>
+            <p className="text-sm text-slate-300">
+              <span className="badge-muted mr-2">{pr.status}</span>
+              {pr.title}
+            </p>
+          </div>
+        )}
+
+        <div className="flex justify-between border-t border-surface-border pt-3">
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={() => {
+              void deleteWorkItem(item.id);
+              onClose();
+            }}
+          >
+            Delete
+          </button>
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DetailField({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}): React.JSX.Element {
+  return (
+    <div>
+      <dt className="label">{label}</dt>
+      <dd className={mono ? 'font-mono text-xs text-slate-300' : 'text-slate-200'}>{value}</dd>
     </div>
   );
 }

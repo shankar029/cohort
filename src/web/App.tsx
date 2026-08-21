@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
 import { useApp, useBundle } from './state';
 import { ProjectsPage } from './pages/ProjectsPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { ChatPage } from './pages/ChatPage';
 import { BoardPage } from './pages/BoardPage';
 import { AgentsPage } from './pages/AgentsPage';
@@ -11,6 +12,7 @@ import { PullRequestsPage } from './pages/PullRequestsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const NAV = [
+  { to: 'dashboard', label: 'Dashboard', icon: '📊' },
   { to: 'chat', label: 'Chat', icon: '💬' },
   { to: 'board', label: 'Board', icon: '🗂️' },
   { to: 'agents', label: 'Agents', icon: '🤖' },
@@ -154,7 +156,8 @@ export function App(): React.JSX.Element {
     <Routes>
       <Route path="/" element={<ProjectsPage />} />
       <Route path="/p/:projectId" element={<ProjectLayout />}>
-        <Route index element={<Navigate to="chat" replace />} />
+        <Route index element={<Navigate to="dashboard" replace />} />
+        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="chat" element={<ChatPage />} />
         <Route path="board" element={<BoardPage />} />
         <Route path="agents" element={<AgentsPage />} />

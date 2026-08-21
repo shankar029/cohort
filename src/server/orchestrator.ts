@@ -625,6 +625,63 @@ class ProjectOrchestrator {
     }
   }
 
+  /**
+   * On server boot, analyze persisted state and resume interrupted work. All
+   * in-memory runtime (agent sessions, epic worktrees, live agent statuses) is
+   * lost across a restart, so we reconcile the DB back to a runnable state and
+   * re-drive the board: clear stale statuses, rebuild epic worktrees, promote any
+   * dependency-satisfied tasks, and requeue interrupted/assigned work.
+   */
+  async resumeWork(): Promise<void> {
+    const items = this.deps.store.listWorkItems(this.projectId);
+
+    // 1. Clear stale runtime statuses left behind by the previous (dead) process.
+    for (const agent of this.deps.store.listAgents(this.projectId)) {
+      if (agent.status === 'working' || agent.status === 'needs_input') {
+        this.setStatus(agent.id, 'idle');
+      }
+    }
+
+    // 2. Rebuild isolated worktrees for epics with open work, so resumed tasks
+    //    commit on their epic branch instead of leaking into the main repo.
+    const openEpics = items.filter((i) => i.kind === 'epic' && i.status !== 'done');
+    for (const epic of openEpics) {
+      try {
+        const wt = await this.deps.git.createEpicWorktree(
+          this.project().repoDir,
+          this.projectId,
+          epic.id,
+        );
+        this.epicWorktrees.set(epic.id, wt);
+      } catch {
+        /* best-effort: fall back to the repo dir if git is unavailable */
+      }
+      this.maybePromoteDependents(epic.id);
+    }
+
+    // 3. Requeue work. Items cut off mid-run (in_progress) are reset to todo so
+    //    they re-run cleanly; assigned todo items get picked up again.
+    let resumed = 0;
+    for (const item of this.deps.store.listWorkItems(this.projectId)) {
+      if (item.kind === 'epic' || !item.assigneeAgentId) continue;
+      if (item.status === 'in_progress') this.moveItem(item.id, 'todo');
+      if (item.status === 'in_progress' || item.status === 'todo') {
+        resumed += 1;
+        void this.onItemAssigned(item.id).catch(() => undefined);
+      }
+    }
+
+    if (resumed > 0) {
+      this.emitEvent(
+        this.lead().id,
+        'system',
+        `Resumed ${resumed} in-flight task(s) after restart`,
+        null,
+        null,
+      );
+    }
+  }
+
   /** Register a scheduled/recurring item to activate at its time. */
   scheduleWorkItem(item: WorkItem): void {
     if (item.scheduledAt == null || this.armed.has(item.id)) return;
@@ -1274,9 +1331,12 @@ export class OrchestratorManager {
     return o;
   }
 
-  /** Re-arm scheduled work across all known projects (call once at startup). */
+  /** Re-arm scheduled work and resume interrupted work across known projects (startup). */
   resumeAll(projectIds: string[]): void {
-    for (const pid of projectIds) this.get(pid);
+    for (const pid of projectIds) {
+      const o = this.get(pid);
+      void o.resumeWork().catch(() => undefined);
+    }
   }
 
   async invalidate(projectId: string): Promise<void> {

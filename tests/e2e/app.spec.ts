@@ -36,7 +36,7 @@ test('end-to-end: build a team, assign work, watch autonomous pickup, tasks and 
   await expect(page.getByTestId('agent-list')).toContainText('Frontend Engineer');
 
   // Go to the board and create an assigned work item.
-  await page.getByRole('link', { name: 'Board' }).click();
+  await page.getByRole('link', { name: 'Board', exact: true }).click();
   await page.getByTestId('add-workitem').click();
   await page.getByTestId('workitem-title').fill('Build the login screen');
   await page.getByTestId('workitem-assignee').selectOption({ label: '🖥️ Frontend Engineer' });
@@ -95,7 +95,7 @@ test('escalation: a specialist question is surfaced and answering resumes the wo
   await createProject(page, 'E2E Escalation');
   await addSpecialist(page, 'backend-engineer');
 
-  await page.getByRole('link', { name: 'Board' }).click();
+  await page.getByRole('link', { name: 'Board', exact: true }).click();
   await page.getByTestId('add-workitem').click();
   await page.getByTestId('workitem-title').fill('Ambiguous API [[ASK]]');
   await page.getByTestId('workitem-assignee').selectOption({ label: '⚙️ Backend Engineer' });
@@ -107,7 +107,7 @@ test('escalation: a specialist question is surfaced and answering resumes the wo
   await page.getByTestId('question-choice').first().click();
 
   // After answering, the work reaches Review.
-  await page.getByRole('link', { name: 'Board' }).click();
+  await page.getByRole('link', { name: 'Board', exact: true }).click();
   await expect(page.getByTestId('column-review')).toContainText('Ambiguous API', {
     timeout: 20000,
   });
