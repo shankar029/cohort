@@ -127,7 +127,10 @@ CREATE TABLE IF NOT EXISTS questions (
   created_at TEXT NOT NULL,
   answered_at TEXT
 );
+`;
 
+/** Indexes created AFTER migrations so they can reference migrated columns. */
+const INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id);
 CREATE INDEX IF NOT EXISTS idx_workitems_project ON work_items(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_agent ON agent_tasks(project_id, agent_id);
@@ -150,7 +153,10 @@ function migrate(db: DB): void {
       ),
     );
   const add = (table: string, col: string, ddl: string): void => {
-    if (!cols(table).has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    const exists =
+      (db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table) as
+        unknown | undefined) !== undefined;
+    if (exists && !cols(table).has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   };
   add('work_items', 'kind', "kind TEXT NOT NULL DEFAULT 'task'");
   add('work_items', 'parent_id', 'parent_id TEXT');
@@ -172,5 +178,6 @@ export function openDatabase(dbPath: string): DB {
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
   migrate(db);
+  db.exec(INDEXES);
   return db;
 }
