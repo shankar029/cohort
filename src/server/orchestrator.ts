@@ -269,8 +269,18 @@ class ProjectOrchestrator {
         `If it would benefit from a team discussion, note that you'll convene one.`;
       await this.actor(lead).ask(prompt, main.id, null);
 
-      // Convene a brainstorm when the user asks to build/plan/discuss.
-      if (/\b(build|implement|design|plan|brainstorm|discuss|architect|feature)\b/i.test(content)) {
+      // Route the request. A build/change request becomes an epic the Lead decomposes;
+      // a pure discussion request convenes a brainstorm.
+      const buildIntent =
+        /\b(build|implement|create|add|develop|feature|fix|refactor|integrate|migrate|support)\b/i.test(
+          content,
+        );
+      const discussIntent = /\b(brainstorm|discuss|approach|architect|explore|options)\b/i.test(
+        content,
+      );
+      if (buildIntent) {
+        await this.planEpic(content);
+      } else if (discussIntent) {
         const participants = this.pickDiscussants();
         if (participants.length > 0) {
           await this.runGroupChat(
@@ -281,6 +291,111 @@ class ProjectOrchestrator {
         }
       }
     })();
+  }
+
+  /* --------------------------------------------------------- epic planning */
+
+  /**
+   * Turn a user request into an epic the Team Lead owns: consult the PM, frame a
+   * plan, then decompose into stream-tagged task cards (with acceptance criteria +
+   * dependencies) assigned to specialists for parallel work.
+   */
+  async planEpic(content: string): Promise<WorkItem> {
+    const lead = this.lead();
+    const main = this.ensureMainThread();
+    const specs = this.specialists();
+
+    // 1. Open the epic.
+    const epic = this.deps.store.createWorkItem({
+      projectId: this.projectId,
+      kind: 'epic',
+      title: epicTitle(content),
+      description: content,
+      status: 'in_progress',
+      priority: 'medium',
+      assigneeAgentId: lead.id,
+    });
+    this.deps.bus.publish({ type: 'workitem.updated', projectId: this.projectId, workItem: epic });
+    this.emitEvent(lead.id, 'system', `Opened epic “${epic.title}”`, null, epic.id);
+
+    // 2. Consult the Product Manager for outcome + acceptance criteria (if present).
+    const pm = specs.find((s) => s.name === 'pm');
+    if (pm) {
+      await this.actor(pm).ask(
+        `Product check for epic “${epic.title}”.\nRequest: ${content}\n` +
+          `State the user outcome and 2-3 crisp acceptance criteria in a few sentences.`,
+        main.id,
+        epic.id,
+      );
+    }
+
+    // 3. Lead frames the plan for the team.
+    await this.actor(lead).ask(
+      `You own epic “${epic.title}”. Break it into parallel tasks by stream for the team, ` +
+        `note dependencies and the quality bar, and keep it concise.`,
+      main.id,
+      epic.id,
+    );
+
+    // 4. Decompose into stream-tagged task cards. Builders run in parallel now;
+    //    verifiers (QA/review/security) wait on the build tasks (dependency-gated in Phase 3).
+    const verifiers = specs.filter((s) => /^(qa|reviewer|security)$/.test(s.name));
+    const builders = specs.filter((s) => s.name !== 'pm' && !verifiers.includes(s));
+    const goal = shortGoal(content);
+    const builderTaskIds: string[] = [];
+    for (const s of builders) {
+      const task = this.deps.store.createWorkItem({
+        projectId: this.projectId,
+        kind: 'task',
+        parentId: epic.id,
+        title: `[${s.name}] ${goal}`,
+        description:
+          `Part of epic “${epic.title}”.\n\nAcceptance criteria: deliver the ${s.displayName} ` +
+          `slice of “${goal}” to a principal-engineer standard — correct, tested, and matching ` +
+          `project conventions.`,
+        status: 'todo',
+        priority: 'medium',
+        assigneeAgentId: s.id,
+        stream: s.name,
+      });
+      this.deps.bus.publish({
+        type: 'workitem.updated',
+        projectId: this.projectId,
+        workItem: task,
+      });
+      this.emitEvent(lead.id, 'system', `Assigned [${s.name}] ${goal}`, null, task.id);
+      builderTaskIds.push(task.id);
+      void this.onItemAssigned(task.id).catch(() => undefined);
+    }
+    for (const v of verifiers) {
+      const task = this.deps.store.createWorkItem({
+        projectId: this.projectId,
+        kind: 'task',
+        parentId: epic.id,
+        title: `[${v.name}] verify ${goal}`,
+        description:
+          `Part of epic “${epic.title}”.\n\nAcceptance criteria: ${v.displayName} sign-off — ` +
+          `verify the build tasks meet the quality bar before the epic is done.`,
+        status: 'backlog',
+        priority: 'medium',
+        assigneeAgentId: v.id,
+        stream: v.name,
+        dependsOn: builderTaskIds,
+      });
+      this.deps.bus.publish({
+        type: 'workitem.updated',
+        projectId: this.projectId,
+        workItem: task,
+      });
+      this.emitEvent(
+        lead.id,
+        'system',
+        `Queued [${v.name}] verification (waits on builds)`,
+        null,
+        task.id,
+      );
+    }
+    return epic;
   }
 
   /* ------------------------------------------------------- group chats */
@@ -705,6 +820,22 @@ class ProjectOrchestrator {
   async dispose(): Promise<void> {
     await this.invalidateSession();
   }
+}
+
+/** A concise, board-friendly goal phrase from a free-form user request. */
+function shortGoal(content: string): string {
+  const first = content.split('\n').find((l) => l.trim().length > 0) ?? content;
+  const cleaned = first
+    .replace(/^\s*(please|can you|could you|hey|hi)[,\s]+/i, '')
+    .replace(/[.?!]+\s*$/, '')
+    .trim();
+  return (cleaned.length > 70 ? `${cleaned.slice(0, 67)}…` : cleaned) || 'the requested work';
+}
+
+/** Epic title from a request — capitalized short goal. */
+function epicTitle(content: string): string {
+  const g = shortGoal(content);
+  return g.charAt(0).toUpperCase() + g.slice(1);
 }
 
 /** Milliseconds between recurrences, or null for a one-shot schedule. */

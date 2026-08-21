@@ -58,7 +58,7 @@ test('end-to-end: build a team, assign work, watch autonomous pickup, tasks and 
   await expect(page.getByTestId('activity-log')).toContainText('Frontend Engineer');
 });
 
-test('chat: the Team Lead replies and convenes a team discussion', async ({ page }) => {
+test('chat: a build request becomes an epic and a specialist contributes', async ({ page }) => {
   await createProject(page, 'E2E Chat');
   await addSpecialist(page, 'frontend-engineer');
 
@@ -68,7 +68,7 @@ test('chat: the Team Lead replies and convenes a team discussion', async ({ page
 
   // The Team Lead responds…
   await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
-  // …and a specialist contributes to the convened discussion.
+  // …and the assigned specialist contributes as itself while working the decomposed task.
   await expect(page.getByTestId('agent-message').first()).toContainText('Frontend Engineer', {
     timeout: 20000,
   });

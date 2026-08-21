@@ -303,10 +303,10 @@ Done already: M8 engine, agent scheduling primitives (wait/poll), user-scheduled
 work items, Lead ownership grounding, startup-migration fix.
 
 - [x] **Phase 1 — Agents as first-class app users (tool layer).** Agent-callable tools mapped to
-  the same store/bus the UI uses: `create_work_item`, `move_work_item`, `post_message`,
-  `request_group_chat`, `list_board`. Real adapter registers SDK tools; Fake adapter drives them
-  via markers. Foundation for Phases 2–4.
-- [ ] **Phase 2 — Epic planning & decomposition (M9).** Every user request → an Epic. Lead
+      the same store/bus the UI uses: `create_work_item`, `move_work_item`, `post_message`,
+      `request_group_chat`, `list_board`. Real adapter registers SDK tools; Fake adapter drives them
+      via markers. Foundation for Phases 2–4.
+- [x] **Phase 2 — Epic planning & decomposition (M9).** Every user request → an Epic. Lead
       clarifies (batched) + consults the PM, then decomposes into stream-tagged task cards with
       acceptance criteria + dependencies, and assigns for parallelism.
 - [ ] **Phase 3 — Async task execution + GitService (M10).** `GitService` (init/branch/commit/

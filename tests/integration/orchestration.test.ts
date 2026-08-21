@@ -150,7 +150,7 @@ describe('chat: multi-agent discussion', () => {
     const res = await ctx.app.inject({
       method: 'POST',
       url: `/api/projects/${projectId}/chat`,
-      payload: { content: 'Please build the header component.' },
+      payload: { content: "Let's brainstorm the approach for the header component." },
     });
     expect(res.statusCode).toBe(202);
 
@@ -308,5 +308,65 @@ describe('agents as first-class app users (tool layer)', () => {
         m.message.content.includes('Backend API is ready for review'),
       8000,
     );
+  });
+});
+
+describe('epic planning & decomposition', () => {
+  it('a build request becomes an epic decomposed into assigned stream-tagged tasks', async () => {
+    const { projectId } = await createProject();
+    const feId = await addSpecialist(projectId, 'frontend-engineer');
+    const beId = await addSpecialist(projectId, 'backend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a user login feature with email and password.' },
+    });
+
+    // An epic is opened.
+    const epicMsg = (await ctx.waitFor(
+      (m) => m.type === 'workitem.updated' && m.workItem.kind === 'epic',
+      8000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    const epicId = epicMsg.workItem.id;
+    expect(epicMsg.workItem.title.toLowerCase()).toContain('login');
+
+    // Builder tasks are created as children, assigned, stream-tagged, and worked to review.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.parentId === epicId &&
+        m.workItem.stream === 'frontend' &&
+        m.workItem.status === 'review',
+      8000,
+    );
+
+    const children = ctx.store.listChildTasks(epicId);
+    const streams = children.map((c) => c.stream);
+    expect(streams).toEqual(expect.arrayContaining(['frontend', 'backend', 'qa']));
+    // Builders assigned + auto-run; verifier (qa) waits on the builders.
+    const fe = children.find((c) => c.stream === 'frontend')!;
+    const qa = children.find((c) => c.stream === 'qa')!;
+    expect(fe.assigneeAgentId).toBe(feId);
+    expect(qa.status).toBe('backlog');
+    expect(qa.dependsOn.length).toBeGreaterThanOrEqual(2);
+    expect(qa.dependsOn).toContain(fe.id);
+    expect(beId).toBeTruthy();
+  });
+
+  it('a casual message does not spawn an epic', async () => {
+    const { projectId } = await createProject();
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Thanks, that looks great!' },
+    });
+    await ctx.waitFor((m) => m.type === 'chat.message' && m.message.role === 'agent');
+    // Give any (unexpected) async decomposition a moment, then assert none happened.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(ctx.store.listWorkItems(projectId).some((i) => i.kind === 'epic')).toBe(false);
   });
 });
