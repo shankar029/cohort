@@ -323,7 +323,12 @@ work items, Lead ownership grounding, startup-migration fix.
       filtering, refined multi-author bubbles), **Board epic→task hierarchy** (epic filter bar +
       progress + stream/parent/dependency badges), grouped-by-agent/type **Activity**, and the
       **Pull Requests** page. Focused on Chat/Board/Activity + shell; other pages lightly refreshed.
-- [ ] **Phase 7 — Polish (M13).** Top-tier personas, opt-in live-adapter proof, hardening, docs.
+- [x] **Phase 7 — Polish (M13).** Elevated all 11 specialist personas + Team Lead to
+      principal-level with concrete operating protocols and quality bars (7a); refreshed README +
+      `.env.example` for v2 — epics, worktrees, PR/review, scheduling, scratchpads — and documented
+      the opt-in live-adapter proof (`ATEAM_LIVE=1 npx vitest run tests/live`) (7b); hardened git
+      safety with regression tests locking in the `commitWork` scope guard + always-absolute
+      `worktreeRoot` (7c). 33 unit/integration + 4 E2E green.
 
 ### Incident & recovery (2026-08-21) — in-repo worktree pollution
 
