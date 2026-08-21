@@ -317,7 +317,25 @@ work items, Lead ownership grounding, startup-migration fix.
       in_progress→review→changes_requested until the quality bar passes.
 - [x] **Phase 5 — Agent scratchpads / planning surface.** `agent_notes` store + `write_note` /
       `update_plan` tools; free-form notepad + checklist surfaced on the Agent detail page.
-- [ ] **Phase 6 — UX modernization + UI features (M12 + UX).** Redesign the whole app to a
-      minimalist, aesthetic, modern look & feel (current UI looks dated). Plus: Threads/group-chat
-      panel, grouped-by-task Activity, Epic→Task board hierarchy, PR view, polished multi-author chat.
+- [x] **Phase 6 — UX modernization + UI features (M12 + UX).** Dark-first design-system
+      refresh (indigo accent, refined surfaces/shadows, fadeIn, custom scrollbars, badge/nav-link
+      helpers), shell polish, Chat **Threads rail** (Main + group discussions, per-thread
+      filtering, refined multi-author bubbles), **Board epic→task hierarchy** (epic filter bar +
+      progress + stream/parent/dependency badges), grouped-by-agent/type **Activity**, and the
+      **Pull Requests** page. Focused on Chat/Board/Activity + shell; other pages lightly refreshed.
 - [ ] **Phase 7 — Polish (M13).** Top-tier personas, opt-in live-adapter proof, hardening, docs.
+
+### Incident & recovery (2026-08-21) — in-repo worktree pollution
+
+- **Symptom:** interleaved `ateam@local` “task(…)” commits appeared on `feat/ateam`, and my
+  working changes were being swept into them by the app.
+- **Root cause:** `config.worktreeRoot` could resolve to a **relative** path (`worktrees`) inside
+  the repo cwd (notably under the E2E server’s `ATEAM_DB=:memory:`). `GitService.commitWork` then
+  ran `git add -A` inside this repo, committing the whole tree to `feat/ateam`.
+- **Fix:** `worktreeRoot` is always an **absolute temp path** (`os.tmpdir()/ateam-worktrees`);
+  `GitService` guards that commits only happen inside that root; `.gitignore` excludes `worktrees/`.
+  Verified: after E2E, HEAD is unchanged, no `worktrees/` dir, no stray commits.
+- **History recovery:** because the app had scattered real code across the auto-generated commits,
+  the per-phase boundaries for phases 3–6 were unrecoverable; they were **squashed into one clean,
+  green commit** on top of phase-2. No source was lost (final tree verified). Safety branch
+  `backup-messy-20260821` retained until confirmed deletable.
