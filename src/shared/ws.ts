@@ -27,6 +27,7 @@ export type ServerMessage =
   | { type: 'agent_plan.updated'; projectId: string; agentId: string; plan: string }
   | { type: 'chat.message'; projectId: string; message: ChatMessage }
   | { type: 'chat.delta'; projectId: string; messageId: string; delta: string }
+  | { type: 'chat.deleted'; projectId: string; messageId: string }
   | { type: 'thread.updated'; projectId: string; thread: Thread }
   | { type: 'pull_request.updated'; projectId: string; pr: PullRequest }
   | { type: 'question.updated'; projectId: string; question: Question }

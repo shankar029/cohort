@@ -114,8 +114,13 @@ function applyWs(state: State, message: ServerMessage): State {
           tasksByAgent: { ...b.tasksByAgent, [message.task.agentId]: upsert(list, message.task) },
         };
       }
-      case 'chat.message':
+      case 'chat.message': {
+        // Never let an (empty) placeholder re-broadcast clobber text we've already
+        // streamed/received for the same message.
+        const existing = b.chat.find((m) => m.id === message.message.id);
+        if (existing && existing.content && !message.message.content) return b;
         return { ...b, chat: upsert(b.chat, message.message) };
+      }
       case 'chat.delta':
         return {
           ...b,
@@ -123,6 +128,8 @@ function applyWs(state: State, message: ServerMessage): State {
             m.id === message.messageId ? { ...m, content: m.content + message.delta } : m,
           ),
         };
+      case 'chat.deleted':
+        return { ...b, chat: b.chat.filter((m) => m.id !== message.messageId) };
       case 'question.updated':
         return { ...b, questions: upsert(b.questions, message.question) };
       case 'pull_request.updated':

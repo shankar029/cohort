@@ -365,6 +365,12 @@ describe('epic planning & decomposition', () => {
     const epicId = epicMsg.workItem.id;
     expect(epicMsg.workItem.title.toLowerCase()).toContain('login');
 
+    // The Team Lead posts a clear, user-facing plan summary in the main chat.
+    await ctx.waitFor(
+      (m) => m.type === 'chat.message' && m.message.content.includes('Plan for'),
+      8000,
+    );
+
     // Builder tasks are created as children, assigned, stream-tagged, and worked to review.
     await ctx.waitFor(
       (m) =>

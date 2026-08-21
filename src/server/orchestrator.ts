@@ -80,9 +80,15 @@ class AgentActor {
     this.orch.setStatus(this.agent.id, 'working');
     try {
       const text = await session.ask(prompt, placeholder.id);
-      const reply = text || '(no response)';
-      this.orch.finalizeMessage(placeholder.id, reply);
-      await this.orch.maybeHandleGroupChatRequest(this.agent, reply, workItemId);
+      const reply = text.trim();
+      if (reply) {
+        this.orch.finalizeMessage(placeholder.id, reply);
+        await this.orch.maybeHandleGroupChatRequest(this.agent, reply, workItemId);
+      } else {
+        // Tool-only turn (e.g. the agent acted via app tools): drop the empty
+        // placeholder instead of leaving a dangling "…" / "(no response)" bubble.
+        this.orch.deleteMessage(placeholder.id);
+      }
       return reply;
     } finally {
       this.orch.setStatus(this.agent.id, 'idle');
@@ -141,6 +147,8 @@ class ProjectOrchestrator {
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
   private readonly epicReviewing = new Set<string>();
+  /** Per-message accumulated streamed text, so deltas survive a re-sync. */
+  private readonly streamBuffers = new Map<string, string>();
   private static readonly MAX_REVIEW_ITER = 3;
 
   constructor(
@@ -195,6 +203,9 @@ class ProjectOrchestrator {
     const pid = this.projectId;
     switch (e.kind) {
       case 'delta':
+        // Persist the growing text so a reconnect/re-fetch doesn't lose streamed
+        // content (the store otherwise only holds the empty placeholder until final).
+        this.appendDelta(e.messageId, e.delta);
         bus.publish({ type: 'chat.delta', projectId: pid, messageId: e.messageId, delta: e.delta });
         break;
       case 'message':
@@ -247,6 +258,7 @@ class ProjectOrchestrator {
   }
 
   finalizeMessage(messageId: string, text: string): void {
+    this.streamBuffers.delete(messageId);
     const updated = this.deps.store.updateChat(messageId, text);
     if (updated) {
       this.deps.bus.publish({ type: 'chat.message', projectId: this.projectId, message: updated });
@@ -261,6 +273,20 @@ class ProjectOrchestrator {
         null,
       );
     }
+  }
+
+  /** Accumulate streamed deltas into the persisted message so re-syncs keep the text. */
+  private appendDelta(messageId: string, delta: string): void {
+    const next = (this.streamBuffers.get(messageId) ?? '') + delta;
+    this.streamBuffers.set(messageId, next);
+    this.deps.store.updateChat(messageId, next);
+  }
+
+  /** Remove a message entirely (e.g. an empty placeholder from a tool-only turn). */
+  deleteMessage(messageId: string): void {
+    this.streamBuffers.delete(messageId);
+    this.deps.store.deleteChat(messageId);
+    this.deps.bus.publish({ type: 'chat.deleted', projectId: this.projectId, messageId });
   }
 
   /* --------------------------------------------------------- user chat */
@@ -449,6 +475,21 @@ class ProjectOrchestrator {
         task.id,
       );
     }
+
+    // 5. Post a clear, user-facing plan summary in the main chat so the user knows
+    //    exactly what was decided and what happens next.
+    const streamList = builders.map((b) => b.name).join(', ') || 'the team';
+    const verifyNote = verifiers.length
+      ? `${verifiers.map((v) => v.displayName).join(', ')} will verify against the quality bar, then I raise a PR and merge. `
+      : 'I raise a PR and merge once the work meets the quality bar. ';
+    const summary =
+      `📋 Plan for “${epic.title}”\n\n` +
+      `${goal}.\n\n` +
+      `I've broken this into ${builderTaskIds.length} build task(s) across ${streamList} — ` +
+      `assigned and starting now in parallel. ${verifyNote}` +
+      `Follow progress on the Board; I'll keep you posted here.`;
+    this.postMessage(main.id, lead, summary);
+
     return epic;
   }
 

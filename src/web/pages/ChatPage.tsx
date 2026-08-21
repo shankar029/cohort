@@ -62,6 +62,8 @@ export function ChatPage(): React.JSX.Element {
   const agentName = (id: string | null): string | undefined =>
     id ? bundle.agents.find((a) => a.id === id)?.displayName : undefined;
 
+  const working = bundle.agents.filter((a) => a.status === 'working');
+
   return (
     <div className="flex h-full">
       {/* Threads rail */}
@@ -116,6 +118,22 @@ export function ChatPage(): React.JSX.Element {
               ? "Talk to your Team Lead. The whole team's discussions and decisions show up here."
               : 'A team discussion — watch specialists brainstorm and align.'}
           </p>
+          {working.length > 0 && (
+            <div
+              className="mt-2 flex items-center gap-2 text-xs text-slate-400"
+              data-testid="team-working"
+            >
+              <span className="flex gap-1" aria-hidden="true">
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.2s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.1s]" />
+                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working" />
+              </span>
+              <span>
+                {working.map((a) => a.displayName).join(', ')} {working.length === 1 ? 'is' : 'are'}{' '}
+                working…
+              </span>
+            </div>
+          )}
         </header>
 
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-auto p-6">
@@ -161,7 +179,7 @@ export function ChatPage(): React.JSX.Element {
                       {isLead && <span className="ml-1 text-slate-500">· Team Lead</span>}
                     </div>
                   )}
-                  {m.content || <span className="text-slate-500">…</span>}
+                  {m.content ? m.content : <WorkingIndicator status={author?.status} />}
                 </div>
               </div>
             );
@@ -212,6 +230,27 @@ export function ChatPage(): React.JSX.Element {
         </form>
       </div>
     </div>
+  );
+}
+
+function WorkingIndicator({ status }: { status?: string }): React.JSX.Element {
+  const label =
+    status === 'needs_input'
+      ? 'waiting for input'
+      : status === 'blocked'
+        ? 'blocked'
+        : status === 'idle'
+          ? 'queued…'
+          : 'working…';
+  return (
+    <span className="inline-flex items-center gap-2 text-slate-400" data-testid="working-indicator">
+      <span className="flex gap-1" aria-hidden="true">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-0.2s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-0.1s]" />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500" />
+      </span>
+      <span className="text-xs italic">{label}</span>
+    </span>
   );
 }
 

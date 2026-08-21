@@ -825,6 +825,10 @@ export class Store {
     return r ? toChat(r as ChatRow) : undefined;
   }
 
+  deleteChat(messageId: string): void {
+    this.db.prepare(`DELETE FROM chat_messages WHERE id=?`).run(messageId);
+  }
+
   listChat(projectId: string): ChatMessage[] {
     return this.db
       .prepare(`SELECT * FROM chat_messages WHERE project_id=? ORDER BY created_at ASC`)
