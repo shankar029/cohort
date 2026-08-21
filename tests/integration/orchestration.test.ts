@@ -460,4 +460,32 @@ describe('Team Lead ownership', () => {
     const fe = ctx.store.listAgents(projectId).find((a) => a.name === 'frontend')!;
     expect(ctx.store.getWorkItem(itemId)?.assigneeAgentId).toBe(fe.id);
   });
+
+  it('the Lead posts a periodic status heartbeat while an epic is active', async () => {
+    const prevTick = process.env.ATEAM_LEAD_TICK_MS;
+    const prevBeat = process.env.ATEAM_STATUS_HEARTBEAT_MS;
+    process.env.ATEAM_LEAD_TICK_MS = '20';
+    process.env.ATEAM_STATUS_HEARTBEAT_MS = '1';
+    try {
+      const { projectId } = await createProject();
+      await addSpecialist(projectId, 'frontend-engineer');
+
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/chat`,
+        payload: { content: 'Please build a settings page.' },
+      });
+
+      const status = (await ctx.waitFor(
+        (m) => m.type === 'chat.message' && /Status update/.test(m.message.content),
+        8000,
+      )) as { type: 'chat.message'; message: { content: string } };
+      expect(status.message.content).toMatch(/Status update/);
+    } finally {
+      if (prevTick === undefined) delete process.env.ATEAM_LEAD_TICK_MS;
+      else process.env.ATEAM_LEAD_TICK_MS = prevTick;
+      if (prevBeat === undefined) delete process.env.ATEAM_STATUS_HEARTBEAT_MS;
+      else process.env.ATEAM_STATUS_HEARTBEAT_MS = prevBeat;
+    }
+  });
 });

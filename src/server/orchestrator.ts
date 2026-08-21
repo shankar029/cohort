@@ -154,12 +154,16 @@ class ProjectOrchestrator {
   private static readonly MAX_REVIEW_ITER = 3;
 
   /** Team Lead proactive manager loop. */
-  private static readonly LEAD_TICK_MS = Number(process.env.ATEAM_LEAD_TICK_MS ?? 15000);
+  private readonly leadTickMs = Number(process.env.ATEAM_LEAD_TICK_MS ?? 15000);
   private leadStarted = false;
   private disposed = false;
   private leadPoke?: Cancel;
   /** agentId -> last time the Lead nudged them, so guidance stays low-noise. */
   private readonly leadNudges = new Map<string, number>();
+  /** Throttle + dedupe the Lead's status heartbeat posted to main chat. */
+  private readonly statusHeartbeatMs = Number(process.env.ATEAM_STATUS_HEARTBEAT_MS ?? 90000);
+  private lastStatusAt = 0;
+  private lastStatusSig = '';
   /** reviewerAgentId -> the PR they are actively reviewing (for add_review_comment). */
   private readonly reviewContext = new Map<string, { epicId: string; prId: string }>();
 
@@ -693,12 +697,13 @@ class ProjectOrchestrator {
       if (this.disposed) return;
       try {
         this.leadTick();
+        this.postStatusHeartbeat();
       } catch {
         /* a manager tick must never crash the process */
       }
-      this.deps.scheduler.after(ProjectOrchestrator.LEAD_TICK_MS, tick, this.projectId);
+      this.deps.scheduler.after(this.leadTickMs, tick, this.projectId);
     };
-    this.deps.scheduler.after(ProjectOrchestrator.LEAD_TICK_MS, tick, this.projectId);
+    this.deps.scheduler.after(this.leadTickMs, tick, this.projectId);
   }
 
   /** Debounced immediate Lead pass, e.g. right after an unassigned card appears. */
@@ -803,6 +808,45 @@ class ProjectOrchestrator {
           `tried, and I’ll unblock you or pull the right people into a quick discussion.`,
       );
     }
+  }
+
+  /**
+   * While epics are in flight, the Team Lead posts a concise, throttled status
+   * to main chat so ownership is visible: progress per active epic, who's on
+   * what, and what's next. Deduped by signature so an unchanged board stays
+   * quiet, and rate-limited by STATUS_HEARTBEAT_MS.
+   */
+  private postStatusHeartbeat(): void {
+    const now = Date.now();
+    if (now - this.lastStatusAt < this.statusHeartbeatMs) return;
+    const items = this.deps.store.listWorkItems(this.projectId);
+    const epics = items.filter((i) => i.kind === 'epic' && i.status === 'in_progress');
+    if (epics.length === 0) return;
+    const nameById = new Map(this.deps.store.listAgents(this.projectId).map((a) => [a.id, a]));
+
+    const lines: string[] = [];
+    for (const epic of epics) {
+      const tasks = items.filter((i) => i.parentId === epic.id);
+      const done = tasks.filter((t) => t.status === 'done' || t.status === 'review').length;
+      const inProgress = tasks.filter((t) => t.status === 'in_progress');
+      const todo = tasks.filter((t) => t.status === 'todo' || t.status === 'backlog');
+      lines.push(
+        `**${epic.title}** — ${epic.progress ?? 0}% (${done}/${tasks.length} tasks landed)`,
+      );
+      for (const t of inProgress) {
+        const who = t.assigneeAgentId ? nameById.get(t.assigneeAgentId)?.displayName : null;
+        lines.push(`  • ${who ? `${who}: ` : ''}${t.title}`);
+      }
+      if (todo.length > 0) lines.push(`  • next up: ${todo.length} task(s) queued`);
+    }
+    const body = lines.join('\n');
+
+    // Skip if nothing meaningful changed since the last heartbeat.
+    const sig = body;
+    if (sig === this.lastStatusSig) return;
+    this.lastStatusAt = now;
+    this.lastStatusSig = sig;
+    this.postMessage(this.ensureMainThread().id, this.lead(), `📋 **Status update**\n${body}`);
   }
 
   /**

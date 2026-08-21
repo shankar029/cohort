@@ -51,7 +51,7 @@
 - [x] C1. `LeadManager` in orchestrator: event-driven (debounced on board/agent events) + periodic heartbeat via SchedulerService.
 - [x] C2. Deterministic assignment: assign unassigned `todo` items with satisfied deps to best-matching agent (stream/skills); requeue via `onItemAssigned`. This is how review fix-tasks and user-added cards get picked up — the **Lead** assigns, agents never self-pick.
 - [x] C3. Monitoring/guidance: detect blocked/stalled/needs_input agents; Lead posts concise guidance (throttled; deterministic/no-op in fake mode unless triggered). Call a group discussion on cross-stream conflict or repeated review failures.
-- [~] C4. Ownership heartbeat: expressed via assignment + blocked-agent guidance events (no chat spam by default); revisit if more visible ownership desired.
+- [x] C4. Ownership heartbeat: while epics are active the Lead posts a throttled, deduped status update to main chat (progress per epic, who's on what, what's next). Tunable via ATEAM_STATUS_HEARTBEAT_MS.
 
 ### D. PR review with comments (Architect reviews)
 
