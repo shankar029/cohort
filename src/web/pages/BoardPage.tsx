@@ -25,9 +25,16 @@ export function BoardPage(): React.JSX.Element {
   const bundle = useBundle(projectId);
   const [showCreate, setShowCreate] = useState<WorkItemStatus | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
-  const [epicFilter, setEpicFilter] = useState<string>('all');
+  const [epicFilter, setEpicFilter] = useState<string>(
+    () => (projectId && localStorage.getItem(`ateam.boardFilter.${projectId}`)) || 'all',
+  );
 
   const epics = bundle.workItems.filter((w) => w.kind === 'epic');
+
+  const selectFilter = (value: string): void => {
+    setEpicFilter(value);
+    if (projectId) localStorage.setItem(`ateam.boardFilter.${projectId}`, value);
+  };
 
   const onDrop = (status: WorkItemStatus): void => {
     if (dragId && projectId) void updateWorkItem(projectId, dragId, { status });
@@ -43,8 +50,7 @@ export function BoardPage(): React.JSX.Element {
         <div>
           <h1 className="text-lg font-semibold text-slate-100">Board</h1>
           <p className="text-sm text-slate-500">
-            Create work items and assign them to an agent — assigned agents pick them up
-            automatically.
+            Create work items — the Team Lead assigns and coordinates them across the team.
           </p>
         </div>
         <button
@@ -57,29 +63,30 @@ export function BoardPage(): React.JSX.Element {
       </header>
 
       {epics.length > 0 && (
-        <div
-          className="flex items-center gap-2 overflow-x-auto border-b border-surface-border px-6 py-3"
-          data-testid="epic-filter"
-        >
-          <EpicChip
-            label="All work"
-            active={epicFilter === 'all'}
-            onClick={() => setEpicFilter('all')}
-          />
-          {epics.map((epic) => {
-            const children = bundle.workItems.filter((w) => w.parentId === epic.id);
-            const done = children.filter((c) => c.status === 'done').length;
-            return (
-              <EpicChip
-                key={epic.id}
-                label={epic.title}
-                progress={children.length ? `${done}/${children.length}` : undefined}
-                branch={epic.branch}
-                active={epicFilter === epic.id}
-                onClick={() => setEpicFilter(epic.id)}
-              />
-            );
-          })}
+        <div className="flex items-center gap-2 border-b border-surface-border px-6 py-3">
+          <label htmlFor="epic-filter" className="text-xs font-medium text-slate-400">
+            Filter by epic
+          </label>
+          <select
+            id="epic-filter"
+            data-testid="epic-filter"
+            className="input !min-h-0 max-w-md py-1 text-sm"
+            value={epicFilter}
+            onChange={(e) => selectFilter(e.target.value)}
+          >
+            <option value="all">All work</option>
+            {epics.map((epic) => {
+              const children = bundle.workItems.filter((w) => w.parentId === epic.id);
+              const done = children.filter((c) => c.status === 'done').length;
+              const suffix = children.length ? ` (${done}/${children.length})` : '';
+              return (
+                <option key={epic.id} value={epic.id}>
+                  {epic.title}
+                  {suffix}
+                </option>
+              );
+            })}
+          </select>
         </div>
       )}
 
@@ -125,42 +132,6 @@ export function BoardPage(): React.JSX.Element {
 
       {showCreate && <CreateItemModal status={showCreate} onClose={() => setShowCreate(null)} />}
     </div>
-  );
-}
-
-function EpicChip({
-  label,
-  progress,
-  branch,
-  active,
-  onClick,
-}: {
-  label: string;
-  progress?: string;
-  branch?: string | null;
-  active: boolean;
-  onClick: () => void;
-}): React.JSX.Element {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex shrink-0 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-        active
-          ? 'border-accent-500/60 bg-accent-500/15 text-accent-400'
-          : 'border-surface-border bg-surface-1 text-slate-400 hover:bg-surface-2'
-      }`}
-      data-testid="epic-chip"
-    >
-      <span className="max-w-[16rem] truncate font-medium">{label}</span>
-      {progress && (
-        <span className="rounded-full bg-surface-3 px-1.5 py-0.5 text-slate-300">{progress}</span>
-      )}
-      {branch && (
-        <span className="font-mono text-[0.65rem] text-slate-600">
-          ⌥ {branch.replace('ateam/', '')}
-        </span>
-      )}
-    </button>
   );
 }
 
@@ -385,6 +356,15 @@ function WorkItemDetailModal({
                 ))}
               </select>
             </label>
+          )}
+          {item.kind === 'epic' && (
+            <div className="col-span-2">
+              <span className="label">Owner</span>
+              <p className="text-sm text-slate-300">
+                👑 {assignee?.displayName ?? 'Team Lead'}{' '}
+                <span className="text-xs text-slate-500">— epics are owned by the Team Lead</span>
+              </p>
+            </div>
           )}
         </div>
 
