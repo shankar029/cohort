@@ -65,6 +65,11 @@ export function ChatPage(): React.JSX.Element {
 
   const working = bundle.agents.filter((a) => a.status === 'working');
 
+  // Only messages with real content render as bubbles. In-flight agents (empty
+  // placeholders that stream in) are shown as ONE typing row at the end, instead
+  // of a pile of “…” bubbles.
+  const visible = messages.filter((m) => m.role === 'user' || !!(m.content && m.content.trim()));
+
   return (
     <div className="flex h-full">
       {/* Threads rail */}
@@ -119,22 +124,6 @@ export function ChatPage(): React.JSX.Element {
               ? "Talk to your Team Lead. The whole team's discussions and decisions show up here."
               : 'A team discussion — watch specialists brainstorm and align.'}
           </p>
-          {working.length > 0 && (
-            <div
-              className="mt-2 flex items-center gap-2 text-xs text-slate-400"
-              data-testid="team-working"
-            >
-              <span className="flex gap-1" aria-hidden="true">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.2s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.1s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working" />
-              </span>
-              <span>
-                {working.map((a) => a.displayName).join(', ')} {working.length === 1 ? 'is' : 'are'}{' '}
-                working…
-              </span>
-            </div>
-          )}
         </header>
 
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-auto p-6">
@@ -145,7 +134,7 @@ export function ChatPage(): React.JSX.Element {
             />
           )}
 
-          {messages.map((m) => {
+          {visible.map((m) => {
             const author = m.authorAgentId
               ? bundle.agents.find((a) => a.id === m.authorAgentId)
               : undefined;
@@ -180,19 +169,33 @@ export function ChatPage(): React.JSX.Element {
                       {isLead && <span className="ml-1 text-slate-500">· Team Lead</span>}
                     </div>
                   )}
-                  {m.content ? (
-                    isUser ? (
-                      m.content
-                    ) : (
-                      <Markdown content={m.content} />
-                    )
-                  ) : (
-                    <WorkingIndicator status={author?.status} />
-                  )}
+                  {isUser ? m.content : <Markdown content={m.content} />}
                 </div>
               </div>
             );
           })}
+
+          {working.length > 0 && (
+            <div className="flex animate-fadeIn items-center gap-2.5" data-testid="team-working">
+              <div className="flex -space-x-1.5">
+                {working.slice(0, 4).map((a) => (
+                  <Avatar key={a.id} emoji={a.emoji} color={a.color} size={30} />
+                ))}
+              </div>
+              <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-surface-border bg-surface-1 px-4 py-2.5">
+                <span className="flex gap-1" aria-hidden="true">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.2s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.1s]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working" />
+                </span>
+                <span className="text-xs text-slate-400">
+                  {working.length <= 2
+                    ? `${working.map((a) => a.displayName).join(' and ')} ${working.length === 1 ? 'is' : 'are'} working…`
+                    : `${working.length} teammates are working…`}
+                </span>
+              </div>
+            </div>
+          )}
 
           {onMain &&
             pending.map((q) => (
@@ -239,27 +242,6 @@ export function ChatPage(): React.JSX.Element {
         </form>
       </div>
     </div>
-  );
-}
-
-function WorkingIndicator({ status }: { status?: string }): React.JSX.Element {
-  const label =
-    status === 'needs_input'
-      ? 'waiting for input'
-      : status === 'blocked'
-        ? 'blocked'
-        : status === 'idle'
-          ? 'queued…'
-          : 'working…';
-  return (
-    <span className="inline-flex items-center gap-2 text-slate-400" data-testid="working-indicator">
-      <span className="flex gap-1" aria-hidden="true">
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-0.2s]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500 [animation-delay:-0.1s]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500" />
-      </span>
-      <span className="text-xs italic">{label}</span>
-    </span>
   );
 }
 
