@@ -1,5 +1,17 @@
 # ateam — Capability Evaluation Report
 
+> **RESOLUTION (all findings fixed + validated):** every SEV below was fixed and the
+> delivery pipeline was re-validated end-to-end with the **real** Copilot SDK: the Team
+> Lead orchestrates only, a specialist writes real code in its isolated epic clone, it is
+> committed to the epic branch, QA verifies, the PR merges, and the file lands on `master`.
+> Commits: `d81e075` (SEV-1..4), `c78433b` (clone isolation + Lead-orchestrates-only +
+> clone-write permission + board is system-owned), `9f4a707` (regression tests),
+> `842a5a1` (chat UX). Root cause of the orphaned writes was two-fold: (a) git *worktrees*
+> are incompatible with the SDK's workspace-root resolution (a worktree's `.git` file
+> points back to the main repo) — replaced with isolated local **clones**; and (b) the
+> **Team Lead was implementing code itself** in `repoDir` — now hard-blocked from all
+> file writes. See `TESTING-PLAN.md` for the fix map.
+
 **Date:** 2026-08-21
 **Setup:** isolated real-SDK instance (port 4455, own DB), scratch git repo
 `C:\Code\Projects\ateam-eval-urlshortener`, full 8-member team (Team Lead, PM,

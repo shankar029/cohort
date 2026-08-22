@@ -64,3 +64,31 @@ fixes in `EVAL-REPORT.md`.
 
 - 2026-08-21 — run both halves in **isolated instances**; never touch the live server or
   the user's Chess project.
+
+## Fixes applied (Phase 1–3) — all green, one commit per phase
+
+**Phase 1 — delivery correctness (`d81e075`, `c78433b`), validated with the real SDK:**
+- SEV-1 worktree/cwd: agents wrote to `repoDir` not the epic checkout. Two root causes:
+  - git worktrees confuse the SDK's workspace-root resolution (a worktree's `.git` is a
+    file pointing to the main repo) → replaced per-epic worktrees with isolated local
+    **clones** (own `.git`); `mergeEpic` fetches the epic branch from the clone first.
+  - the **Team Lead implemented code itself** in `repoDir` → the Lead is hard-blocked from
+    all non-read permission (no writes / mutating shell) and its prompt forbids implementing.
+  - specialists' clone writes were rejected by auto-approve (clone is outside `repoDir`) →
+    permission now approves writes in `repoDir` OR any managed clone under the worktree root.
+- SEV-2 duplicate decomposition + agent-spawned parallel epics → the board is
+  **system-owned**: `create_work_item`/`move_work_item` removed from agents; decomposition +
+  Lead assignment + review fix-tasks are the only task sources. Decomposition is idempotent.
+- SEV-3 false completion → a build task only reaches review/done if it produced real
+  committed changes (diff excluding `.ateam/`); empty builds get a bounded retry then
+  escalate to the user for guidance.
+- SEV-3b sequencing → docs/devops depend on the core build; verifiers wait on all builds.
+- SEV-4 → the epic clone is reclaimed after merge.
+
+**Phase 2 — regression suite:** `delivery.test.ts` (SEV-1..4), `regression.test.ts`
+(multi-project isolation, progress roll-up, comment-gated merge), `git.test.ts` updated to
+the clone model, `coverage.spec.ts` (9 full-feature browser scenarios). Total **43
+unit/integration + 13 E2E**.
+
+**Phase 3 — UX (`842a5a1`):** chat no longer piles up empty “…” bubbles; in-flight agents
+collapse into one chat-native typing row.
