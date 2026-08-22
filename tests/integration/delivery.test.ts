@@ -1,0 +1,176 @@
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createTestApp, rmDir, type TestApp } from '../helpers/testApp.js';
+import type { WorkItem } from '../../src/shared/index.js';
+
+let ctx: TestApp;
+let repoDir: string;
+
+beforeEach(() => {
+  repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-delrepo-'));
+  ctx = createTestApp();
+});
+
+afterEach(async () => {
+  await ctx.close();
+  rmDir(repoDir);
+});
+
+async function createProject(name: string): Promise<string> {
+  const res = await ctx.app.inject({
+    method: 'POST',
+    url: '/api/projects',
+    payload: { name, repoDir },
+  });
+  return (res.json() as { project: { id: string } }).project.id;
+}
+
+async function addSpecialist(
+  projectId: string,
+  catalogId: string,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  await ctx.app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/agents`,
+    payload: { catalogId, ...extra },
+  });
+}
+
+describe('delivery correctness (worktree/cwd, empty-build gate, sequencing, GC)', () => {
+  it('commits the agents’ real files to the epic branch and merges them (SEV-1)', async () => {
+    const projectId = await createProject('Delivery');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    // The epic merges once the work meets the bar.
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 15000);
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.kind === 'epic' && m.workItem.status === 'done',
+      15000,
+    );
+
+    // The merged master tree contains REAL deliverable files the agents wrote in
+    // the worktree — not just ateam's own .ateam bookkeeping.
+    const tree = execFileSync('git', ['ls-tree', '-r', '--name-only', 'HEAD'], {
+      cwd: repoDir,
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const deliverables = tree.filter((f) => f.startsWith('deliverables/'));
+    expect(deliverables.length).toBeGreaterThan(0);
+    expect(tree.some((f) => f.startsWith('.ateam/'))).toBe(true);
+  });
+
+  it('does NOT complete a build task that produces no code — it escalates (SEV-3)', async () => {
+    const projectId = await createProject('Empty Build');
+    // A builder whose persona makes it narrate but never write files.
+    await addSpecialist(projectId, 'backend-engineer', {
+      name: 'backend',
+      prompt: 'You are the Backend Engineer. [[NOOP]] You describe work but write no files.',
+    });
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build an orders API.' },
+    });
+
+    // The empty build is surfaced to the user as a question, not silently "done".
+    const q = await ctx.waitFor(
+      (m) => m.type === 'question.updated' && /produced no code/i.test(m.question.question),
+      15000,
+    );
+    expect(q.type === 'question.updated' && q.question.question).toMatch(/produced no code/i);
+
+    // The backend task never reached review/done.
+    const items = ctx.store.listWorkItems(projectId);
+    const backendTask = items.find((w) => w.kind === 'task' && w.stream === 'backend');
+    expect(backendTask).toBeTruthy();
+    expect(['review', 'done']).not.toContain(backendTask!.status);
+  });
+
+  it('sequences docs/devops to wait on the core build (SEV-3b)', async () => {
+    const projectId = await createProject('Sequencing');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'docs-writer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a dashboard.' },
+    });
+
+    // Wait until the epic + its tasks exist.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.kind === 'task' && m.workItem.stream === 'docs',
+      15000,
+    );
+    const items = ctx.store.listWorkItems(projectId);
+    const docs = items.find((w) => w.stream === 'docs') as WorkItem;
+    const frontend = items.find((w) => w.stream === 'frontend') as WorkItem;
+    expect(docs).toBeTruthy();
+    // Docs depends on the frontend build task (does not run in parallel with it).
+    expect(docs.dependsOn).toContain(frontend.id);
+  });
+
+  it('has no duplicate stream tasks under an epic (SEV-2 idempotency)', async () => {
+    const projectId = await createProject('No Dupes');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a settings screen.' },
+    });
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.kind === 'task' &&
+        m.workItem.stream === 'backend',
+      15000,
+    );
+    const tasks = ctx.store.listWorkItems(projectId).filter((w) => w.kind === 'task');
+    const streams = tasks.map((t) => t.stream);
+    const unique = new Set(streams);
+    expect(streams.length).toBe(unique.size); // no stream appears twice
+  });
+
+  it('reclaims the epic worktree after merge (SEV-4 GC)', async () => {
+    const projectId = await createProject('GC');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a search box.' },
+    });
+
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 15000);
+    // Give the async post-merge cleanup a moment.
+    await new Promise((r) => setTimeout(r, 300));
+
+    const projectWtDir = path.join(ctx.worktreeRoot, projectId);
+    // Either the whole project worktree dir is gone, or no epic worktree remains.
+    const remaining = fs.existsSync(projectWtDir)
+      ? fs.readdirSync(projectWtDir).filter((d) => d.startsWith('wi_'))
+      : [];
+    expect(remaining.length).toBe(0);
+  });
+});

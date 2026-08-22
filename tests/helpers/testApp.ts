@@ -17,6 +17,8 @@ export interface TestApp {
   bus: Bus;
   orchestrators: OrchestratorManager;
   messages: ServerMessage[];
+  /** Root under which per-epic git worktrees are created (for assertions/GC checks). */
+  worktreeRoot: string;
   /** Resolve once a bus message matching the predicate is published. */
   waitFor: (predicate: (m: ServerMessage) => boolean, timeoutMs?: number) => Promise<ServerMessage>;
   close: () => Promise<void>;
@@ -81,6 +83,7 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
     bus,
     orchestrators,
     messages,
+    worktreeRoot,
     waitFor,
     close: async () => {
       await orchestrators.shutdown();

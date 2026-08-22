@@ -1,4 +1,6 @@
 import type { AgentSession, AgentSessionConfig, CopilotAdapter, SessionEvent } from './adapter.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
@@ -16,6 +18,7 @@ const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
  *   [[NOTE: text]]       → the agent appends a note to its scratchpad
  *   [[PLAN: text]]       → the agent updates its living plan
  *   [[REVIEW: iteration=N]] → reviewer verdict: request changes on iter 1, approve after
+ *   [[NOOP]]             → the agent narrates but writes no files (empty build)
  */
 class FakeAgentSession implements AgentSession {
   constructor(private readonly config: AgentSessionConfig) {}
@@ -74,6 +77,27 @@ class FakeAgentSession implements AgentSession {
         onEvent({ kind: 'tool_call', toolName: 'edit_file', detail: { file: 'src/example.ts' } });
         await sleep(TICK);
         onEvent({ kind: 'tool_result', toolName: 'edit_file', detail: { ok: true } });
+      }
+    }
+
+    // Faithful build behavior: when the Lead assigns a task, a real agent writes
+    // real files into its working directory. Do the same so the orchestrator's
+    // "did this task produce deliverable changes?" gate is exercised for real.
+    // `[[NOOP]]` (in prompt or persona) simulates an agent that narrates but
+    // produces nothing, so the empty-build repair/escalation path is testable.
+    if (
+      /assigned you this task/i.test(prompt) &&
+      !/\[\[NOOP\]\]/.test(prompt + this.config.persona)
+    ) {
+      try {
+        const safeAgent = this.config.agentName.replace(/[^a-z0-9_-]/gi, '') || 'agent';
+        const rel = path.join('deliverables', `${safeAgent}-${messageId}.md`);
+        const abs = path.join(this.config.workingDirectory, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, `# ${this.config.displayName} deliverable\n\n${summarize(prompt)}\n`);
+        onEvent({ kind: 'tool_call', toolName: 'edit_file', detail: { file: rel } });
+      } catch {
+        /* best-effort: cwd may not exist for non-epic asks */
       }
     }
 

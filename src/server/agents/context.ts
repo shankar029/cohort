@@ -62,11 +62,24 @@ export interface GroundingInput {
   project: Project;
   self: Agent;
   team: Agent[];
+  /**
+   * The agent's ACTUAL working directory for this session. For epic work this is
+   * the isolated git worktree, NOT the project checkout, so file paths must
+   * resolve here or the changes never land on the epic branch.
+   */
+  workingDirectory?: string;
 }
 
-export function buildSystemPrompt({ project, self, team }: GroundingInput): string {
-  const stack = detectStack(project.repoDir);
-  const entries = topLevel(project.repoDir);
+export function buildSystemPrompt({
+  project,
+  self,
+  team,
+  workingDirectory,
+}: GroundingInput): string {
+  const cwd = workingDirectory ?? project.repoDir;
+  const onWorktree = cwd !== project.repoDir;
+  const stack = detectStack(cwd);
+  const entries = topLevel(cwd);
   const roster = team
     .map((a) => {
       const me = a.id === self.id ? '  ← YOU' : '';
@@ -80,14 +93,21 @@ export function buildSystemPrompt({ project, self, team }: GroundingInput): stri
   return `# Environment
 You are \`${self.name}\` (${self.displayName}), an autonomous AI agent on **ateam** — a team of
 specialist agents that collaborate to deliver software. You have your OWN Copilot session with a
-workspace scoped to the project directory: you can read files, and (when permitted) write files and
+workspace scoped to your working directory: you can read files, and (when permitted) write files and
 run shell commands there. You are ${isLead ? 'the **Team Lead**' : `the **${self.displayName}**`}.
 
 # Project
 - Name: ${project.name}
-- Repository (your working directory): ${project.repoDir}
+- **Working directory (all your file paths resolve here): ${cwd}**
 - Detected stack: ${stack.length ? stack.join(', ') : 'unknown (inspect the repo to learn it)'}
 - Top-level entries: ${entries.length ? entries.join(', ') : '(empty repo)'}
+
+> IMPORTANT: create and edit files INSIDE your working directory using RELATIVE paths (e.g.
+> \`src/app.js\`). Your file edits and your shell commands share this exact directory.${
+    onWorktree
+      ? ' You are on an ISOLATED git worktree/branch: if you write to any other path (including the\n> main project checkout) your work is lost and never reaches the pull request. Never `cd` away from here.'
+      : ''
+  }
 
 # Your team
 ${roster || '- (no teammates yet)'}

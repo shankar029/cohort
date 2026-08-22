@@ -126,6 +126,29 @@ export class GitService {
     return { committed: true, hash };
   }
 
+  /**
+   * Whether the worktree has real, deliverable changes — i.e. any modified path
+   * OUTSIDE ateam's own bookkeeping (`.ateam/`). Used to reject "empty" build
+   * tasks where the agent narrated but produced no code.
+   */
+  async hasRealChanges(worktreePath: string): Promise<boolean> {
+    const abs = path.resolve(worktreePath);
+    if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot) return false;
+    const status = await this.run(['status', '--porcelain'], worktreePath);
+    return status.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .some((l) => {
+        // porcelain lines look like "XY path" or "XY old -> new"; take the path.
+        const p = l
+          .replace(/^..\s+/, '')
+          .replace(/^.*->\s*/, '')
+          .replace(/^"|"$/g, '');
+        return p.length > 0 && !p.startsWith('.ateam/') && p !== '.ateam';
+      });
+  }
+
   async currentBranch(dir: string): Promise<string> {
     return (await this.run(['rev-parse', '--abbrev-ref', 'HEAD'], dir)).stdout.trim();
   }

@@ -105,7 +105,12 @@ class AgentActor {
       project.repoDir,
       project.settings.extraSkillRoots,
     );
-    const persona = buildSystemPrompt({ project, self: this.agent, team });
+    const persona = buildSystemPrompt({
+      project,
+      self: this.agent,
+      team,
+      workingDirectory: cwd,
+    });
     const session = await this.orch.deps.adapter.createAgentSession({
       projectId: project.id,
       agentId: this.agent.id,
@@ -465,52 +470,60 @@ class ProjectOrchestrator {
       epic.id,
     );
 
-    // 4. Decompose into stream-tagged task cards. Builders run in parallel now;
-    //    verifiers (QA/review/security) wait on the build tasks (dependency-gated in Phase 3).
+    // 4. Decompose into stream-tagged task cards. Core builders run in parallel;
+    //    docs/devops wait on the core build; verifiers (QA/review/security) wait on
+    //    everything. Decomposition is IDEMPOTENT: if the Lead/PM/Architect already
+    //    created a task for a stream during planning, we reuse it instead of adding
+    //    a duplicate wave.
     const verifiers = specs.filter((s) => /^(qa|reviewer|security)$/.test(s.name));
-    const builders = specs.filter(
+    const allBuilders = specs.filter(
       (s) => s.name !== 'pm' && s.name !== 'architect' && !verifiers.includes(s),
     );
+    // docs/devops depend on the code the other builders produce.
+    const postStreams = new Set(['docs', 'devops']);
+    const coreBuilders = allBuilders.filter((s) => !postStreams.has(s.name));
+    const postBuilders = allBuilders.filter((s) => postStreams.has(s.name));
     const goal = shortGoal(content);
-    const builderTaskIds: string[] = [];
-    for (const s of builders) {
+
+    // Tasks already on the board for this epic (e.g. created by the Lead/PM/
+    // Architect via create_work_item during planning), indexed by stream.
+    const existingByStream = new Map<string, string>();
+    for (const c of this.deps.store.listChildTasks(epic.id)) {
+      if (c.stream && !existingByStream.has(c.stream)) existingByStream.set(c.stream, c.id);
+    }
+
+    const makeTask = (s: Agent, opts: { verify?: boolean; dependsOn?: string[] }): string => {
+      // Reuse an existing same-stream task rather than duplicating it.
+      const existing = existingByStream.get(s.name);
+      if (existing) {
+        if (opts.dependsOn?.length) {
+          const updated = this.deps.store.updateWorkItem(existing, { dependsOn: opts.dependsOn });
+          if (updated)
+            this.deps.bus.publish({
+              type: 'workitem.updated',
+              projectId: this.projectId,
+              workItem: updated,
+            });
+        }
+        if (!opts.verify) void this.onItemAssigned(existing).catch(() => undefined);
+        return existing;
+      }
       const task = this.deps.store.createWorkItem({
         projectId: this.projectId,
         kind: 'task',
         parentId: epic.id,
-        title: `[${s.name}] ${goal}`,
-        description:
-          `Part of epic “${epic.title}”.\n\nAcceptance criteria: deliver the ${s.displayName} ` +
-          `slice of “${goal}” to a principal-engineer standard — correct, tested, and matching ` +
-          `project conventions.`,
-        status: 'todo',
+        title: opts.verify ? `[${s.name}] verify ${goal}` : `[${s.name}] ${goal}`,
+        description: opts.verify
+          ? `Part of epic “${epic.title}”.\n\nAcceptance criteria: ${s.displayName} sign-off — ` +
+            `verify the build tasks meet the quality bar before the epic is done.`
+          : `Part of epic “${epic.title}”.\n\nAcceptance criteria: deliver the ${s.displayName} ` +
+            `slice of “${goal}” to a principal-engineer standard — correct, tested, and matching ` +
+            `project conventions.`,
+        status: opts.dependsOn?.length ? 'backlog' : 'todo',
         priority: 'medium',
         assigneeAgentId: s.id,
         stream: s.name,
-      });
-      this.deps.bus.publish({
-        type: 'workitem.updated',
-        projectId: this.projectId,
-        workItem: task,
-      });
-      this.emitEvent(lead.id, 'system', `Assigned [${s.name}] ${goal}`, null, task.id);
-      builderTaskIds.push(task.id);
-      void this.onItemAssigned(task.id).catch(() => undefined);
-    }
-    for (const v of verifiers) {
-      const task = this.deps.store.createWorkItem({
-        projectId: this.projectId,
-        kind: 'task',
-        parentId: epic.id,
-        title: `[${v.name}] verify ${goal}`,
-        description:
-          `Part of epic “${epic.title}”.\n\nAcceptance criteria: ${v.displayName} sign-off — ` +
-          `verify the build tasks meet the quality bar before the epic is done.`,
-        status: 'backlog',
-        priority: 'medium',
-        assigneeAgentId: v.id,
-        stream: v.name,
-        dependsOn: builderTaskIds,
+        dependsOn: opts.dependsOn ?? [],
       });
       this.deps.bus.publish({
         type: 'workitem.updated',
@@ -520,11 +533,24 @@ class ProjectOrchestrator {
       this.emitEvent(
         lead.id,
         'system',
-        `Queued [${v.name}] verification (waits on builds)`,
+        opts.verify
+          ? `Queued [${s.name}] verification (waits on builds)`
+          : `Assigned [${s.name}] ${goal}`,
         null,
         task.id,
       );
-    }
+      existingByStream.set(s.name, task.id);
+      if (!opts.verify && !opts.dependsOn?.length)
+        void this.onItemAssigned(task.id).catch(() => undefined);
+      return task.id;
+    };
+
+    const coreTaskIds = coreBuilders.map((s) => makeTask(s, {}));
+    const postTaskIds = postBuilders.map((s) => makeTask(s, { dependsOn: coreTaskIds }));
+    const builderTaskIds = [...coreTaskIds, ...postTaskIds];
+    for (const v of verifiers) makeTask(v, { verify: true, dependsOn: builderTaskIds });
+
+    const builders = allBuilders;
 
     // 5. Post a clear, user-facing plan summary in the main chat so the user knows
     //    exactly what was decided and what happens next.
@@ -983,12 +1009,70 @@ class ProjectOrchestrator {
     // Run in the epic's isolated worktree when this task belongs to an epic.
     const worktree = item.parentId ? this.epicWorktrees.get(item.parentId) : undefined;
     const cwd = worktree?.path;
-    const prompt =
+    const basePrompt =
       `The Team Lead assigned you this task. Work on it and report progress to the team.\n\n` +
       `Task: ${item.title}\nDetails: ${item.description || '(none)'}\n` +
-      (worktree ? `You are on branch ${worktree.branch} in an isolated worktree.\n` : '') +
+      (worktree
+        ? `You are on branch ${worktree.branch} in an isolated worktree. Create/edit real files ` +
+          `here using relative paths.\n`
+        : '') +
       `When done, summarize what you did.`;
-    const summary = await this.actor(agent).ask(prompt, main.id, item.id, cwd);
+
+    // Build tasks must produce real, committable changes — an agent that only
+    // narrates has not done the work. Verifier streams (qa/reviewer/security)
+    // legitimately may only sign off, so they are not gated.
+    const isVerifier = /^(qa|reviewer|security)$/.test(item.stream ?? '');
+    const gate = !!worktree && !isVerifier;
+    const MAX_ATTEMPTS = 2;
+
+    let summary = '';
+    let produced = !gate;
+    for (let attempt = 1; attempt <= (gate ? MAX_ATTEMPTS : 1); attempt++) {
+      const firm =
+        attempt > 1
+          ? `\n\nYour previous attempt produced NO file changes in the working directory. You ` +
+            `MUST create or edit real files (relative paths) before you summarize.`
+          : '';
+      summary = await this.actor(agent).ask(basePrompt + firm, main.id, item.id, cwd);
+      if (!gate || !worktree) break;
+      produced = await this.deps.git.hasRealChanges(worktree.path);
+      if (produced) break;
+      this.emitEvent(
+        agent.id,
+        'git',
+        `Produced no file changes (attempt ${attempt}/${MAX_ATTEMPTS})`,
+        null,
+        item.id,
+      );
+    }
+
+    // Empty build after the retry budget → do NOT mark it done; flag + escalate to
+    // the user for guidance. The task stays in progress so the epic can't silently
+    // "complete" with no deliverable.
+    if (gate && worktree && !produced) {
+      this.setStatus(agent.id, 'needs_input');
+      this.emitEvent(
+        agent.id,
+        'system',
+        `“${item.title}” produced no code after ${MAX_ATTEMPTS} attempts — needs guidance`,
+        null,
+        item.id,
+      );
+      this.notify(
+        'question',
+        `Task blocked: ${item.title}`,
+        `${agent.displayName} could not produce deliverable changes and needs your guidance.`,
+        'board',
+        item.id,
+        agent.id,
+      );
+      void this.raiseQuestion(
+        agent.id,
+        `${agent.displayName} produced no code for “${item.title}” after ${MAX_ATTEMPTS} attempts. How should we proceed?`,
+        ['Retry', 'Reassign', 'Skip this task'],
+      );
+      return;
+    }
 
     // Record an audit note and commit the task's work on the epic branch.
     if (worktree) {
@@ -1372,6 +1456,17 @@ class ProjectOrchestrator {
       epic.id,
       this.lead().id,
     );
+
+    // Reclaim the epic's isolated worktree now that it is merged + closed.
+    const wt = this.epicWorktrees.get(epic.id);
+    if (wt) {
+      try {
+        await this.deps.git.removeWorktree(repoDir, wt.path);
+      } catch {
+        /* best-effort cleanup */
+      }
+      this.epicWorktrees.delete(epic.id);
+    }
   }
 
   private async pullNext(agentId: string): Promise<void> {
