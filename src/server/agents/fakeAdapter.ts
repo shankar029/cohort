@@ -13,7 +13,6 @@ const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
  *   [[ASK]]              → the agent escalates a question to the user
  *   [[WRITE]]            → the agent requests a file-write permission
  *   [[NEEDS_DISCUSSION]] → the agent asks the Lead to open a group chat
- *   [[CREATE_TASK: t]]   → the agent creates a board work item via its app tools
  *   [[POST: text]]       → the agent posts a message to the team via its app tools
  *   [[NOTE: text]]       → the agent appends a note to its scratchpad
  *   [[PLAN: text]]       → the agent updates its living plan
@@ -32,11 +31,6 @@ class FakeAgentSession implements AgentSession {
     // Exercise agent app tools (board + chat) when markers are present.
     const app = this.config.appTools;
     if (app) {
-      const created = /\[\[CREATE_TASK:\s*([^\]]+)\]\]/.exec(prompt);
-      if (created) {
-        const res = app.createWorkItem({ title: created[1]!.trim() });
-        onEvent({ kind: 'tool_call', toolName: 'create_work_item', detail: res });
-      }
       const posted = /\[\[POST:\s*([^\]]+)\]\]/.exec(prompt);
       if (posted) {
         app.postMessage({ content: posted[1]!.trim() });

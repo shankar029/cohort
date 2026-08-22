@@ -127,7 +127,7 @@ class AgentActor {
       scheduler: this.orch.deps.scheduler,
       appTools: this.orch.appToolsFor(this.agent),
       onEvent: (e) => this.orch.onSessionEvent(this.agent, e, this.currentWorkItemId),
-      onPermission: (ask) => this.orch.handlePermission(ask),
+      onPermission: (ask) => this.orch.handlePermission(ask, this.agent),
       onUserInput: (ask) => this.orch.handleUserInput(this.agent, ask),
     });
     this.sessions.set(cwd, session);
@@ -1210,9 +1210,10 @@ class ProjectOrchestrator {
     if (this.deps.store.getWorkItem(epic.id)?.status !== 'review') this.moveItem(epic.id, 'review');
 
     let diff = '';
-    if (branch) {
+    if (branch && wt) {
       try {
-        diff = await this.deps.git.branchDiff(repoDir, branch);
+        const base = await this.deps.git.currentBranch(repoDir);
+        diff = await this.deps.git.branchDiff(wt.path, base);
       } catch {
         /* ignore */
       }
@@ -1410,7 +1411,8 @@ class ProjectOrchestrator {
 
     if (branch) {
       try {
-        const m = await this.deps.git.mergeEpic(repoDir, branch);
+        const wt = this.epicWorktrees.get(epic.id);
+        const m = await this.deps.git.mergeEpic(repoDir, wt?.path ?? '', branch);
         this.emitEvent(
           approver.id,
           'git',
@@ -1480,43 +1482,6 @@ class ProjectOrchestrator {
   appToolsFor(agent: Agent): AgentAppTools {
     const pid = this.projectId;
     return {
-      createWorkItem: (input) => {
-        const assignee = input.assigneeName ? this.findAgentByName(input.assigneeName) : null;
-        const item = this.deps.store.createWorkItem({
-          projectId: pid,
-          title: input.title,
-          description: input.acceptanceCriteria
-            ? `${input.description ?? ''}\n\nAcceptance criteria:\n${input.acceptanceCriteria}`.trim()
-            : (input.description ?? ''),
-          status: (input.status as WorkItem['status']) ?? 'todo',
-          priority: 'medium',
-          assigneeAgentId: assignee?.id ?? null,
-          kind: 'task',
-          parentId: input.parentId ?? null,
-          stream: input.stream ?? null,
-        });
-        this.deps.bus.publish({ type: 'workitem.updated', projectId: pid, workItem: item });
-        this.emitEvent(agent.id, 'system', `Created task “${item.title}”`, null, item.id);
-        if (item.assigneeAgentId && (item.status === 'todo' || item.status === 'backlog')) {
-          void this.onItemAssigned(item.id).catch(() => undefined);
-        } else if (!item.assigneeAgentId && item.status === 'todo') {
-          this.pokeLead();
-        }
-        return { id: item.id, title: item.title };
-      },
-      moveWorkItem: (input) => {
-        const before = this.deps.store.getWorkItem(input.workItemId);
-        if (!before) return { ok: false };
-        this.moveItem(input.workItemId, input.status as WorkItem['status']);
-        this.emitEvent(
-          agent.id,
-          'system',
-          `Moved “${before.title}” → ${input.status}`,
-          null,
-          input.workItemId,
-        );
-        return { ok: true };
-      },
       updateProgress: (input) => {
         const target =
           input.workItemId ??
@@ -1621,17 +1586,6 @@ class ProjectOrchestrator {
         })),
       }),
     };
-  }
-
-  private findAgentByName(name: string): Agent | null {
-    const needle = name.trim().toLowerCase();
-    const team = this.deps.store.listAgents(this.projectId);
-    return (
-      team.find((a) => a.name.toLowerCase() === needle) ??
-      team.find((a) => a.displayName.toLowerCase() === needle) ??
-      team.find((a) => a.displayName.toLowerCase().includes(needle)) ??
-      null
-    );
   }
 
   private moveItem(workItemId: string, status: WorkItem['status']): void {
@@ -1750,11 +1704,21 @@ class ProjectOrchestrator {
 
   /* -------------------------------------------------- perms & escalation */
 
-  async handlePermission(ask: PermissionAsk): Promise<'approve' | 'reject'> {
+  async handlePermission(ask: PermissionAsk, agent?: Agent): Promise<'approve' | 'reject'> {
     const project = this.project();
+    // The Team Lead orchestrates and reviews — it must NEVER modify files or run
+    // mutating shell itself. All code is produced by specialists in their epic
+    // clones; the Lead's edits would land in the main checkout, orphaned. Reads
+    // are fine (it may inspect the repo to plan).
+    if (agent?.kind === 'lead' && ask.kind !== 'read') return 'reject';
     if (project.settings.approvalMode === 'auto-workspace') {
       if (ask.kind === 'read') return 'approve';
-      return isInsideWorkspace(project.repoDir, ask.fileName) ? 'approve' : 'reject';
+      // Writes/shell are allowed inside the project checkout OR inside a managed
+      // epic clone (under the worktree root) — specialists work in their clone,
+      // which lives outside repoDir.
+      const inRepo = isInsideWorkspace(project.repoDir, ask.fileName);
+      const inClone = isInsideWorkspace(this.deps.git.root, ask.fileName);
+      return inRepo || inClone ? 'approve' : 'reject';
     }
     const label =
       ask.kind === 'shell'

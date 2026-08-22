@@ -251,43 +251,6 @@ export class RealCopilotAdapter implements CopilotAdapter {
     const app = config.appTools;
     const appTools = app
       ? [
-          sdk.defineTool('create_work_item', {
-            description:
-              'Create a work item (task) on the project board. Optionally set stream, assigneeName (a teammate), parentId (epic), status, and acceptanceCriteria.',
-            parameters: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' },
-                description: { type: 'string' },
-                stream: { type: 'string' },
-                assigneeName: { type: 'string' },
-                parentId: { type: 'string' },
-                status: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review'] },
-                acceptanceCriteria: { type: 'string' },
-              },
-              required: ['title'],
-            },
-            skipPermission: true,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            handler: async (args: any) => app.createWorkItem(args),
-          }),
-          sdk.defineTool('move_work_item', {
-            description: 'Move a work item to a new board column (status).',
-            parameters: {
-              type: 'object',
-              properties: {
-                workItemId: { type: 'string' },
-                status: {
-                  type: 'string',
-                  enum: ['backlog', 'todo', 'in_progress', 'review', 'done'],
-                },
-              },
-              required: ['workItemId', 'status'],
-            },
-            skipPermission: true,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            handler: async (args: any) => app.moveWorkItem(args),
-          }),
           sdk.defineTool('update_progress', {
             description:
               'Update the completion percentage (0-100) of the work item you are currently on. Keep it current as you make progress so the user and teammates can track it; pass a short note describing the milestone.',

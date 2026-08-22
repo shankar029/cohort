@@ -39,16 +39,6 @@ export interface Scheduler {
  * shows up live in the board and chat. Implemented by the orchestrator per agent.
  */
 export interface AgentAppTools {
-  createWorkItem(input: {
-    title: string;
-    description?: string;
-    stream?: string;
-    assigneeName?: string;
-    parentId?: string;
-    status?: string;
-    acceptanceCriteria?: string;
-  }): { id: string; title: string };
-  moveWorkItem(input: { workItemId: string; status: string }): { ok: boolean };
   updateProgress(input: { progress: number; workItemId?: string | null; note?: string }): {
     ok: boolean;
   };

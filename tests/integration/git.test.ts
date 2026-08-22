@@ -42,8 +42,8 @@ async function addSpecialist(projectId: string, catalogId: string): Promise<stri
   return (res.json() as { agent: { id: string } }).agent.id;
 }
 
-describe('git worktree isolation per epic (Phase 3)', () => {
-  it('an epic gets its own branch + worktree and a task commits on it', async () => {
+describe('git clone isolation per epic (Phase 3)', () => {
+  it('an epic gets its own branch + isolated clone and a task commits on it', async () => {
     const projectId = await createProject('Git One');
     await addSpecialist(projectId, 'frontend-engineer');
 
@@ -63,13 +63,18 @@ describe('git worktree isolation per epic (Phase 3)', () => {
       8000,
     )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
     const branch = epicMsg.workItem.branch!;
+    const epicId = epicMsg.workItem.id;
 
-    // The repo is now a git repo and the epic branch exists.
-    expect(fs.existsSync(path.join(repoDir, '.git'))).toBe(true);
-    const branches = git(['branch', '--format=%(refname:short)']).split('\n');
+    // The epic runs in its OWN clone under the worktree root (its own .git dir),
+    // NOT a linked worktree of repoDir — this is what makes agent edits land on
+    // the epic branch.
+    const cloneDir = path.join(ctx.worktreeRoot, projectId, epicId);
+    expect(fs.existsSync(path.join(cloneDir, '.git'))).toBe(true);
+    expect(fs.statSync(path.join(cloneDir, '.git')).isDirectory()).toBe(true); // clone, not worktree file
+    const branches = git(['branch', '--format=%(refname:short)'], cloneDir).split('\n');
     expect(branches).toContain(branch);
 
-    // The builder task commits its audit note on the epic branch (a real commit).
+    // The builder task commits real work on the epic branch (a real commit).
     await ctx.waitFor(
       (m) =>
         m.type === 'event.appended' &&
@@ -77,11 +82,11 @@ describe('git worktree isolation per epic (Phase 3)', () => {
         m.event.summary.startsWith('Committed'),
       8000,
     );
-    const log = git(['log', branch, '--oneline']);
+    const log = git(['log', branch, '--oneline'], cloneDir);
     expect(log).toMatch(/task\(frontend\)/);
   });
 
-  it('two parallel epics get separate branches + worktrees', async () => {
+  it('two parallel epics get separate branches + isolated clones', async () => {
     const projectId = await createProject('Git Two');
     await addSpecialist(projectId, 'frontend-engineer');
 
@@ -94,8 +99,7 @@ describe('git worktree isolation per epic (Phase 3)', () => {
     }
 
     // Wait until two distinct epics exist.
-    await ctx.waitFor((m) => {
-      if (m.type !== 'workitem.updated') return false;
+    await ctx.waitFor(() => {
       const epics = ctx.store.listWorkItems(projectId).filter((i) => i.kind === 'epic' && i.branch);
       return epics.length >= 2;
     }, 10000);
@@ -106,11 +110,12 @@ describe('git worktree isolation per epic (Phase 3)', () => {
     const epicBranches = epics.map((e) => e.branch!);
     expect(new Set(epicBranches).size).toBe(2);
 
-    const repoBranches = git(['branch', '--format=%(refname:short)']).split('\n');
-    for (const b of epicBranches) expect(repoBranches).toContain(b);
-
-    // Each epic has its own on-disk worktree registered.
-    const worktrees = git(['worktree', 'list']);
-    expect(worktrees.split('\n').length).toBeGreaterThanOrEqual(3); // main + 2 epics
+    // Each epic has its own isolated clone directory checked out to its branch.
+    for (const e of epics) {
+      const cloneDir = path.join(ctx.worktreeRoot, projectId, e.id);
+      expect(fs.existsSync(path.join(cloneDir, '.git'))).toBe(true);
+      const current = git(['rev-parse', '--abbrev-ref', 'HEAD'], cloneDir);
+      expect(current).toBe(e.branch);
+    }
   });
 });

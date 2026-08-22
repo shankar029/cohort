@@ -3,16 +3,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * Thin wrapper over the git CLI. Isolates each epic in its own branch + worktree
- * so agents working on different epics never share a filesystem (no stepping on
- * each other). All operations are scoped to the project's repo; `main` is never
- * touched until an explicit merge, and nothing is pushed to a remote.
+ * Thin wrapper over the git CLI. Isolates each epic in its OWN local clone
+ * (a full checkout with its own `.git`), so agents working on different epics
+ * never share a filesystem — and, critically, so the Copilot runtime resolves
+ * the workspace root to the epic checkout rather than following a linked
+ * worktree's `.git` file back to the main repository. All operations are scoped
+ * to managed clones under `worktreeRoot`; the project's `main` is never touched
+ * until an explicit merge, and nothing is pushed to a remote.
  */
 export class GitService {
   private readonly worktreeRoot: string;
   constructor(worktreeRoot: string) {
-    // Always absolute so worktree paths can never resolve inside a project/app repo.
+    // Always absolute so checkout paths can never resolve inside a project/app repo.
     this.worktreeRoot = path.resolve(worktreeRoot);
+  }
+
+  /** Absolute root under which all managed epic clones live. */
+  get root(): string {
+    return this.worktreeRoot;
   }
 
   private run(
@@ -81,7 +89,13 @@ export class GitService {
     return path.join(this.worktreeRoot, projectId, epicId);
   }
 
-  /** Create (or reuse) an isolated worktree on a fresh epic branch. */
+  /**
+   * Create (or recreate) an isolated LOCAL CLONE of the repo on a fresh epic
+   * branch. A clone (not a linked worktree) is used deliberately: it has its own
+   * `.git` directory, so the Copilot runtime roots file operations inside the
+   * epic checkout instead of following a worktree's `.git` file back to the main
+   * repo (which caused agent edits to land in the wrong directory).
+   */
   async createEpicWorktree(
     repoDir: string,
     projectId: string,
@@ -89,30 +103,35 @@ export class GitService {
   ): Promise<{ branch: string; path: string }> {
     await this.ensureRepo(repoDir);
     const branch = this.branchFor(epicId);
-    const wt = this.worktreePath(projectId, epicId);
-    fs.mkdirSync(path.dirname(wt), { recursive: true });
+    const dir = this.worktreePath(projectId, epicId);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
 
-    // Clean any stale worktree registration/dir from a previous run.
-    if (fs.existsSync(wt)) {
-      await this.run(['worktree', 'remove', '--force', wt], repoDir);
-      fs.rmSync(wt, { recursive: true, force: true });
+    // Clean any stale checkout from a previous run.
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+
+    // Full local clone (own object store + .git), so root resolution is correct.
+    const cloned = await this.run(
+      ['clone', '--no-hardlinks', '--quiet', repoDir, dir],
+      path.dirname(dir),
+    );
+    if (!cloned.ok) throw new Error(`git clone failed: ${cloned.stderr.trim()}`);
+
+    // Branch the epic off the clone's HEAD (the base branch it was cloned from).
+    const co = await this.run(['checkout', '-b', branch], dir);
+    if (!co.ok) {
+      // Branch may already exist from a prior run's history; check it out.
+      const existing = await this.run(['checkout', branch], dir);
+      if (!existing.ok) throw new Error(`git checkout epic branch failed: ${co.stderr.trim()}`);
     }
-    await this.run(['worktree', 'prune'], repoDir);
-
-    const branchExists = (await this.run(['rev-parse', '--verify', branch], repoDir)).ok;
-    const add = branchExists
-      ? await this.run(['worktree', 'add', wt, branch], repoDir)
-      : await this.run(['worktree', 'add', '-b', branch, wt, 'HEAD'], repoDir);
-    if (!add.ok) throw new Error(`git worktree add failed: ${add.stderr.trim()}`);
-    return { branch, path: wt };
+    return { branch, path: dir };
   }
 
-  /** Stage everything in the worktree and commit if there are changes. */
+  /** Stage everything in the epic clone and commit if there are changes. */
   async commitWork(
     worktreePath: string,
     message: string,
   ): Promise<{ committed: boolean; hash: string | null }> {
-    // Safety: only ever commit inside a managed worktree under worktreeRoot.
+    // Safety: only ever commit inside a managed clone under worktreeRoot.
     const abs = path.resolve(worktreePath);
     if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot) {
       return { committed: false, hash: null };
@@ -161,30 +180,48 @@ export class GitService {
       .filter(Boolean);
   }
 
-  /** Diff of committed epic-branch work vs the base it branched from. */
+  /** Diff of committed epic-branch work vs the base it was cloned from. */
   async diffStat(worktreePath: string): Promise<string> {
     const r = await this.run(['diff', '--stat', 'HEAD~1', 'HEAD'], worktreePath);
     return r.ok ? r.stdout.trim() : '';
   }
 
-  /** Full diff of an epic branch vs the current base branch, capped for display. */
-  async branchDiff(repoDir: string, branch: string): Promise<string> {
-    const base = await this.currentBranch(repoDir);
-    const r = await this.run(['diff', `${base}...${branch}`], repoDir);
+  /**
+   * Full diff of an epic clone's branch vs the base branch it was cloned from,
+   * capped for display. Runs inside the clone (which has origin/<base>).
+   */
+  async branchDiff(checkoutPath: string, base: string): Promise<string> {
+    const ref = base ? `origin/${base}` : 'origin/HEAD';
+    let r = await this.run(['diff', `${ref}...HEAD`], checkoutPath);
+    if (!r.ok) r = await this.run(['diff', 'origin/HEAD...HEAD'], checkoutPath);
     const out = r.ok ? r.stdout : '';
     return out.length > 20000 ? `${out.slice(0, 20000)}\n…(truncated)` : out;
   }
 
-  /** Merge an epic branch into the base branch (fast-forward or no-ff). Phase 4 uses this. */
-  async mergeEpic(repoDir: string, branch: string): Promise<{ ok: boolean; detail: string }> {
+  /**
+   * Merge an epic clone's branch into the base branch of the main repo. The epic
+   * branch is fetched from the clone into the main repo first, then merged
+   * (--no-ff). Nothing is pushed to any remote.
+   */
+  async mergeEpic(
+    repoDir: string,
+    checkoutPath: string,
+    branch: string,
+  ): Promise<{ ok: boolean; detail: string }> {
     const base = await this.currentBranch(repoDir);
+    if (checkoutPath && fs.existsSync(checkoutPath)) {
+      const fetched = await this.run(['fetch', checkoutPath, `${branch}:${branch}`], repoDir);
+      if (!fetched.ok) return { ok: false, detail: `fetch failed: ${fetched.stderr.trim()}` };
+    }
     const r = await this.run(['merge', '--no-ff', '-m', `ateam: merge ${branch}`, branch], repoDir);
     return { ok: r.ok, detail: r.ok ? `merged ${branch} into ${base}` : r.stderr.trim() };
   }
 
-  async removeWorktree(repoDir: string, worktreePath: string): Promise<void> {
-    await this.run(['worktree', 'remove', '--force', worktreePath], repoDir);
-    if (fs.existsSync(worktreePath)) fs.rmSync(worktreePath, { recursive: true, force: true });
+  /** Remove an epic clone directory (best-effort). */
+  async removeWorktree(_repoDir: string, worktreePath: string): Promise<void> {
+    const abs = path.resolve(worktreePath);
+    if (!abs.startsWith(this.worktreeRoot + path.sep)) return;
+    if (fs.existsSync(abs)) fs.rmSync(abs, { recursive: true, force: true });
   }
 
   /** Remove all worktrees created for a project (best-effort cleanup). */

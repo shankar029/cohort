@@ -266,11 +266,12 @@ describe('scheduled + recurring work items', () => {
 });
 
 describe('agents as first-class app users (tool layer)', () => {
-  it('an agent creates a board work item via its app tools', async () => {
+  it('the board is system-owned — an agent cannot create competing work items', async () => {
     const { projectId } = await createProject();
     const agentId = await addSpecialist(projectId);
 
-    // Assigning this item makes the specialist run; the marker drives its create_work_item tool.
+    // The marker would have driven a create_work_item tool in the old design;
+    // that capability is intentionally removed (the Team Lead owns the board).
     await ctx.app.inject({
       method: 'POST',
       url: `/api/projects/${projectId}/workitems`,
@@ -281,15 +282,10 @@ describe('agents as first-class app users (tool layer)', () => {
       },
     });
 
-    // The tool-created task shows up on the board (via the same store/bus the UI uses).
-    const created = (await ctx.waitFor(
-      (m) => m.type === 'workitem.updated' && m.workItem.title === 'Write integration tests',
-      8000,
-    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
-    expect(created.workItem.kind).toBe('task');
-
+    // The agent runs its task to review, but no agent-created task appears.
+    await ctx.waitFor((m) => m.type === 'workitem.updated' && m.workItem.status === 'review', 8000);
     const items = ctx.store.listWorkItems(projectId).map((i) => i.title);
-    expect(items).toContain('Write integration tests');
+    expect(items).not.toContain('Write integration tests');
   });
 
   it('an agent posts a message to the team via its app tools', async () => {
