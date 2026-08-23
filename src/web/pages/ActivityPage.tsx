@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import type { AgentEvent, AgentEventType } from '@shared/index';
 import { useBundle } from '../state';
-import { Avatar, EmptyState, StatusPill, agentAvatar } from '../components/ui';
+import { EmptyState } from '../components/ui';
 
 const TYPE_STYLE: Record<AgentEventType, { icon: string; color: string }> = {
   message: { icon: '💬', color: 'text-slate-300' },
@@ -48,21 +48,6 @@ export function ActivityPage(): React.JSX.Element {
           everyone work here.
         </p>
       </header>
-
-      <div className="flex flex-wrap items-center gap-3 border-b border-surface-border px-6 py-3">
-        {bundle.agents.map((a) => (
-          <div key={a.id} className="flex items-center gap-2 rounded-md bg-surface-2 px-2 py-1">
-            <Avatar
-              emoji={a.emoji}
-              color={a.color}
-              src={agentAvatar(a.catalogId, a.kind)}
-              size={20}
-            />
-            <span className="text-xs text-slate-300">{a.displayName}</span>
-            <StatusPill status={a.status} />
-          </div>
-        ))}
-      </div>
 
       <div className="flex items-center gap-3 px-6 py-3">
         <label className="text-xs text-slate-500" htmlFor="filter-agent">

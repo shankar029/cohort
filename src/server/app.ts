@@ -1,4 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { z, ZodError } from 'zod';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
@@ -31,6 +34,72 @@ class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+}
+export interface DirListing {
+  path: string | null;
+  parent: string | null;
+  entries: DirEntry[];
+}
+
+/** List sub-directories of `dir` for the folder picker. No `dir` → roots (drives/home). */
+export function listDirs(dir?: string): DirListing {
+  // Roots: on Windows the available drive letters; elsewhere the home directory.
+  if (!dir) {
+    if (process.platform === 'win32') {
+      const drives: DirEntry[] = [];
+      for (let c = 65; c <= 90; c++) {
+        const root = `${String.fromCharCode(c)}:\\`;
+        try {
+          if (fs.existsSync(root)) drives.push({ name: root, path: root });
+        } catch {
+          /* skip unreadable drive */
+        }
+      }
+      const home = os.homedir();
+      return {
+        path: null,
+        parent: null,
+        entries: [{ name: `~ (${home})`, path: home }, ...drives],
+      };
+    }
+    const home = os.homedir();
+    return { path: null, parent: null, entries: [{ name: `~ (${home})`, path: home }] };
+  }
+
+  const abs = path.resolve(dir);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    throw new HttpError(400, `Cannot open: ${abs}`);
+  }
+  if (!stat.isDirectory()) throw new HttpError(400, `Not a directory: ${abs}`);
+
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(abs);
+  } catch {
+    throw new HttpError(400, `Cannot read: ${abs}`);
+  }
+  const entries: DirEntry[] = [];
+  for (const name of names) {
+    if (name.startsWith('.')) continue; // hide dotfiles/dirs by default
+    const full = path.join(abs, name);
+    try {
+      if (fs.statSync(full).isDirectory()) entries.push({ name, path: full });
+    } catch {
+      /* unreadable entry — skip */
+    }
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  const parentPath = path.dirname(abs);
+  const parent = parentPath === abs ? null : parentPath; // null at a filesystem root
+  return { path: abs, parent, entries };
 }
 
 export function buildApp(ctx: AppContext): FastifyInstance {
@@ -66,6 +135,15 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     } catch {
       return { models: [config.defaultModel] };
     }
+  });
+
+  /* ----------------------------------------------------------- filesystem */
+  // Directory browser for the "choose folder" picker when creating a project.
+  // This is a LOCAL app — the server and the user share one machine — so listing
+  // directories on that machine is expected and safe.
+  app.get('/api/fs/dirs', async (req) => {
+    const raw = (req.query as { path?: string }).path;
+    return listDirs(raw && raw.trim() ? raw.trim() : undefined);
   });
 
   /* -------------------------------------------------------------- catalog */

@@ -57,7 +57,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
           >
             <img src="/brand/mark.png" alt="" className="h-full w-full object-contain" />
           </span>
-          <span>ateam</span>
+          <span>A Team</span>
         </NavLink>
       </div>
       <div className="border-b border-surface-border p-3">

@@ -136,6 +136,12 @@ export const api = {
   gitSnapshot: (projectId: string) =>
     request<{ snapshot: GitSnapshot }>(`/api/projects/${projectId}/git`),
   models: () => request<{ models: string[] }>('/api/models'),
+  listDirs: (path?: string) =>
+    request<{
+      path: string | null;
+      parent: string | null;
+      entries: { name: string; path: string }[];
+    }>(`/api/fs/dirs${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   questions: (projectId: string) =>
     request<{ questions: Question[] }>(`/api/projects/${projectId}/questions`),
   answerQuestion: (questionId: string, answer: string) =>
