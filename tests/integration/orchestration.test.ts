@@ -445,6 +445,73 @@ describe('epic planning & decomposition', () => {
   });
 });
 
+describe('agent task structure (sub-task checklist)', () => {
+  it('a specialist splits its work item into sub-tasks and completes each', async () => {
+    const { projectId } = await createProject();
+    const feId = await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    // Wait until the frontend task reaches review (its work is complete).
+    const feTaskMsg = (await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.stream === 'frontend' &&
+        m.workItem.status === 'review',
+      8000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    const workItemId = feTaskMsg.workItem.id;
+
+    // The agent planned a checklist of sub-tasks under that work item and knocked
+    // each one off — including a dedicated testing sub-task.
+    const subtasks = ctx.store
+      .listTasks(projectId, feId)
+      .filter((t: AgentTask) => t.workItemId === workItemId);
+    expect(subtasks.length).toBeGreaterThanOrEqual(2);
+    expect(subtasks.every((t) => t.status === 'done')).toBe(true);
+    expect(subtasks.some((t) => /test/i.test(t.title))).toBe(true);
+  });
+});
+
+describe('Team Lead recovers a stuck agent by restarting its session', () => {
+  it('restarts the session once on an empty build, then escalates if still stuck', async () => {
+    const { projectId } = await createProject();
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    // [[NOOP]] flows into the task prompt so the agent narrates but writes no
+    // files — the empty-build path that triggers the Lead's session restart.
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a broken widget [[NOOP]]' },
+    });
+
+    // First recovery: the Lead tears down the session and starts a fresh one.
+    const restart = (await ctx.waitFor(
+      (m) => m.type === 'notification.created' && m.notification.title.startsWith('Restarted'),
+      10000,
+    )) as Extract<
+      import('../../src/shared/index.js').ServerMessage,
+      { type: 'notification.created' }
+    >;
+    expect(restart.notification.type).toBe('system');
+
+    // Still empty after the restart → the Lead escalates to the user for guidance.
+    await ctx.waitFor(
+      (m) => m.type === 'notification.created' && m.notification.title.startsWith('Task blocked'),
+      10000,
+    );
+    await ctx.waitFor(
+      (m) => m.type === 'question.updated' && m.question.status === 'pending',
+      10000,
+    );
+  });
+});
+
 describe('Team Lead ownership', () => {
   it('the Lead assigns an unassigned ready item to a matching specialist', async () => {
     const { projectId } = await createProject();

@@ -54,6 +54,8 @@ test('end-to-end: build a team, assign work, watch autonomous pickup, tasks and 
   await page.getByTestId('agent-card').filter({ hasText: 'Frontend Engineer' }).click();
   await expect(page.getByTestId('task-board')).toBeVisible();
   await expect(page.getByTestId('task-card').first()).toBeVisible();
+  // Sub-tasks are nested under their work item (agent → epic → work item → tasks).
+  await expect(page.getByTestId('workitem-group').first()).toBeVisible();
 
   // Activity log shows the sub-agent lifecycle.
   await page.getByRole('link', { name: 'Activity' }).click();

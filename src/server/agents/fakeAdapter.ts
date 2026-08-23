@@ -19,6 +19,9 @@ const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
  *   [[PLAN: text]]       → the agent updates its living plan
  *   [[REVIEW: iteration=N]] → reviewer verdict: request changes on iter 1, approve after
  *   [[NOOP]]             → the agent narrates but writes no files (empty build)
+ *
+ * The orchestrator's per-work-item planning phase ("break this work item into a
+ * short checklist") is answered with a deterministic bulleted sub-task list.
  */
 class FakeAgentSession implements AgentSession {
   constructor(private readonly config: AgentSessionConfig) {}
@@ -28,6 +31,21 @@ class FakeAgentSession implements AgentSession {
 
     onEvent({ kind: 'reasoning', text: `Considering: ${prompt.slice(0, 60)}` });
     await sleep(TICK);
+
+    // Planning phase: when the orchestrator asks the agent to split a work item
+    // into a checklist, return a deterministic bulleted list so the
+    // plan → sub-tasks → execute structure is exercised offline.
+    if (/break this work item into a short checklist/i.test(prompt)) {
+      const title = /Work item:\s*(.+)/.exec(prompt)?.[1]?.trim() ?? 'the task';
+      const text = [
+        `- Implement ${title}`,
+        `- Add unit + integration tests for ${title}`,
+        `- Verify acceptance criteria for ${title}`,
+      ].join('\n');
+      await this.stream(messageId, text, onEvent);
+      onEvent({ kind: 'idle' });
+      return text;
+    }
 
     // Exercise agent app tools (board + chat) when markers are present.
     const app = this.config.appTools;

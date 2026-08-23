@@ -18,22 +18,65 @@ export function ChatPage(): React.JSX.Element {
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const pending = bundle.questions.filter((q) => q.status === 'pending');
 
-  // Main thread first, then discussions by recency.
-  const threads = useMemo(() => {
-    const main = bundle.threads.filter((t) => t.kind === 'main');
+  // Resolve a thread's epic from its linked work item (epic itself, or a task's
+  // parent epic) so discussions can be grouped per epic.
+  const wiById = useMemo(() => new Map(bundle.workItems.map((w) => [w.id, w])), [bundle.workItems]);
+  const epicOf = React.useCallback(
+    (t: Thread): { id: string; title: string } | null => {
+      if (!t.workItemId) return null;
+      const wi = wiById.get(t.workItemId);
+      if (!wi) return null;
+      const epicId = wi.kind === 'epic' ? wi.id : wi.parentId;
+      if (!epicId) return null;
+      return { id: epicId, title: wiById.get(epicId)?.title ?? 'Epic' };
+    },
+    [wiById],
+  );
+
+  const mainThread = useMemo(
+    () => bundle.threads.find((t) => t.kind === 'main') ?? null,
+    [bundle.threads],
+  );
+
+  // Discussions grouped by epic, plus a 'General' bucket for unlinked threads.
+  const grouped = useMemo(() => {
+    const epics = new Map<string, { id: string; title: string; threads: Thread[] }>();
+    const general: Thread[] = [];
     const rest = bundle.threads
       .filter((t) => t.kind !== 'main')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return [...main, ...rest];
-  }, [bundle.threads]);
+    for (const t of rest) {
+      const e = epicOf(t);
+      if (!e) {
+        general.push(t);
+        continue;
+      }
+      let g = epics.get(e.id);
+      if (!g) {
+        g = { id: e.id, title: e.title, threads: [] };
+        epics.set(e.id, g);
+      }
+      g.threads.push(t);
+    }
+    return { epics: [...epics.values()], general };
+  }, [bundle.threads, epicOf]);
 
-  const mainThreadId = threads.find((t) => t.kind === 'main')?.id ?? null;
+  const hasThreads = bundle.threads.length > 0;
+  const mainThreadId = mainThread?.id ?? null;
   const selectedId = activeThread ?? mainThreadId;
-  const selected = threads.find((t) => t.id === selectedId) ?? null;
+  const selected = bundle.threads.find((t) => t.id === selectedId) ?? null;
+  const toggle = (id: string): void =>
+    setCollapsed((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
 
   // Messages for the selected thread (fall back to all when threads aren't loaded yet).
   const messages = useMemo(() => {
@@ -78,35 +121,64 @@ export function ChatPage(): React.JSX.Element {
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Threads</h2>
         </div>
         <div className="flex-1 space-y-1 overflow-auto p-2" data-testid="thread-list">
-          {threads.length === 0 && (
+          {!hasThreads && (
             <p className="px-2 py-4 text-center text-xs text-slate-600">No threads yet</p>
           )}
-          {threads.map((t) => {
-            const meta = THREAD_META[t.kind];
-            const isActive = t.id === selectedId;
-            const count = bundle.chat.filter((m) => m.threadId === t.id).length;
+          {mainThread && (
+            <ThreadButton
+              thread={mainThread}
+              active={mainThread.id === selectedId}
+              count={bundle.chat.filter((m) => m.threadId === mainThread.id).length}
+              onClick={() => setActiveThread(mainThread.id)}
+            />
+          )}
+          {grouped.epics.map((g) => {
+            const isCollapsed = collapsed.has(g.id);
             return (
-              <button
-                key={t.id}
-                onClick={() => setActiveThread(t.id)}
-                className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
-                  isActive ? 'bg-surface-3 text-slate-100' : 'text-slate-400 hover:bg-surface-2'
-                }`}
-                data-testid="thread-item"
-              >
-                <span aria-hidden="true">{meta.icon}</span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">
-                    {t.kind === 'main' ? 'Team Lead' : t.topic || meta.label}
+              <div key={g.id} data-testid="thread-epic-group">
+                <button
+                  onClick={() => toggle(g.id)}
+                  className="mt-2 flex w-full items-center gap-1.5 px-2 py-1 text-left text-[0.7rem] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-300"
+                >
+                  <span aria-hidden="true" className="text-[0.6rem]">
+                    {isCollapsed ? '▶' : '▼'}
                   </span>
-                  <span className="text-[0.7rem] text-slate-600">
-                    {meta.label}
-                    {count > 0 && ` · ${count}`}
+                  <span className="min-w-0 flex-1 truncate" title={g.title}>
+                    {g.title}
                   </span>
-                </span>
-              </button>
+                  <span className="text-slate-600">{g.threads.length}</span>
+                </button>
+                {!isCollapsed &&
+                  g.threads.map((t) => (
+                    <ThreadButton
+                      key={t.id}
+                      thread={t}
+                      active={t.id === selectedId}
+                      count={bundle.chat.filter((m) => m.threadId === t.id).length}
+                      onClick={() => setActiveThread(t.id)}
+                      indent
+                    />
+                  ))}
+              </div>
             );
           })}
+          {grouped.general.length > 0 && (
+            <div data-testid="thread-epic-group">
+              <div className="mt-2 px-2 py-1 text-[0.7rem] font-semibold uppercase tracking-wide text-slate-500">
+                General
+              </div>
+              {grouped.general.map((t) => (
+                <ThreadButton
+                  key={t.id}
+                  thread={t}
+                  active={t.id === selectedId}
+                  count={bundle.chat.filter((m) => m.threadId === t.id).length}
+                  onClick={() => setActiveThread(t.id)}
+                  indent
+                />
+              ))}
+            </div>
+          )}
         </div>
       </aside>
 
@@ -310,5 +382,43 @@ function QuestionCard({
         </form>
       )}
     </div>
+  );
+}
+
+/** A single thread row in the rail; used for the pinned main channel and for
+ * threads nested under an epic (indented). */
+function ThreadButton({
+  thread,
+  active,
+  count,
+  onClick,
+  indent,
+}: {
+  thread: Thread;
+  active: boolean;
+  count: number;
+  onClick: () => void;
+  indent?: boolean;
+}): React.JSX.Element {
+  const meta = THREAD_META[thread.kind];
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-start gap-2 rounded-lg py-2 pr-2.5 text-left text-sm transition-colors ${
+        indent ? 'pl-5' : 'pl-2.5'
+      } ${active ? 'bg-surface-3 text-slate-100' : 'text-slate-400 hover:bg-surface-2'}`}
+      data-testid="thread-item"
+    >
+      <span aria-hidden="true">{meta.icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">
+          {thread.kind === 'main' ? 'Team Lead' : thread.topic || meta.label}
+        </span>
+        <span className="text-[0.7rem] text-slate-600">
+          {meta.label}
+          {count > 0 && ` · ${count}`}
+        </span>
+      </span>
+    </button>
   );
 }

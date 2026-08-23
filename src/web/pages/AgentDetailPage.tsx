@@ -12,11 +12,18 @@ const TASK_STATUS_META: Record<AgentTaskStatus, { label: string; dot: string; or
   done: { label: 'Done', dot: 'bg-status-done', order: 2 },
 };
 
-/** One epic's slice of an agent's personal work: its tasks and scratchpad notes. */
+/** One epic's slice of an agent's personal work: its work items (each with its
+ * sub-task checklist) and scratchpad notes. */
+interface WorkItemTasks {
+  workItemId: string | null;
+  title: string;
+  tasks: AgentTask[];
+}
 interface EpicGroup {
   key: string;
   epicId: string | null;
   title: string;
+  items: WorkItemTasks[];
   tasks: AgentTask[];
   notes: AgentNote[];
 }
@@ -63,13 +70,29 @@ export function AgentDetailPage(): React.JSX.Element {
     let g = groupMap.get(key);
     if (!g) {
       const epic = epicId ? wiById.get(epicId) : undefined;
-      g = { key, epicId, title: epic?.title ?? 'General', tasks: [], notes: [] };
+      g = { key, epicId, title: epic?.title ?? 'General', items: [], tasks: [], notes: [] };
       groupMap.set(key, g);
     }
     return g;
   };
   for (const t of tasks) groupFor(epicIdOf(t.workItemId)).tasks.push(t);
   for (const n of notes) groupFor(epicIdOf(n.workItemId)).notes.push(n);
+  // Within each epic, nest tasks under their work item so the page reads
+  // epic → work item → sub-task checklist.
+  for (const g of groupMap.values()) {
+    const byItem = new Map<string, WorkItemTasks>();
+    for (const t of g.tasks) {
+      const wiId = t.workItemId ?? '__loose__';
+      let it = byItem.get(wiId);
+      if (!it) {
+        const wi = t.workItemId ? wiById.get(t.workItemId) : undefined;
+        it = { workItemId: t.workItemId, title: wi?.title ?? 'Tasks', tasks: [] };
+        byItem.set(wiId, it);
+      }
+      it.tasks.push(t);
+    }
+    g.items = [...byItem.values()].sort((a, b) => a.title.localeCompare(b.title));
+  }
   const groups = [...groupMap.values()].sort((a, b) => {
     // Named epics first (by title), 'General' bucket last.
     if ((a.epicId === null) !== (b.epicId === null)) return a.epicId === null ? 1 : -1;
@@ -197,9 +220,6 @@ function EpicGroupCard({
   isEpic: boolean;
 }): React.JSX.Element {
   const doneCount = group.tasks.filter((t) => t.status === 'done').length;
-  const orderedTasks = [...group.tasks].sort(
-    (a, b) => TASK_STATUS_META[a.status].order - TASK_STATUS_META[b.status].order,
-  );
   return (
     <div className="card overflow-hidden p-0" data-testid="epic-group">
       <header className="flex items-center gap-2 border-b border-surface-border px-4 py-2.5">
@@ -223,37 +243,15 @@ function EpicGroupCard({
       </header>
       <div className="grid gap-4 p-4 md:grid-cols-2">
         <div>
-          <h4 className="label mb-2">Tasks</h4>
-          {orderedTasks.length === 0 ? (
+          <h4 className="label mb-2">Work items &amp; sub-tasks</h4>
+          {group.items.length === 0 ? (
             <p className="text-xs text-slate-500">No tasks.</p>
           ) : (
-            <ul className="space-y-1.5">
-              {orderedTasks.map((t) => {
-                const meta = TASK_STATUS_META[t.status];
-                return (
-                  <li
-                    key={t.id}
-                    className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs"
-                    data-testid="task-card"
-                  >
-                    <span
-                      className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
-                      title={meta.label}
-                      aria-hidden="true"
-                    />
-                    <span
-                      className={
-                        t.status === 'done'
-                          ? 'min-w-0 flex-1 truncate text-slate-500 line-through'
-                          : 'min-w-0 flex-1 truncate text-slate-200'
-                      }
-                    >
-                      {t.title}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="space-y-3">
+              {group.items.map((it) => (
+                <WorkItemTaskList key={it.workItemId ?? '__loose__'} item={it} />
+              ))}
+            </div>
           )}
         </div>
         <div>
@@ -277,6 +275,53 @@ function EpicGroupCard({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** One work item and the agent's sub-task checklist beneath it. */
+function WorkItemTaskList({ item }: { item: WorkItemTasks }): React.JSX.Element {
+  const done = item.tasks.filter((t) => t.status === 'done').length;
+  const orderedTasks = [...item.tasks].sort(
+    (a, b) => TASK_STATUS_META[a.status].order - TASK_STATUS_META[b.status].order,
+  );
+  return (
+    <div data-testid="workitem-group">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-300">
+          {item.title}
+        </span>
+        <span className="shrink-0 text-[0.7rem] text-slate-500">
+          {done}/{item.tasks.length}
+        </span>
+      </div>
+      <ul className="space-y-1.5">
+        {orderedTasks.map((t) => {
+          const meta = TASK_STATUS_META[t.status];
+          return (
+            <li
+              key={t.id}
+              className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs"
+              data-testid="task-card"
+            >
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
+                title={meta.label}
+                aria-hidden="true"
+              />
+              <span
+                className={
+                  t.status === 'done'
+                    ? 'min-w-0 flex-1 truncate text-slate-500 line-through'
+                    : 'min-w-0 flex-1 truncate text-slate-200'
+                }
+              >
+                {t.title}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

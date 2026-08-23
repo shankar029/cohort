@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
+import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { GitFileChange } from '@shared/index';
 import type { GitCommit } from '@shared/index';
 import type { Store } from './db/store.js';
@@ -140,6 +141,18 @@ class AgentActor {
     for (const s of this.sessions.values()) await s.dispose().catch(() => undefined);
     this.sessions.clear();
   }
+
+  /**
+   * Tear down every live session so the next `ask()` builds a fresh one. Used by
+   * the Lead to recover an agent whose session is stuck/unrecoverable.
+   */
+  async restart(): Promise<void> {
+    const old = [...this.sessions.values()];
+    this.sessions.clear();
+    this.mailbox = Promise.resolve();
+    this.currentWorkItemId = null;
+    for (const s of old) await s.dispose().catch(() => undefined);
+  }
 }
 
 /** Coordinates a project's team of actors, threads, board work, and escalations. */
@@ -172,6 +185,14 @@ class ProjectOrchestrator {
   private leadPoke?: Cancel;
   /** agentId -> last time the Lead nudged them, so guidance stays low-noise. */
   private readonly leadNudges = new Map<string, number>();
+  /**
+   * agentId -> consecutive unrecoverable trouble signals (empty builds, turn
+   * errors, ignored nudges). At RESTART_THRESHOLD the Lead restarts the session.
+   */
+  private readonly agentTrouble = new Map<string, number>();
+  private static readonly RESTART_THRESHOLD = 2;
+  /** agentIds whose session the Lead has already restarted once (avoid loops). */
+  private readonly restartedOnce = new Set<string>();
   /** Throttle + dedupe the Lead's status heartbeat posted to main chat. */
   private readonly statusHeartbeatMs = Number(process.env.ATEAM_STATUS_HEARTBEAT_MS ?? 90000);
   private lastStatusAt = 0;
@@ -934,23 +955,103 @@ class ProjectOrchestrator {
     return [...specs].sort((a, b) => load(a) - load(b))[0];
   }
 
-  /** Keep an eye on the team: nudge blocked agents (throttled per agent). */
+  /**
+   * Active supervision: the Lead doesn't just nudge — it engages. A blocked agent
+   * is invoked directly to resume; if it has accumulated unrecoverable trouble
+   * signals, the Lead restarts its session (once) and re-drives the work.
+   */
   private superviseAgents(): void {
     const now = Date.now();
-    const main = this.ensureMainThread();
-    const lead = this.lead();
     for (const a of this.specialists()) {
       if (a.status !== 'blocked') continue;
       const last = this.leadNudges.get(a.id) ?? 0;
       if (now - last < 60_000) continue;
       this.leadNudges.set(a.id, now);
-      this.postMessage(
-        main.id,
-        lead,
-        `@${a.displayName} you look blocked — tell me the specific blocker and what you’ve ` +
-          `tried, and I’ll unblock you or pull the right people into a quick discussion.`,
-      );
+      const trouble = this.troubleSignal(a.id);
+      if (trouble >= ProjectOrchestrator.RESTART_THRESHOLD && !this.restartedOnce.has(a.id)) {
+        this.restartedOnce.add(a.id);
+        void this.restartAgentSession(
+          a.id,
+          'stayed blocked without making progress after repeated attempts',
+        );
+        continue;
+      }
+      void this.reviveBlockedAgent(a);
     }
+  }
+
+  /** Register an unrecoverable trouble signal for an agent; returns the new count. */
+  private troubleSignal(agentId: string): number {
+    const n = (this.agentTrouble.get(agentId) ?? 0) + 1;
+    this.agentTrouble.set(agentId, n);
+    return n;
+  }
+
+  /** Clear an agent's trouble state after it makes real progress. */
+  private clearTrouble(agentId: string): void {
+    this.agentTrouble.delete(agentId);
+    this.restartedOnce.delete(agentId);
+    this.leadNudges.delete(agentId);
+  }
+
+  /** The Lead invokes a blocked agent directly to surface the blocker and resume. */
+  private async reviveBlockedAgent(agent: Agent): Promise<void> {
+    const main = this.ensureMainThread();
+    const lead = this.lead();
+    this.postMessage(
+      main.id,
+      lead,
+      `@${agent.displayName} you look blocked — I'm stepping in. Tell me the specific blocker ` +
+        `and what you've tried; I'll unblock you or pull in the right people. Meanwhile, resume ` +
+        `on your current task and make concrete progress.`,
+    );
+    try {
+      await this.actor(agent).ask(
+        `The Team Lead is checking in because you appear blocked. State your single biggest ` +
+          `blocker in one line, then take the next concrete step on your assigned work. If you ` +
+          `truly cannot proceed, ask a specific question.`,
+        main.id,
+        null,
+      );
+    } catch {
+      /* the manager tick must never crash */
+    }
+  }
+
+  /**
+   * Restart an agent whose session is stuck/unrecoverable: dispose its Copilot
+   * session(s), build a fresh one on the next turn, and re-drive its work. Posts a
+   * visible note as the Lead and records an event + notification.
+   */
+  async restartAgentSession(agentId: string, reason: string): Promise<void> {
+    const agent = this.deps.store.getAgent(agentId);
+    if (!agent) return;
+    const actor = this.actors.get(agentId);
+    if (actor) await actor.restart();
+    this.agentTrouble.delete(agentId);
+    this.setStatus(agentId, 'idle');
+    const main = this.ensureMainThread();
+    this.postMessage(
+      main.id,
+      this.lead(),
+      `${agent.displayName}'s session wasn't recoverable (${reason}). I've torn it down and ` +
+        `started a **fresh session**, and I'm re-driving the work from a clean slate.`,
+    );
+    this.emitEvent(agentId, 'system', `Team Lead restarted the session: ${reason}`, null, null);
+    this.notify(
+      'system',
+      `Restarted ${agent.displayName}`,
+      `The Team Lead restarted this agent's session: ${reason}`,
+      `agents/${agentId}`,
+      null,
+      agentId,
+    );
+    // Re-drive any in-flight task assigned to this agent from a clean state.
+    for (const item of this.deps.store.listWorkItems(this.projectId)) {
+      if (item.assigneeAgentId !== agentId) continue;
+      if (item.status === 'in_progress') this.moveItem(item.id, 'todo');
+    }
+    this.pokeLead();
   }
 
   /**
@@ -1104,6 +1205,82 @@ class ProjectOrchestrator {
     }
   }
 
+  /**
+   * Split a work item into a concrete sub-task checklist and persist each as an
+   * AgentTask under this agent + work item (todo). This is the anti-hallucination
+   * structure: the agent commits to an explicit scope before writing any code.
+   */
+  private async planSubtasks(
+    agent: Agent,
+    item: WorkItem,
+    threadId: string,
+    cwd: string | undefined,
+  ): Promise<AgentTask[]> {
+    const planPrompt =
+      `Before writing any code, break this work item into a short checklist of 3–6 concrete, ` +
+      `verifiable sub-tasks that TOGETHER fully satisfy the requirement — no missing scope and ` +
+      `no invented scope. This checklist is your guard against missing requirements or ` +
+      `hallucinating work.\n\n` +
+      `Work item: ${item.title}\nDetails: ${item.description || '(none)'}\n\n` +
+      `Reply with ONLY the checklist: one sub-task per line beginning with "- ", each a single ` +
+      `concrete action. For build work, include a sub-task for unit + integration tests and one ` +
+      `for verifying the acceptance criteria.`;
+    let text = '';
+    try {
+      text = await this.actor(agent).ask(planPrompt, threadId, item.id, cwd);
+    } catch {
+      text = '';
+    }
+    let titles = this.parseChecklist(text);
+    if (titles.length === 0) titles = [item.title];
+    const tasks: AgentTask[] = [];
+    for (const title of titles) {
+      const t = this.deps.store.upsertTask({
+        projectId: this.projectId,
+        agentId: agent.id,
+        workItemId: item.id,
+        title,
+        status: 'todo',
+      });
+      tasks.push(t);
+      this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: t });
+    }
+    this.emitEvent(
+      agent.id,
+      'system',
+      `Planned ${tasks.length} sub-task(s) for “${item.title}”`,
+      null,
+      item.id,
+    );
+    return tasks;
+  }
+
+  /** Parse a bulleted/numbered checklist into clean sub-task titles (max 8). */
+  private parseChecklist(text: string): string[] {
+    const out: string[] = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const m = /^\s*(?:[-*•]|\d+[.)])\s+(.*\S)/.exec(raw);
+      if (!m) continue;
+      const title = (m[1] ?? '').replace(/\*\*/g, '').trim();
+      if (title && title.length <= 140) out.push(title);
+    }
+    return out.slice(0, 8);
+  }
+
+  /** Move a set of the agent's sub-tasks to a new status and broadcast each. */
+  private setSubtaskStatus(tasks: AgentTask[], status: AgentTaskStatus): void {
+    for (const t of tasks) {
+      const u = this.deps.store.upsertTask({
+        projectId: this.projectId,
+        agentId: t.agentId,
+        workItemId: t.workItemId,
+        title: t.title,
+        status,
+      });
+      this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: u });
+    }
+  }
+
   private async runWorkItem(workItemId: string): Promise<void> {
     const item = this.deps.store.getWorkItem(workItemId);
     if (!item || !item.assigneeAgentId) return;
@@ -1128,21 +1305,37 @@ class ProjectOrchestrator {
     this.moveItem(item.id, 'in_progress');
     this.setProgress(item.id, Math.max(10, item.progress), agent);
     const main = this.ensureMainThread();
-    const startTask = this.deps.store.upsertTask({
-      projectId: this.projectId,
-      agentId: agent.id,
-      workItemId: item.id,
-      title: item.title,
-      status: 'doing',
-    });
-    this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: startTask });
 
     // Run in the epic's isolated worktree when this task belongs to an epic.
     const worktree = item.parentId ? this.epicWorktrees.get(item.parentId) : undefined;
     const cwd = worktree?.path;
+
+    // PHASE 1 — plan. Before touching code the agent splits the work item into a
+    // concrete sub-task checklist saved under it (agent → epic → work item →
+    // tasks). This is the guard against hallucinating or missing requirements: the
+    // agent commits to a scope up front and knocks each item off.
+    const subtasks = await this.planSubtasks(agent, item, main.id, cwd);
+    this.setSubtaskStatus(subtasks, 'doing');
+    const checklist = subtasks.map((s, i) => `${i + 1}. ${s.title}`).join('\n');
+
+    // PHASE 2 — execute against that checklist.
+    const qaStream = /^qa$/.test(item.stream ?? '');
+    const testingClause = qaStream
+      ? `This is a QA sign-off task: write end-to-end tests that exercise the feature the way an ` +
+        `end user does, using the repository's existing E2E tooling (or add one if none exists). ` +
+        `Only sign off after those tests actually PASS, and cite the test files, the command you ` +
+        `ran, and the passing output as evidence.\n`
+      : worktree
+        ? `Testing is mandatory and part of “done”: add unit AND integration tests for what you ` +
+          `build, keep overall coverage at or above 80%, and leave the build green (typecheck, ` +
+          `lint, tests).\n`
+        : '';
     const basePrompt =
-      `The Team Lead assigned you this task. Work on it and report progress to the team.\n\n` +
+      `The Team Lead assigned you this task. Work through the checklist you defined and report ` +
+      `progress to the team.\n\n` +
       `Task: ${item.title}\nDetails: ${item.description || '(none)'}\n` +
+      `Your sub-task checklist (complete every item):\n${checklist}\n` +
+      testingClause +
       (worktree
         ? `You are on branch ${worktree.branch} in an isolated worktree. Create/edit real files ` +
           `here using relative paths.\n`
@@ -1179,39 +1372,58 @@ class ProjectOrchestrator {
       );
     }
 
-    // Empty build after the retry budget → do NOT mark it done; flag + escalate to
-    // the user for guidance. The task stays in progress so the epic can't silently
-    // "complete" with no deliverable.
+    // Empty build after the retry budget. Before bothering the user, the Lead
+    // tries the strongest automatic recovery: restart the agent's session once
+    // (fresh Copilot session, clean slate) and re-drive the task. Only if it is
+    // STILL empty after that restart do we park it and escalate for guidance.
     if (gate && worktree && !produced) {
+      this.troubleSignal(agent.id);
+      if (!this.restartedOnce.has(agent.id)) {
+        this.restartedOnce.add(agent.id);
+        this.emitEvent(
+          agent.id,
+          'system',
+          `“${item.title}” produced no code after ${MAX_ATTEMPTS} attempts — restarting session`,
+          null,
+          item.id,
+        );
+        await this.restartAgentSession(
+          agent.id,
+          `no deliverable on “${item.title}” after ${MAX_ATTEMPTS} attempts`,
+        );
+        return;
+      }
       this.setStatus(agent.id, 'needs_input');
       this.awaitingInput.add(item.id);
       this.emitEvent(
         agent.id,
         'system',
-        `“${item.title}” produced no code after ${MAX_ATTEMPTS} attempts — needs guidance`,
+        `“${item.title}” produced no code after a session restart — needs guidance`,
         null,
         item.id,
       );
       this.notify(
         'question',
         `Task blocked: ${item.title}`,
-        `${agent.displayName} could not produce deliverable changes and needs your guidance.`,
+        `${agent.displayName} could not produce deliverable changes even after a fresh session, and needs your guidance.`,
         'board',
         item.id,
         agent.id,
       );
       void this.raiseQuestion(
         agent.id,
-        `${agent.displayName} produced no code for “${item.title}” after ${MAX_ATTEMPTS} attempts. How should we proceed?`,
+        `${agent.displayName} produced no code for “${item.title}” even after restarting its session. How should we proceed?`,
         ['Retry', 'Skip this task'],
       ).then((ans) => {
         this.awaitingInput.delete(item.id);
         this.setStatus(agent.id, 'idle');
         if (ans.toLowerCase().startsWith('skip')) {
+          this.clearTrouble(agent.id);
           this.moveItem(item.id, 'done');
           this.maybeFinishEpic(item.parentId);
         } else {
-          // Retry: put it back in the queue and let the manager re-drive it.
+          // Retry: allow another restart cycle and let the manager re-drive it.
+          this.restartedOnce.delete(agent.id);
           this.moveItem(item.id, 'todo');
           this.pokeLead();
         }
@@ -1219,6 +1431,9 @@ class ProjectOrchestrator {
       return;
     }
 
+    // The task produced real work (or is a verifier sign-off) — clear any prior
+    // trouble so a later hiccup starts a fresh recovery budget.
+    this.clearTrouble(agent.id);
     // Record an audit note and commit the task's work on the epic branch.
     let completion: { branch: string; hash: string | null; files: GitFileChange[] } | null = null;
     if (worktree) {
@@ -1255,14 +1470,8 @@ class ProjectOrchestrator {
       }
     }
 
-    const doneTask = this.deps.store.upsertTask({
-      projectId: this.projectId,
-      agentId: agent.id,
-      workItemId: item.id,
-      title: item.title,
-      status: 'done',
-    });
-    this.deps.bus.publish({ type: 'task.updated', projectId: this.projectId, task: doneTask });
+    // Every sub-task in the checklist is now complete.
+    this.setSubtaskStatus(subtasks, 'done');
     const latest = this.deps.store.getWorkItem(item.id);
     if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
     this.setProgress(item.id, 100, agent);
