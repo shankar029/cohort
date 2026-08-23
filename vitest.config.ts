@@ -31,6 +31,7 @@ export default defineConfig({
         'src/server/db/store.ts',
         'src/server/agents/fakeAdapter.ts',
         'src/server/agents/catalog.ts',
+        'src/server/agents/context.ts',
         'src/shared/**/*.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },

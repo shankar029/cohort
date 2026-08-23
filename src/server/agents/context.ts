@@ -58,6 +58,64 @@ function topLevel(repoDir: string): string[] {
   }
 }
 
+/** Well-known repo-level agent/contributor instruction files, in priority order. */
+const INSTRUCTION_FILES = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  'GEMINI.md',
+  '.cursorrules',
+  '.windsurfrules',
+  '.github/copilot-instructions.md',
+  'CONVENTIONS.md',
+];
+/** Directories whose markdown files are per-scope instruction rules. */
+const INSTRUCTION_DIRS = ['.cursor/rules', '.github/instructions'];
+const MAX_PER_FILE = 6000;
+const MAX_TOTAL = 16000;
+
+/**
+ * Discover the repository's OWN agent/contributor instructions (AGENTS.md,
+ * CLAUDE.md, Copilot/Cursor/Windsurf rules, …) so every agent honors the
+ * conventions, commands, and constraints the repo defines. Read from the agent's
+ * actual working directory (the per-epic clone for epic work), so branch clones
+ * pick these up too. Size-capped so a large doc can't blow the prompt.
+ */
+export function discoverRepoInstructions(cwd: string): Array<{ rel: string; content: string }> {
+  const out: Array<{ rel: string; content: string }> = [];
+  const seen = new Set<string>();
+  let total = 0;
+  const push = (rel: string): void => {
+    const norm = rel.replace(/\\/g, '/');
+    if (seen.has(norm) || total >= MAX_TOTAL) return;
+    try {
+      const abs = path.join(cwd, rel);
+      if (!fs.statSync(abs).isFile()) return;
+      let content = fs.readFileSync(abs, 'utf8').trim();
+      if (!content) return;
+      if (content.length > MAX_PER_FILE) {
+        content = `${content.slice(0, MAX_PER_FILE)}\n… (truncated)`;
+      }
+      seen.add(norm);
+      total += content.length;
+      out.push({ rel: norm, content });
+    } catch {
+      /* missing/unreadable — skip */
+    }
+  };
+  for (const f of INSTRUCTION_FILES) push(f);
+  for (const dir of INSTRUCTION_DIRS) {
+    try {
+      if (!fs.statSync(path.join(cwd, dir)).isDirectory()) continue;
+      for (const f of fs.readdirSync(path.join(cwd, dir)).sort()) {
+        if (/\.(md|mdc)$/i.test(f)) push(path.join(dir, f));
+      }
+    } catch {
+      /* no such dir — skip */
+    }
+  }
+  return out;
+}
+
 export interface GroundingInput {
   project: Project;
   self: Agent;
@@ -89,6 +147,15 @@ export function buildSystemPrompt({
     .join('\n');
 
   const isLead = self.kind === 'lead';
+
+  const repoInstructions = discoverRepoInstructions(cwd);
+  const instructionsBlock = repoInstructions.length
+    ? `\n\n# Repository instructions (MANDATORY — honor these)\n` +
+      `This repository ships its OWN agent/contributor instructions. You **MUST read and follow ` +
+      `them**; they take precedence over generic defaults wherever they conflict. Obey their ` +
+      `conventions, commands, constraints, and definition of done exactly.\n\n` +
+      repoInstructions.map((f) => `## ${f.rel}\n${f.content}`).join('\n\n')
+    : '';
 
   return `# Environment
 You are \`${self.name}\` (${self.displayName}), an autonomous AI agent on **ateam** — a team of
@@ -141,6 +208,7 @@ ${
     : `- Do your specialist work to a principal-engineer standard: correct, tested, secure, and
   matching the project's existing conventions. Report progress succinctly.`
 }
+${instructionsBlock}
 
 # Your role
 ${self.prompt}`;

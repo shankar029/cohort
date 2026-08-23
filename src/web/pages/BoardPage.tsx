@@ -25,6 +25,9 @@ export function BoardPage(): React.JSX.Element {
   const bundle = useBundle(projectId);
   const [showCreate, setShowCreate] = useState<WorkItemStatus | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  // Detail modal open-state lives at board level (not inside a card) so it stays
+  // open when an agent auto-works the item and its card moves between columns.
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [epicFilter, setEpicFilter] = useState<string>(
     () => (projectId && localStorage.getItem(`ateam.boardFilter.${projectId}`)) || 'all',
   );
@@ -43,6 +46,8 @@ export function BoardPage(): React.JSX.Element {
 
   const inFilter = (w: WorkItem): boolean =>
     epicFilter === 'all' ? true : w.id === epicFilter || w.parentId === epicFilter;
+
+  const detailItem = detailId ? bundle.workItems.find((w) => w.id === detailId) : undefined;
 
   return (
     <div className="flex h-full flex-col">
@@ -122,7 +127,12 @@ export function BoardPage(): React.JSX.Element {
                   <p className="px-2 py-6 text-center text-xs text-slate-600">Nothing here</p>
                 )}
                 {items.map((item) => (
-                  <WorkItemCard key={item.id} item={item} onDragStart={() => setDragId(item.id)} />
+                  <WorkItemCard
+                    key={item.id}
+                    item={item}
+                    onDragStart={() => setDragId(item.id)}
+                    onOpenDetail={() => setDetailId(item.id)}
+                  />
                 ))}
               </div>
             </section>
@@ -131,6 +141,7 @@ export function BoardPage(): React.JSX.Element {
       </div>
 
       {showCreate && <CreateItemModal status={showCreate} onClose={() => setShowCreate(null)} />}
+      {detailItem && <WorkItemDetailModal item={detailItem} onClose={() => setDetailId(null)} />}
     </div>
   );
 }
@@ -138,14 +149,15 @@ export function BoardPage(): React.JSX.Element {
 function WorkItemCard({
   item,
   onDragStart,
+  onOpenDetail,
 }: {
   item: WorkItem;
   onDragStart: () => void;
+  onOpenDetail: () => void;
 }): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
   const { updateWorkItem, deleteWorkItem } = useApp();
   const bundle = useBundle(projectId);
-  const [showDetail, setShowDetail] = useState(false);
   const assignee = bundle.agents.find((a) => a.id === item.assigneeAgentId);
   const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
   const isEpic = item.kind === 'epic';
@@ -186,7 +198,7 @@ function WorkItemCard({
             type="button"
             className="flex-1 text-left text-sm font-medium text-slate-100 hover:text-accent-300"
             data-testid="workitem-title"
-            onClick={() => setShowDetail(true)}
+            onClick={onOpenDetail}
           >
             {item.title}
           </button>
@@ -275,7 +287,6 @@ function WorkItemCard({
           </>
         )}
       </div>
-      {showDetail && <WorkItemDetailModal item={item} onClose={() => setShowDetail(false)} />}
     </>
   );
 }
