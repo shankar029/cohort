@@ -7,6 +7,7 @@ import type {
   CreateAgentInput,
   CreateProjectInput,
   CreateWorkItemInput,
+  GitSnapshot,
   Project,
   PullRequest,
   Question,
@@ -132,6 +133,8 @@ export const api = {
 
   events: (projectId: string) =>
     request<{ events: AgentEvent[] }>(`/api/projects/${projectId}/events`),
+  gitSnapshot: (projectId: string) =>
+    request<{ snapshot: GitSnapshot }>(`/api/projects/${projectId}/git`),
   models: () => request<{ models: string[] }>('/api/models'),
   questions: (projectId: string) =>
     request<{ questions: Question[] }>(`/api/projects/${projectId}/questions`),

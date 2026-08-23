@@ -90,7 +90,7 @@ export function DashboardPage(): React.JSX.Element {
             warn={pendingQuestions.length > 0}
             to={`/p/${projectId}/board`}
           />
-          <Kpi label="Open PRs" value={openPulls.length} to={`/p/${projectId}/pulls`} />
+          <Kpi label="Open PRs" value={openPulls.length} to={`/p/${projectId}/git`} />
           <Kpi label="Working now" value={working.length} to={`/p/${projectId}/activity`} />
         </div>
 

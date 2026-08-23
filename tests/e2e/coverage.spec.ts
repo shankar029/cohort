@@ -187,9 +187,9 @@ test('chat escalation: a question surfaces and answering resumes the work', asyn
   });
 });
 
-// ---------------------------------------------------------------- Pull Requests (card, diff, comments, merge)
-test('pull requests: completed epic raises a reviewed PR that merges', async ({ page }) => {
-  await createProject(page, 'Cov PR');
+// ---------------------------------------------------------------- Git (branches, commits, PR, merge)
+test('git: completed epic shows a branch, commits and a merged PR', async ({ page }) => {
+  await createProject(page, 'Cov Git');
   await addSpecialist(page, 'frontend-engineer');
   await addSpecialist(page, 'qa-engineer');
 
@@ -197,10 +197,13 @@ test('pull requests: completed epic raises a reviewed PR that merges', async ({ 
   await page.getByTestId('chat-input').fill('Please build a profile page.');
   await page.getByTestId('chat-send').click();
 
-  await nav(page, 'Pull Requests');
-  await expect(page.getByTestId('pr-card').first()).toBeVisible({ timeout: 30000 });
+  await nav(page, 'Git');
+  await expect(page.getByTestId('git-epic').first()).toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId('git-epic').first()).toContainText('ateam/epic-', {
+    timeout: 30000,
+  });
   await expect(page.getByTestId('pr-card').first()).toContainText('Merged', { timeout: 30000 });
-  await shot(page, 'pull-requests');
+  await shot(page, 'git');
 });
 
 // ---------------------------------------------------------------- Notifications

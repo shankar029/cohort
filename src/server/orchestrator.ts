@@ -1,6 +1,8 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
+import type { GitFileChange } from '@shared/index';
+import type { GitCommit } from '@shared/index';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
 import type {
@@ -754,6 +756,79 @@ class ProjectOrchestrator {
     );
   }
 
+  /**
+   * Live per-epic git snapshot for the Git page: branch, worktree, commits and
+   * files vs base, plus the epic's PR and tasks. Runs read-only git queries in
+   * each active epic clone; merged epics (clone reclaimed) report their PR only.
+   */
+  async gitSnapshot(): Promise<import('@shared/index').GitSnapshot> {
+    const repoDir = this.project().repoDir;
+    let baseBranch = 'main';
+    try {
+      baseBranch = await this.deps.git.currentBranch(repoDir);
+    } catch {
+      /* ignore */
+    }
+    let branches: string[] = [];
+    try {
+      branches = (await this.deps.git.listBranches(repoDir)).filter((b) =>
+        b.startsWith('ateam/epic-'),
+      );
+    } catch {
+      /* ignore */
+    }
+    const prs = this.deps.store.listPRs(this.projectId);
+    const epicItems = this.deps.store
+      .listWorkItems(this.projectId)
+      .filter((i) => i.kind === 'epic' && i.branch);
+    const epics: import('@shared/index').EpicGit[] = [];
+    for (const epic of epicItems) {
+      const wt = this.epicWorktrees.get(epic.id);
+      const active = !!wt && fs.existsSync(wt.path);
+      let commits: GitCommit[] = [];
+      let files: GitFileChange[] = [];
+      if (active && wt) {
+        try {
+          commits = await this.deps.git.commitsAhead(wt.path, baseBranch);
+        } catch {
+          /* ignore */
+        }
+        try {
+          files = (await this.deps.git.filesChanged(wt.path, baseBranch)).filter(
+            (f) => !f.path.startsWith('.ateam/'),
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+      const pr = prs.find((p) => p.workItemId === epic.id) ?? null;
+      const tasks = this.deps.store.listChildTasks(epic.id).map((t) => ({
+        id: t.id,
+        title: t.title,
+        stream: t.stream,
+        status: t.status,
+        assigneeAgentId: t.assigneeAgentId,
+      }));
+      epics.push({
+        epicId: epic.id,
+        title: epic.title,
+        status: epic.status,
+        branch: epic.branch,
+        baseBranch: pr?.baseBranch ?? baseBranch,
+        worktreePath: active && wt ? wt.path : null,
+        worktreeActive: active,
+        commits,
+        files,
+        prId: pr?.id ?? null,
+        prStatus: pr?.status ?? null,
+        tasks,
+      });
+    }
+    // Most-recent epic first.
+    epics.reverse();
+    return { baseBranch, worktreeRoot: this.deps.git.root, branches, epics };
+  }
+
   private leadTick(): void {
     if (this.disposed) return;
     this.assignUnassignedWork();
@@ -1068,7 +1143,9 @@ class ProjectOrchestrator {
         ? `You are on branch ${worktree.branch} in an isolated worktree. Create/edit real files ` +
           `here using relative paths.\n`
         : '') +
-      `When done, summarize what you did.`;
+      `When done, summarize what you did and CITE EVIDENCE: list the exact files you ` +
+      `created or edited and how you verified the work (tests run, commands, checks). ` +
+      `Do not claim completion unless you actually created or edited real files.`;
 
     // Build tasks must produce real, committable changes — an agent that only
     // narrates has not done the work. Verifier streams (qa/reviewer/security)
@@ -1139,6 +1216,7 @@ class ProjectOrchestrator {
     }
 
     // Record an audit note and commit the task's work on the epic branch.
+    let completion: { branch: string; hash: string | null; files: GitFileChange[] } | null = null;
     if (worktree) {
       try {
         const noteDir = path.join(worktree.path, '.ateam', 'tasks');
@@ -1151,12 +1229,15 @@ class ProjectOrchestrator {
           worktree.path,
           `task(${item.stream ?? 'task'}): ${item.title}`,
         );
+        const files =
+          res.committed && res.hash ? await this.deps.git.commitFiles(worktree.path, res.hash) : [];
+        completion = { branch: worktree.branch, hash: res.committed ? res.hash : null, files };
         if (res.committed)
           this.emitEvent(
             agent.id,
             'git',
             `Committed ${res.hash?.slice(0, 8)} on ${worktree.branch}`,
-            null,
+            { branch: worktree.branch, hash: res.hash, files },
             item.id,
           );
       } catch (err) {
@@ -1181,6 +1262,9 @@ class ProjectOrchestrator {
     const latest = this.deps.store.getWorkItem(item.id);
     if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
     this.setProgress(item.id, 100, agent);
+    // Post a structured, evidence-backed completion report to the team so the
+    // branch/commit/files are visible and “done” can't hide an empty branch.
+    this.postTaskCompletion(agent, item, completion, summary, isVerifier);
     this.notify(
       'task',
       `Task complete: ${item.title}`,
@@ -1196,6 +1280,85 @@ class ProjectOrchestrator {
     // When every task in the epic is reviewed, raise a PR and run review-to-merge.
     this.maybeFinishEpic(item.parentId);
     await this.pullNext(agent.id);
+  }
+
+  /** Render a `+a / −r` line for a changed file (binary shows `bin`). */
+  private fileLine(f: GitFileChange): string {
+    const stat = f.added < 0 || f.removed < 0 ? 'bin' : `+${f.added} / −${f.removed}`;
+    return `- \`${f.path}\` (${stat})`;
+  }
+
+  /**
+   * Post the mandatory completion report for a task: branch, commit and the
+   * exact files changed, plus the agent's evidence. Verifier/no-code tasks say
+   * so honestly instead of implying a build landed.
+   */
+  private postTaskCompletion(
+    agent: Agent,
+    item: WorkItem,
+    completion: { branch: string; hash: string | null; files: GitFileChange[] } | null,
+    summary: string,
+    isVerifier: boolean,
+  ): void {
+    const main = this.ensureMainThread();
+    // Exclude ateam bookkeeping from the deliverable evidence.
+    const files = (completion?.files ?? []).filter((f) => !f.path.startsWith('.ateam/'));
+    const lines: string[] = [];
+    const header =
+      completion && !completion.hash && isVerifier
+        ? `### ✅ Task complete — ${item.title} _(verification — no code changes)_`
+        : `### ✅ Task complete — ${item.title}`;
+    lines.push(header);
+    lines.push(
+      `**Agent:** ${agent.emoji} ${agent.displayName} · **Stream:** ${item.stream ?? '—'}`,
+    );
+    if (completion?.branch) lines.push(`**Branch:** \`${completion.branch}\``);
+    if (completion?.hash) {
+      lines.push(
+        `**Commit:** \`${completion.hash.slice(0, 8)}\` — task(${item.stream ?? 'task'}): ${item.title}`,
+      );
+    }
+    if (files.length > 0) {
+      lines.push(`**Files changed (${files.length}):**`);
+      for (const f of files.slice(0, 20)) lines.push(this.fileLine(f));
+      if (files.length > 20) lines.push(`- …and ${files.length - 20} more`);
+    } else if (!isVerifier && completion) {
+      lines.push(`**Files changed:** _none_`);
+    }
+    lines.push('');
+    lines.push('**Evidence**');
+    lines.push(summary.trim() || '_(no summary provided)_');
+    this.postMessage(main.id, agent, lines.join('\n'));
+  }
+
+  /** Post the epic-level merge report (branch, commit count, files) to the team. */
+  private postEpicCompletion(
+    epic: WorkItem,
+    branch: string,
+    base: string,
+    commits: GitCommit[],
+    files: GitFileChange[],
+  ): void {
+    const main = this.ensureMainThread();
+    const lead = this.lead();
+    const lines: string[] = [];
+    lines.push(`### 🚀 Epic merged — ${epic.title}`);
+    lines.push(
+      `**Branch:** \`${branch || '—'}\` → \`${base || 'main'}\` · ` +
+        `**${commits.length}** commit${commits.length === 1 ? '' : 's'} · ` +
+        `**${files.length}** file${files.length === 1 ? '' : 's'} changed`,
+    );
+    if (commits.length > 0) {
+      lines.push('**Commits:**');
+      for (const c of commits.slice(0, 15)) lines.push(`- \`${c.hash.slice(0, 8)}\` ${c.subject}`);
+      if (commits.length > 15) lines.push(`- …and ${commits.length - 15} more`);
+    }
+    if (files.length > 0) {
+      lines.push('**Files:**');
+      for (const f of files.slice(0, 20)) lines.push(this.fileLine(f));
+      if (files.length > 20) lines.push(`- …and ${files.length - 20} more`);
+    }
+    this.postMessage(main.id, lead, lines.join('\n'));
   }
 
   /** Promote backlog tasks whose dependencies are all satisfied (review/done). */
@@ -1311,7 +1474,7 @@ class ProjectOrchestrator {
         'pr',
         `PR opened: ${epic.title}`,
         `${reviewer.displayName} will review the changes.`,
-        'pulls',
+        'git',
         epic.id,
         lead.id,
       );
@@ -1377,7 +1540,7 @@ class ProjectOrchestrator {
       'review',
       `Changes requested: ${epic.title}`,
       `${reviewer.displayName} left ${open.length} comment(s); the Team Lead is assigning fixes.`,
-      'pulls',
+      'git',
       epic.id,
       reviewer.id,
     );
@@ -1518,10 +1681,33 @@ class ProjectOrchestrator {
       'merge',
       `Epic merged: ${epic.title}`,
       'All tasks reviewed and merged. The epic is complete.',
-      'pulls',
+      'git',
       epic.id,
       this.lead().id,
     );
+    // Epic-level completion report: total commits + files that landed on the
+    // branch, so the team + user see exactly what was merged. Posted after the
+    // merge notification so it never delays the completion signal.
+    try {
+      const wtStats = this.epicWorktrees.get(epic.id);
+      let base = '';
+      try {
+        base = await this.deps.git.currentBranch(repoDir);
+      } catch {
+        /* ignore */
+      }
+      let commits: GitCommit[] = [];
+      let files: GitFileChange[] = [];
+      if (wtStats) {
+        commits = await this.deps.git.commitsAhead(wtStats.path, base);
+        files = (await this.deps.git.filesChanged(wtStats.path, base)).filter(
+          (f) => !f.path.startsWith('.ateam/'),
+        );
+      }
+      this.postEpicCompletion(epic, branch, base, commits, files);
+    } catch {
+      /* reporting is best-effort */
+    }
 
     // Reclaim the epic's isolated worktree now that it is merged + closed.
     const wt = this.epicWorktrees.get(epic.id);

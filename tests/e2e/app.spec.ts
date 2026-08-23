@@ -85,9 +85,9 @@ test('pull requests: a completed epic raises a PR that merges', async ({ page })
   await page.getByTestId('chat-input').fill('Please build a profile page.');
   await page.getByTestId('chat-send').click();
 
-  await page.getByRole('link', { name: 'Pull Requests' }).click();
-  // A PR card appears and reaches the merged state after review.
-  await expect(page.getByTestId('pr-card').first()).toBeVisible({ timeout: 30000 });
+  await page.getByRole('link', { name: 'Git', exact: true }).click();
+  // The epic's git card appears and its PR reaches the merged state after review.
+  await expect(page.getByTestId('git-epic').first()).toBeVisible({ timeout: 30000 });
   await expect(page.getByTestId('pr-card').first()).toContainText('Merged', { timeout: 30000 });
 });
 

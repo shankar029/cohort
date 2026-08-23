@@ -153,6 +153,12 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     return { prComments: store.listProjectPrComments(id) };
   });
 
+  app.get('/api/projects/:id/git', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    return { snapshot: await orchestrators.get(id).gitSnapshot() };
+  });
+
   /* --------------------------------------------------------------- skills */
   app.get('/api/projects/:id/skills', async (req) => {
     const { id } = req.params as { id: string };

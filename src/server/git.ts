@@ -186,6 +186,66 @@ export class GitService {
     return r.ok ? r.stdout.trim() : '';
   }
 
+  /** Commits on the epic branch that are ahead of the base it was cloned from. */
+  async commitsAhead(
+    checkoutPath: string,
+    base: string,
+  ): Promise<Array<{ hash: string; subject: string; author: string; date: string }>> {
+    const ref = base ? `origin/${base}` : 'origin/HEAD';
+    const fmt = '%H%x1f%s%x1f%an%x1f%aI';
+    let r = await this.run(['log', `${ref}..HEAD`, `--pretty=format:${fmt}`], checkoutPath);
+    if (!r.ok)
+      r = await this.run(['log', `origin/HEAD..HEAD`, `--pretty=format:${fmt}`], checkoutPath);
+    if (!r.ok) return [];
+    return r.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const [hash = '', subject = '', author = '', date = ''] = l.split('\x1f');
+        return { hash, subject, author, date };
+      });
+  }
+
+  private parseNumstat(out: string): Array<{ path: string; added: number; removed: number }> {
+    return out
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const parts = l.split('\t');
+        const added = parts[0] === '-' ? -1 : Number(parts[0] ?? 0);
+        const removed = parts[1] === '-' ? -1 : Number(parts[1] ?? 0);
+        const p = (parts[2] ?? '').replace(/^.*=>\s*/, '').replace(/^"|"$/g, '');
+        return {
+          path: p,
+          added: Number.isFinite(added) ? added : 0,
+          removed: Number.isFinite(removed) ? removed : 0,
+        };
+      })
+      .filter((f) => f.path.length > 0);
+  }
+
+  /** Files changed on the epic branch vs its base, with +/- line counts. */
+  async filesChanged(
+    checkoutPath: string,
+    base: string,
+  ): Promise<Array<{ path: string; added: number; removed: number }>> {
+    const ref = base ? `origin/${base}` : 'origin/HEAD';
+    let r = await this.run(['diff', '--numstat', `${ref}...HEAD`], checkoutPath);
+    if (!r.ok) r = await this.run(['diff', '--numstat', 'origin/HEAD...HEAD'], checkoutPath);
+    return r.ok ? this.parseNumstat(r.stdout) : [];
+  }
+
+  /** Files touched by a single commit, with +/- line counts. */
+  async commitFiles(
+    checkoutPath: string,
+    hash: string,
+  ): Promise<Array<{ path: string; added: number; removed: number }>> {
+    const r = await this.run(['show', '--numstat', '--format=', hash], checkoutPath);
+    return r.ok ? this.parseNumstat(r.stdout) : [];
+  }
+
   /**
    * Full diff of an epic clone's branch vs the base branch it was cloned from,
    * capped for display. Runs inside the clone (which has origin/<base>).

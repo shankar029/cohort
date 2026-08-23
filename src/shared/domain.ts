@@ -207,6 +207,61 @@ export interface PullRequest {
 export const PR_COMMENT_STATUSES = ['open', 'resolved'] as const;
 export type PrCommentStatus = (typeof PR_COMMENT_STATUSES)[number];
 
+/* ----------------------------------------------------- git visibility (Git page) */
+
+/** A single commit on an epic branch. */
+export interface GitCommit {
+  hash: string;
+  subject: string;
+  author: string;
+  /** ISO date. */
+  date: string;
+}
+
+/** A file changed on an epic branch vs its base. `added`/`removed` are -1 for binary. */
+export interface GitFileChange {
+  path: string;
+  added: number;
+  removed: number;
+}
+
+/** Per-task git evidence surfaced on the Git page and in completion reports. */
+export interface EpicTaskGit {
+  id: string;
+  title: string;
+  stream: string | null;
+  status: WorkItemStatus;
+  assigneeAgentId: string | null;
+}
+
+/** Git state for one epic: its branch, worktree, commits, files and PR. */
+export interface EpicGit {
+  epicId: string;
+  title: string;
+  status: WorkItemStatus;
+  branch: string | null;
+  baseBranch: string;
+  /** Absolute path of the isolated epic clone; null once reclaimed after merge. */
+  worktreePath: string | null;
+  /** Whether the epic clone still exists on disk (work in flight). */
+  worktreeActive: boolean;
+  commits: GitCommit[];
+  files: GitFileChange[];
+  prId: string | null;
+  prStatus: PrStatus | null;
+  tasks: EpicTaskGit[];
+}
+
+/** Repo-wide git snapshot grouped by epic, returned by GET /projects/:id/git. */
+export interface GitSnapshot {
+  baseBranch: string;
+  /** Absolute root under which all epic clones live. */
+  worktreeRoot: string;
+  /** ateam epic branches present in the main repo. */
+  branches: string[];
+  epics: EpicGit[];
+}
+
 /** A specific review comment on a PR, routed to a stream and its fix task. */
 export interface PrComment {
   id: string;

@@ -9,7 +9,7 @@ import { BoardPage } from './pages/BoardPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { ActivityPage } from './pages/ActivityPage';
-import { PullRequestsPage } from './pages/PullRequestsPage';
+import { GitPage } from './pages/GitPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 
@@ -18,7 +18,7 @@ const NAV = [
   { to: 'chat', label: 'Chat', icon: '💬' },
   { to: 'board', label: 'Board', icon: '🗂️' },
   { to: 'agents', label: 'Agents', icon: '🤖' },
-  { to: 'pulls', label: 'Pull Requests', icon: '🔃' },
+  { to: 'git', label: 'Git', icon: '🌿' },
   { to: 'activity', label: 'Activity', icon: '📡' },
   { to: 'notifications', label: 'Notifications', icon: '🔔' },
   { to: 'settings', label: 'Settings', icon: '⚙️' },
@@ -182,7 +182,8 @@ export function App(): React.JSX.Element {
         <Route path="agents/:agentId" element={<AgentDetailPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
-        <Route path="pulls" element={<PullRequestsPage />} />
+        <Route path="git" element={<GitPage />} />
+        <Route path="pulls" element={<Navigate to="../git" replace />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
