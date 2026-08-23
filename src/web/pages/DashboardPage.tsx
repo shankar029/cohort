@@ -1,8 +1,20 @@
 import React from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { Agent, WorkItem, WorkItemStatus } from '@shared/index';
+import type { Agent, AgentEvent, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, EmptyState, StatusPill } from '../components/ui';
+
+// Milestone-worthy activity for the dashboard — excludes noisy tool_call/
+// tool_result/reasoning/status_change chatter (the full stream lives in Activity).
+const IMPORTANT_EVENT_TYPES = new Set<AgentEvent['type']>([
+  'message',
+  'discussion',
+  'escalation',
+  'git',
+  'pull_request',
+  'subagent_completed',
+  'subagent_failed',
+]);
 
 const STATUS_LABELS: Record<WorkItemStatus, string> = {
   backlog: 'Backlog',
@@ -33,6 +45,8 @@ export function DashboardPage(): React.JSX.Element {
   const pendingQuestions = bundle.questions.filter((q) => q.status === 'pending');
   const openPulls = bundle.pulls.filter((p) => p.status !== 'merged');
   const working = bundle.agents.filter((a) => a.status === 'working');
+  // "Online" = anyone not idle (working, needs input, or blocked).
+  const activeAgents = bundle.agents.filter((a) => a.status !== 'idle');
 
   const byStatus = (list: WorkItem[]): Record<WorkItemStatus, number> => {
     const acc = { backlog: 0, todo: 0, in_progress: 0, review: 0, done: 0 } as Record<
@@ -45,7 +59,10 @@ export function DashboardPage(): React.JSX.Element {
   const taskCounts = byStatus(tasks);
   const totalTasks = tasks.length;
 
-  const recentEvents = bundle.events.slice(-10).reverse();
+  const recentEvents = bundle.events
+    .filter((e) => IMPORTANT_EVENT_TYPES.has(e.type))
+    .slice(-8)
+    .reverse();
 
   return (
     <div className="h-full overflow-auto animate-fadeIn">
@@ -129,27 +146,47 @@ export function DashboardPage(): React.JSX.Element {
             )}
           </section>
 
-          {/* Team */}
+          {/* Active team members */}
           <section>
-            <h2 className="mb-3 text-sm font-semibold text-slate-200">Team</h2>
-            <div className="space-y-2">
-              {bundle.agents.map((a) => (
-                <AgentRow key={a.id} agent={a} projectId={projectId} />
-              ))}
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-200">
+                Active now
+                {activeAgents.length > 0 && (
+                  <span className="ml-1.5 text-slate-500">{activeAgents.length}</span>
+                )}
+              </h2>
+              <Link className="text-xs text-accent-400" to={`/p/${projectId}/agents`}>
+                View team →
+              </Link>
             </div>
+            {activeAgents.length === 0 ? (
+              <EmptyState
+                title="All agents idle"
+                hint="Teammates spin up here when the Team Lead assigns work."
+              />
+            ) : (
+              <div className="space-y-2">
+                {activeAgents.map((a) => (
+                  <AgentRow key={a.id} agent={a} projectId={projectId} />
+                ))}
+              </div>
+            )}
           </section>
         </div>
 
         {/* Recent activity */}
         <section>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-200">Recent activity</h2>
+            <h2 className="text-sm font-semibold text-slate-200">Highlights</h2>
             <Link className="text-xs text-accent-400" to={`/p/${projectId}/activity`}>
-              View all →
+              View all activity →
             </Link>
           </div>
           {recentEvents.length === 0 ? (
-            <EmptyState title="No activity yet" />
+            <EmptyState
+              title="No highlights yet"
+              hint="Key milestones — commits, PRs, escalations — show up here."
+            />
           ) : (
             <ul className="card divide-y divide-surface-border p-0 text-sm">
               {recentEvents.map((e) => {

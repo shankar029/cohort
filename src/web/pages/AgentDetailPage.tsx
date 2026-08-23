@@ -6,11 +6,20 @@ import { useApp, useBundle } from '../state';
 import { Avatar, EmptyState, ModelSelect, StatusPill } from '../components/ui';
 import { Markdown } from '../components/Markdown';
 
-const TASK_COLUMNS: { status: AgentTaskStatus; label: string }[] = [
-  { status: 'todo', label: 'To Do' },
-  { status: 'doing', label: 'Doing' },
-  { status: 'done', label: 'Done' },
-];
+const TASK_STATUS_META: Record<AgentTaskStatus, { label: string; dot: string; order: number }> = {
+  todo: { label: 'To do', dot: 'bg-status-idle', order: 0 },
+  doing: { label: 'Doing', dot: 'bg-status-working animate-pulseDot', order: 1 },
+  done: { label: 'Done', dot: 'bg-status-done', order: 2 },
+};
+
+/** One epic's slice of an agent's personal work: its tasks and scratchpad notes. */
+interface EpicGroup {
+  key: string;
+  epicId: string | null;
+  title: string;
+  tasks: AgentTask[];
+  notes: AgentNote[];
+}
 
 export function AgentDetailPage(): React.JSX.Element {
   const { projectId, agentId } = useParams<{ projectId: string; agentId: string }>();
@@ -37,6 +46,35 @@ export function AgentDetailPage(): React.JSX.Element {
       </div>
     );
   }
+
+  // Group the agent's personal tasks + notes by the epic they belong to, so the
+  // page reads per-epic instead of one flat board. workItemId points at a task
+  // work item; its parentId is the epic. Items with no epic fall under 'General'.
+  const wiById = new Map(bundle.workItems.map((w) => [w.id, w]));
+  const epicIdOf = (workItemId: string | null): string | null => {
+    if (!workItemId) return null;
+    const wi = wiById.get(workItemId);
+    if (!wi) return null;
+    return wi.kind === 'epic' ? wi.id : wi.parentId;
+  };
+  const groupMap = new Map<string, EpicGroup>();
+  const groupFor = (epicId: string | null): EpicGroup => {
+    const key = epicId ?? '__none__';
+    let g = groupMap.get(key);
+    if (!g) {
+      const epic = epicId ? wiById.get(epicId) : undefined;
+      g = { key, epicId, title: epic?.title ?? 'General', tasks: [], notes: [] };
+      groupMap.set(key, g);
+    }
+    return g;
+  };
+  for (const t of tasks) groupFor(epicIdOf(t.workItemId)).tasks.push(t);
+  for (const n of notes) groupFor(epicIdOf(n.workItemId)).notes.push(n);
+  const groups = [...groupMap.values()].sort((a, b) => {
+    // Named epics first (by title), 'General' bucket last.
+    if ((a.epicId === null) !== (b.epicId === null)) return a.epicId === null ? 1 : -1;
+    return a.title.localeCompare(b.title);
+  });
 
   return (
     <div className="h-full overflow-auto">
@@ -84,29 +122,41 @@ export function AgentDetailPage(): React.JSX.Element {
         </div>
       </header>
 
-      <div className="grid gap-6 p-6 lg:grid-cols-[2fr_1fr]">
-        <section>
-          <h2 className="mb-3 text-sm font-semibold text-slate-200">Task board</h2>
-          {tasks.length === 0 ? (
+      <div className="space-y-6 p-6">
+        {/* Living plan — agent-wide, the persona's current working memory. */}
+        <section data-testid="scratchpad">
+          <h2 className="mb-3 text-sm font-semibold text-slate-200">Living plan</h2>
+          <div className="card p-4">
+            {plan ? (
+              <div data-testid="agent-plan" className="text-sm">
+                <Markdown content={plan} />
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">
+                No plan yet — the agent maintains this as it works.
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* Work grouped by epic: each epic gets its own tasks + scratchpad notes. */}
+        <section data-testid="task-board">
+          <h2 className="mb-3 text-sm font-semibold text-slate-200">Work by epic</h2>
+          {groups.length === 0 ? (
             <EmptyState
-              title="No tasks yet"
-              hint="Tasks appear here as this agent works on assigned items."
+              title="No work yet"
+              hint="Tasks and notes appear here, grouped by epic, as this agent works."
             />
           ) : (
-            <div className="grid grid-cols-3 gap-3" data-testid="task-board">
-              {TASK_COLUMNS.map((col) => (
-                <TaskColumn
-                  key={col.status}
-                  label={col.label}
-                  tasks={tasks.filter((t) => t.status === col.status)}
-                />
+            <div className="space-y-4">
+              {groups.map((g) => (
+                <EpicGroupCard key={g.key} group={g} isEpic={g.epicId !== null} />
               ))}
             </div>
           )}
         </section>
 
-        <Scratchpad plan={plan} notes={notes} />
-
+        {/* Configuration */}
         <section>
           <h2 className="mb-3 text-sm font-semibold text-slate-200">Configuration</h2>
           {editing && projectId ? (
@@ -134,58 +184,95 @@ export function AgentDetailPage(): React.JSX.Element {
   );
 }
 
-function TaskColumn({ label, tasks }: { label: string; tasks: AgentTask[] }): React.JSX.Element {
+function EpicGroupCard({
+  group,
+  isEpic,
+}: {
+  group: EpicGroup;
+  isEpic: boolean;
+}): React.JSX.Element {
+  const doneCount = group.tasks.filter((t) => t.status === 'done').length;
+  const orderedTasks = [...group.tasks].sort(
+    (a, b) => TASK_STATUS_META[a.status].order - TASK_STATUS_META[b.status].order,
+  );
   return (
-    <div className="rounded-lg bg-surface-1/60 p-2">
-      <h3 className="px-1 py-1 text-xs font-semibold text-slate-400">
-        {label} <span className="text-slate-600">{tasks.length}</span>
-      </h3>
-      <div className="space-y-2">
-        {tasks.map((t) => (
-          <div key={t.id} className="card p-2 text-xs text-slate-200" data-testid="task-card">
-            {t.title}
-          </div>
-        ))}
+    <div className="card overflow-hidden p-0" data-testid="epic-group">
+      <header className="flex items-center gap-2 border-b border-surface-border px-4 py-2.5">
+        {isEpic ? (
+          <span className="rounded bg-accent-500/15 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-accent-400">
+            Epic
+          </span>
+        ) : (
+          <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-400">
+            Unassigned
+          </span>
+        )}
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-100">
+          {group.title}
+        </h3>
+        {group.tasks.length > 0 && (
+          <span className="shrink-0 text-xs text-slate-500">
+            {doneCount}/{group.tasks.length} done
+          </span>
+        )}
+      </header>
+      <div className="grid gap-4 p-4 md:grid-cols-2">
+        <div>
+          <h4 className="label mb-2">Tasks</h4>
+          {orderedTasks.length === 0 ? (
+            <p className="text-xs text-slate-500">No tasks.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {orderedTasks.map((t) => {
+                const meta = TASK_STATUS_META[t.status];
+                return (
+                  <li
+                    key={t.id}
+                    className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs"
+                    data-testid="task-card"
+                  >
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`}
+                      title={meta.label}
+                      aria-hidden="true"
+                    />
+                    <span
+                      className={
+                        t.status === 'done'
+                          ? 'min-w-0 flex-1 truncate text-slate-500 line-through'
+                          : 'min-w-0 flex-1 truncate text-slate-200'
+                      }
+                    >
+                      {t.title}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        <div>
+          <h4 className="label mb-2">Scratchpad notes</h4>
+          {group.notes.length === 0 ? (
+            <p className="text-xs text-slate-500">No notes.</p>
+          ) : (
+            <ul className="space-y-1.5" data-testid="agent-notes">
+              {group.notes.map((n) => (
+                <li
+                  key={n.id}
+                  className="rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs text-slate-300"
+                >
+                  <span className="mr-2 text-slate-500">
+                    {new Date(n.createdAt).toLocaleTimeString()}
+                  </span>
+                  {n.content}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
-  );
-}
-
-function Scratchpad({ plan, notes }: { plan: string; notes: AgentNote[] }): React.JSX.Element {
-  return (
-    <section data-testid="scratchpad">
-      <h2 className="mb-3 text-sm font-semibold text-slate-200">Scratchpad</h2>
-      <div className="card p-4">
-        <h3 className="label mb-1">Living plan</h3>
-        {plan ? (
-          <div
-            className="mb-4 rounded bg-surface-2 p-2 text-xs text-slate-300"
-            data-testid="agent-plan"
-          >
-            <Markdown content={plan} />
-          </div>
-        ) : (
-          <p className="mb-4 text-xs text-slate-500">
-            No plan yet — the agent maintains this as it works.
-          </p>
-        )}
-        <h3 className="label mb-1">Notes</h3>
-        {notes.length === 0 ? (
-          <p className="text-xs text-slate-500">No notes yet.</p>
-        ) : (
-          <ul className="space-y-2" data-testid="agent-notes">
-            {notes.map((n) => (
-              <li key={n.id} className="rounded bg-surface-2 p-2 text-xs text-slate-300">
-                <span className="mr-2 text-slate-600">
-                  {new Date(n.createdAt).toLocaleTimeString()}
-                </span>
-                {n.content}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
   );
 }
 
