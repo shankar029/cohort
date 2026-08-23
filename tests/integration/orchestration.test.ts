@@ -44,6 +44,32 @@ async function addSpecialist(projectId: string, catalogId = 'frontend-engineer')
 }
 
 describe('project lifecycle', () => {
+  it('edits an agent via PATCH without a 500 or losing emoji/color (regression)', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId, 'frontend-engineer');
+    const before = ctx.store.getAgent(agentId)!;
+
+    // Mirror the editor payload: no emoji/color/tools in the body.
+    const res = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/agents/${agentId}`,
+      payload: {
+        displayName: 'FE Renamed',
+        description: 'Now with a11y',
+        prompt: 'Updated persona.',
+        model: 'gpt-5',
+        skills: ['a11y'],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const agent = (res.json() as { agent: { displayName: string; emoji: string; color: string } })
+      .agent;
+    expect(agent.displayName).toBe('FE Renamed');
+    expect(agent.emoji).toBe(before.emoji); // preserved, not nulled
+    expect(agent.color).toBe(before.color);
+    expect(ctx.store.getAgent(agentId)!.model).toBe('gpt-5');
+  });
+
   it('creates a project with a Team Lead auto-provisioned', async () => {
     const { projectId } = await createProject();
     const res = await ctx.app.inject({ method: 'GET', url: `/api/projects/${projectId}/agents` });

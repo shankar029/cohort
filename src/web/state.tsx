@@ -60,6 +60,7 @@ type Action =
   | { type: 'UPSERT_PROJECT'; project: Project }
   | { type: 'REMOVE_PROJECT'; projectId: string }
   | { type: 'SET_BUNDLE'; projectId: string; bundle: Partial<ProjectBundle> }
+  | { type: 'UPSERT_AGENT'; projectId: string; agent: Agent }
   | { type: 'REMOVE_AGENT'; projectId: string; agentId: string }
   | { type: 'WS'; message: ServerMessage }
   | { type: 'WS_STATUS'; connected: boolean };
@@ -183,6 +184,11 @@ function reducer(state: State, action: Action): State {
     }
     case 'SET_BUNDLE':
       return withBundle(state, action.projectId, (b) => ({ ...b, ...action.bundle }));
+    case 'UPSERT_AGENT':
+      return withBundle(state, action.projectId, (b) => ({
+        ...b,
+        agents: upsert(b.agents, action.agent),
+      }));
     case 'REMOVE_AGENT':
       return withBundle(state, action.projectId, (b) => ({
         ...b,
@@ -366,10 +372,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         await api.deleteWorkItem(workItemId);
       },
       createAgent: async (projectId, input) => {
-        await api.createAgent(projectId, input as never);
+        const { agent } = await api.createAgent(projectId, input as never);
+        dispatch({ type: 'UPSERT_AGENT', projectId, agent });
       },
-      updateAgent: async (_projectId, agentId, input) => {
-        await api.updateAgent(agentId, input as never);
+      updateAgent: async (projectId, agentId, input) => {
+        const { agent } = await api.updateAgent(agentId, input as never);
+        dispatch({ type: 'UPSERT_AGENT', projectId, agent });
       },
       deleteAgent: async (projectId, agentId) => {
         await api.deleteAgent(agentId);

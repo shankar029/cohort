@@ -472,7 +472,11 @@ export class Store {
   ): Agent | undefined {
     const existing = this.getAgent(agentId);
     if (!existing) return undefined;
-    const merged = { ...existing, ...patch };
+    // Drop undefined keys so a partial patch never clobbers existing values
+    // (an undefined binding would also violate NOT NULL columns like emoji/color).
+    const clean: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(patch)) if (v !== undefined) clean[k] = v;
+    const merged = { ...existing, ...clean } as Agent;
     this.db
       .prepare(
         `UPDATE agents SET display_name=?, description=?, prompt=?, tools=?, skills=?, model=?, emoji=?, color=?, status=?, updated_at=? WHERE id=?`,
