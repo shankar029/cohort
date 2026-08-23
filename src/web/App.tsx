@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
 import { useApp, useBundle } from './state';
+import { ThemeToggle } from './components/ui';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ChatPage } from './pages/ChatPage';
@@ -113,21 +114,26 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
         ))}
       </nav>
       <div className="border-t border-surface-border p-3 text-xs text-slate-500">
-        <div className="flex items-center gap-2">
-          <span
-            className={`h-2 w-2 rounded-full ${state.wsConnected ? 'bg-status-done' : 'bg-status-blocked'}`}
-          />
-          {state.wsConnected ? 'Live' : 'Reconnecting…'}
-        </div>
-        <div className="mt-1 flex items-center gap-1.5">
-          {working > 0 ? (
-            <>
-              <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-status-working" />
-              {`${working} agent${working > 1 ? 's' : ''} working`}
-            </>
-          ) : (
-            'All agents idle'
-          )}
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span
+                className={`h-2 w-2 rounded-full ${state.wsConnected ? 'bg-status-done' : 'bg-status-blocked'}`}
+              />
+              {state.wsConnected ? 'Live' : 'Reconnecting…'}
+            </div>
+            <div className="mt-1 flex items-center gap-1.5">
+              {working > 0 ? (
+                <>
+                  <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-status-working" />
+                  {`${working} agent${working > 1 ? 's' : ''} working`}
+                </>
+              ) : (
+                'All agents idle'
+              )}
+            </div>
+          </div>
+          <ThemeToggle />
         </div>
       </div>
     </aside>

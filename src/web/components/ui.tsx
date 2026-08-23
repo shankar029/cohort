@@ -1,6 +1,27 @@
 import React from 'react';
 import type { AgentStatus } from '@shared/index';
 import { api } from '../api';
+import { useTheme } from '../theme';
+
+/** Compact light/dark switch backed by the persisted Catppuccin theme. */
+export function ThemeToggle({ className = '' }: { className?: string }): React.JSX.Element {
+  const { theme, toggle } = useTheme();
+  const nextIsDark = theme === 'light';
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      className={`btn-ghost h-9 w-9 !px-0 ${className}`}
+      title={nextIsDark ? 'Switch to dark (Mocha)' : 'Switch to light (Latte)'}
+      aria-label={nextIsDark ? 'Switch to dark theme' : 'Switch to light theme'}
+      data-testid="theme-toggle"
+    >
+      <span aria-hidden="true" className="text-base leading-none">
+        {theme === 'dark' ? '☀️' : '🌙'}
+      </span>
+    </button>
+  );
+}
 
 export const STATUS_META: Record<AgentStatus, { label: string; dot: string; text: string }> = {
   idle: { label: 'Idle', dot: 'bg-status-idle', text: 'text-status-idle' },

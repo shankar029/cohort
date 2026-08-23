@@ -90,7 +90,7 @@ export function ChatPage(): React.JSX.Element {
                 key={t.id}
                 onClick={() => setActiveThread(t.id)}
                 className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
-                  isActive ? 'bg-surface-3 text-white' : 'text-slate-400 hover:bg-surface-2'
+                  isActive ? 'bg-surface-3 text-slate-100' : 'text-slate-400 hover:bg-surface-2'
                 }`}
                 data-testid="thread-item"
               >

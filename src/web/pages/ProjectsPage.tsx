@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../state';
-import { Banner, EmptyState, ModelSelect, Spinner } from '../components/ui';
+import { Banner, EmptyState, ModelSelect, Spinner, ThemeToggle } from '../components/ui';
 
 export function ProjectsPage(): React.JSX.Element {
   const { state, createProject } = useApp();
@@ -19,13 +19,16 @@ export function ProjectsPage(): React.JSX.Element {
               Orchestrate GitHub Copilot agents across your local repositories.
             </p>
           </div>
-          <button
-            className="btn-primary"
-            data-testid="new-project"
-            onClick={() => setShowCreate(true)}
-          >
-            ＋ New Project
-          </button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <button
+              className="btn-primary"
+              data-testid="new-project"
+              onClick={() => setShowCreate(true)}
+            >
+              ＋ New Project
+            </button>
+          </div>
         </div>
       </header>
 

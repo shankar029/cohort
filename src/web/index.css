@@ -3,8 +3,76 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
+  /*
+   * Catppuccin theming. Variables hold space-separated RGB channels so Tailwind
+   * alpha modifiers keep working. `.dark` = Mocha, `.light` = Latte. The theme
+   * class is set on <html> by an inline script (see index.html) before paint.
+   */
+  .dark {
     color-scheme: dark;
+    --ct-bg: 24 24 37; /* Mantle  #181825 */
+    --ct-panel: 30 30 46; /* Base    #1e1e2e */
+    --ct-raised: 49 50 68; /* Surface0 #313244 */
+    --ct-hover: 69 71 90; /* Surface1 #45475a */
+    --ct-border: 49 50 68; /* Surface0 #313244 */
+
+    --ct-t1: 205 214 244; /* Text     #cdd6f4 */
+    --ct-t2: 186 194 222; /* Subtext1 #bac2de */
+    --ct-t3: 166 173 200; /* Subtext0 #a6adc8 */
+    --ct-t4: 147 153 178; /* Overlay2 #9399b2 */
+    --ct-t5: 127 132 156; /* Overlay1 #7f849c */
+    --ct-t6: 108 112 134; /* Overlay0 #6c7086 */
+
+    --ct-accent-text: 203 166 247; /* Mauve #cba6f7 */
+    --ct-accent-ring: 203 166 247; /* Mauve #cba6f7 */
+    --ct-accent-fill: 136 57 239; /* deep mauve #8839ef (white text passes AA) */
+    --ct-accent-deep: 122 47 214; /* #7a2fd6 */
+
+    --ct-idle: 127 132 156; /* Overlay1 #7f849c */
+    --ct-blue: 137 180 250; /* Blue   #89b4fa */
+    --ct-sky: 137 220 235; /* Sky    #89dceb */
+    --ct-teal: 148 226 213; /* Teal   #94e2d5 */
+    --ct-green: 166 227 161; /* Green  #a6e3a1 */
+    --ct-yellow: 249 226 175; /* Yellow #f9e2af */
+    --ct-peach: 250 179 135; /* Peach  #fab387 */
+    --ct-red: 243 139 168; /* Red    #f38ba8 */
+    --ct-red-fill: 210 15 57; /* deep red #d20f39 (white text passes AA) */
+
+    --ct-shadow-sm: rgba(0, 0, 0, 0.35);
+    --ct-shadow-lg: rgba(0, 0, 0, 0.6);
+  }
+  .light {
+    color-scheme: light;
+    --ct-bg: 230 233 239; /* Mantle  #e6e9ef */
+    --ct-panel: 239 241 245; /* Base    #eff1f5 */
+    --ct-raised: 204 208 218; /* Surface0 #ccd0da */
+    --ct-hover: 188 192 204; /* Surface1 #bcc0cc */
+    --ct-border: 204 208 218; /* Surface0 #ccd0da */
+
+    --ct-t1: 76 79 105; /* Text     #4c4f69 */
+    --ct-t2: 92 95 119; /* Subtext1 #5c5f77 */
+    --ct-t3: 108 111 133; /* Subtext0 #6c6f85 */
+    --ct-t4: 124 127 147; /* Overlay2 #7c7f93 */
+    --ct-t5: 140 143 161; /* Overlay1 #8c8fa1 */
+    --ct-t6: 156 160 176; /* Overlay0 #9ca0b0 */
+
+    --ct-accent-text: 136 57 239; /* Mauve #8839ef */
+    --ct-accent-ring: 136 57 239; /* Mauve #8839ef */
+    --ct-accent-fill: 136 57 239; /* Mauve #8839ef (white text passes AA) */
+    --ct-accent-deep: 122 47 214; /* #7a2fd6 */
+
+    --ct-idle: 140 143 161; /* Overlay1 #8c8fa1 */
+    --ct-blue: 30 102 245; /* Blue   #1e66f5 */
+    --ct-sky: 4 165 229; /* Sky    #04a5e5 */
+    --ct-teal: 23 146 153; /* Teal   #179299 */
+    --ct-green: 64 160 43; /* Green  #40a02b */
+    --ct-yellow: 223 142 29; /* Yellow #df8e1d */
+    --ct-peach: 254 100 11; /* Peach  #fe640b */
+    --ct-red: 210 15 57; /* Red    #d20f39 */
+    --ct-red-fill: 210 15 57; /* Red    #d20f39 */
+
+    --ct-shadow-sm: rgba(60, 70, 100, 0.1);
+    --ct-shadow-lg: rgba(60, 70, 100, 0.22);
   }
   html,
   body,
@@ -26,7 +94,7 @@
   /* Refined, unobtrusive scrollbars */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #2b3346 transparent;
+    scrollbar-color: rgb(var(--ct-hover)) transparent;
   }
   *::-webkit-scrollbar {
     width: 10px;
@@ -34,12 +102,12 @@
   }
   *::-webkit-scrollbar-thumb {
     @apply rounded-full;
-    background: #2b3346;
+    background: rgb(var(--ct-hover));
     border: 3px solid transparent;
     background-clip: content-box;
   }
   *::-webkit-scrollbar-thumb:hover {
-    background: #384258;
+    background: rgb(var(--ct-t6));
     background-clip: content-box;
   }
 }
@@ -82,7 +150,7 @@
     @apply relative flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors;
   }
   .nav-link-active {
-    @apply bg-surface-3 text-white;
+    @apply bg-surface-3 text-slate-100;
   }
   .nav-link-idle {
     @apply text-slate-400 hover:bg-surface-2 hover:text-slate-200;
