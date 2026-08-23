@@ -53,6 +53,24 @@ export function StatusPill({ status }: { status: AgentStatus }): React.JSX.Eleme
   );
 }
 
+/**
+ * Adjust a hex color toward white (pct>0) or black (pct<0) by a fraction.
+ * Used to synthesize an avatar's light/deep gradient stops from one base color.
+ */
+function shade(hex: string, pct: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  const n = m && m[1] ? parseInt(m[1], 16) : 0x8b8b8b;
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const mix = (c: number): number => Math.round(pct >= 0 ? c + (255 - c) * pct : c * (1 + pct));
+  const to = (c: number): string =>
+    Math.max(0, Math.min(255, mix(c)))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
 export function Avatar({
   emoji,
   color,
@@ -62,18 +80,35 @@ export function Avatar({
   color: string;
   size?: number;
 }): React.JSX.Element {
+  const light = shade(color, 0.32);
+  const deep = shade(color, -0.24);
   return (
     <span
-      className="inline-flex shrink-0 items-center justify-center rounded-md"
+      className="relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[28%]"
       style={{
         width: size,
         height: size,
-        backgroundColor: `${color}22`,
-        border: `1px solid ${color}55`,
+        background: `linear-gradient(145deg, ${light}, ${color} 52%, ${deep})`,
+        boxShadow: `0 1px 2px ${color}66, inset 0 0 0 1px rgba(255,255,255,0.14), inset 0 1px 1px rgba(255,255,255,0.4)`,
       }}
       aria-hidden="true"
     >
-      <span style={{ fontSize: size * 0.5 }}>{emoji}</span>
+      {/* glossy top highlight */}
+      <span
+        className="pointer-events-none absolute inset-x-0 top-0 h-1/2"
+        style={{
+          background: 'linear-gradient(to bottom, rgba(255,255,255,0.28), rgba(255,255,255,0))',
+        }}
+      />
+      <span
+        className="relative leading-none"
+        style={{
+          fontSize: size * 0.5,
+          filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.28))',
+        }}
+      >
+        {emoji}
+      </span>
     </span>
   );
 }

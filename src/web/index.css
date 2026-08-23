@@ -43,11 +43,11 @@
   }
   .light {
     color-scheme: light;
-    --ct-bg: 230 233 239; /* Mantle  #e6e9ef */
-    --ct-panel: 239 241 245; /* Base    #eff1f5 */
-    --ct-raised: 204 208 218; /* Surface0 #ccd0da */
-    --ct-hover: 188 192 204; /* Surface1 #bcc0cc */
-    --ct-border: 204 208 218; /* Surface0 #ccd0da */
+    --ct-bg: 231 234 246; /* soft lavender wash #e7eaf6 */
+    --ct-panel: 255 255 255; /* pure white cards pop against the tint */
+    --ct-raised: 232 235 248; /* #e8ebf8 */
+    --ct-hover: 219 224 242; /* #dbe0f2 */
+    --ct-border: 220 224 240; /* soft lavender-gray #dce0f0 */
 
     --ct-t1: 76 79 105; /* Text     #4c4f69 */
     --ct-t2: 92 95 119; /* Subtext1 #5c5f77 */
@@ -87,6 +87,13 @@
       -apple-system,
       sans-serif;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  /* Livelier light mode: a gentle mauve→sky wash behind the app shell. */
+  .light body {
+    background-image:
+      radial-gradient(1100px 620px at 100% -5%, rgba(136, 57, 239, 0.08), transparent 60%),
+      radial-gradient(900px 520px at -5% 105%, rgba(4, 165, 229, 0.08), transparent 55%);
+    background-attachment: fixed;
   }
   *:focus-visible {
     @apply outline-none ring-2 ring-accent-500/70 ring-offset-2 ring-offset-surface-0;
