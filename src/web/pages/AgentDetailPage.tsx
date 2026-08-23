@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { Agent, AgentNote, AgentTask, AgentTaskStatus, SkillInfo } from '@shared/index';
 import { api } from '../api';
 import { useApp, useBundle } from '../state';
-import { Avatar, EmptyState, ModelSelect, StatusPill } from '../components/ui';
+import { Avatar, EmptyState, ModelSelect, StatusPill, agentAvatar } from '../components/ui';
 import { Markdown } from '../components/Markdown';
 
 const TASK_STATUS_META: Record<AgentTaskStatus, { label: string; dot: string; order: number }> = {
@@ -86,7 +86,12 @@ export function AgentDetailPage(): React.JSX.Element {
           ← Back to agents
         </button>
         <div className="flex items-center gap-3">
-          <Avatar emoji={agent.emoji} color={agent.color} size={44} />
+          <Avatar
+            emoji={agent.emoji}
+            color={agent.color}
+            src={agentAvatar(agent.catalogId, agent.kind)}
+            size={44}
+          />
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <h1 className="text-lg font-semibold text-slate-100">{agent.displayName}</h1>

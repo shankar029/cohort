@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { SkillInfo } from '@shared/index';
 import { api, type CatalogAgentDTOShape } from '../api';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner, ModelSelect, StatusPill } from '../components/ui';
+import { Avatar, Banner, ModelSelect, StatusPill, agentAvatar } from '../components/ui';
 
 export function AgentsPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
@@ -61,6 +61,7 @@ export function AgentsPage(): React.JSX.Element {
                   key={a.id}
                   emoji={a.emoji}
                   color={a.color}
+                  src={agentAvatar(a.catalogId, a.kind)}
                   displayName={a.displayName}
                   description={a.description}
                   model={a.model}
@@ -83,6 +84,7 @@ export function AgentsPage(): React.JSX.Element {
 function AgentRow({
   emoji,
   color,
+  src,
   displayName,
   description,
   model,
@@ -91,6 +93,7 @@ function AgentRow({
 }: {
   emoji: string;
   color: string;
+  src?: string | null;
   displayName: string;
   description: string;
   model: string;
@@ -103,7 +106,7 @@ function AgentRow({
       onClick={onClick}
       data-testid="agent-card"
     >
-      <Avatar emoji={emoji} color={color} />
+      <Avatar emoji={emoji} color={color} src={src} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-slate-100">{displayName}</span>
@@ -197,7 +200,7 @@ function AddAgentDrawer({
             <div className="grid gap-3" data-testid="catalog-grid">
               {catalog.map((c) => (
                 <div key={c.id} className="card flex items-center gap-3 p-3">
-                  <Avatar emoji={c.emoji} color={c.color} />
+                  <Avatar emoji={c.emoji} color={c.color} src={agentAvatar(c.id)} />
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-slate-100">{c.displayName}</p>
                     <p className="text-xs text-slate-500">{c.description}</p>

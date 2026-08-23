@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Agent, AgentEvent, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
-import { Avatar, EmptyState, StatusPill } from '../components/ui';
+import { Avatar, EmptyState, StatusPill, agentAvatar } from '../components/ui';
 
 // Milestone-worthy activity for the dashboard — excludes noisy tool_call/
 // tool_result/reasoning/status_change chatter (the full stream lives in Activity).
@@ -194,7 +194,12 @@ export function DashboardPage(): React.JSX.Element {
                 return (
                   <li key={e.id} className="flex items-center gap-3 px-4 py-2">
                     {author ? (
-                      <Avatar emoji={author.emoji} color={author.color} size={22} />
+                      <Avatar
+                        emoji={author.emoji}
+                        color={author.color}
+                        src={agentAvatar(author.catalogId, author.kind)}
+                        size={22}
+                      />
                     ) : (
                       <span className="h-[22px] w-[22px] rounded bg-surface-3" />
                     )}
@@ -283,7 +288,12 @@ function AgentRow({ agent, projectId }: { agent: Agent; projectId?: string }): R
       to={`/p/${projectId}/agents/${agent.id}`}
       className="card flex items-center gap-3 p-3 transition-shadow hover:shadow-pop"
     >
-      <Avatar emoji={agent.emoji} color={agent.color} size={30} />
+      <Avatar
+        emoji={agent.emoji}
+        color={agent.color}
+        src={agentAvatar(agent.catalogId, agent.kind)}
+        size={30}
+      />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-slate-100">
           {agent.displayName}

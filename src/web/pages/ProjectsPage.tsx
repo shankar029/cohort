@@ -12,8 +12,15 @@ export function ProjectsPage(): React.JSX.Element {
       <header className="border-b border-surface-border bg-surface-1 px-8 py-5">
         <div className="mx-auto flex max-w-5xl items-center justify-between">
           <div>
-            <h1 className="flex items-center gap-2 text-xl font-semibold text-slate-100">
-              <span aria-hidden="true">🧭</span> ateam — Agents Team
+            <h1 className="flex items-center gap-2.5 text-xl font-semibold text-slate-100">
+              <span
+                className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg"
+                style={{ background: 'linear-gradient(145deg,#2b2b3f,#12121d)' }}
+                aria-hidden="true"
+              >
+                <img src="/brand/mark.png" alt="" className="h-full w-full object-contain" />
+              </span>
+              ateam — Agents Team
             </h1>
             <p className="mt-1 text-sm text-slate-400">
               Orchestrate GitHub Copilot agents across your local repositories.

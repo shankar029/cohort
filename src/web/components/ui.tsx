@@ -71,15 +71,67 @@ function shade(hex: string, pct: number): string {
   return `#${to(r)}${to(g)}${to(b)}`;
 }
 
+/** Catalog ids (and 'team-lead') that have an illustrated avatar under /avatars. */
+const AVATAR_IDS = new Set([
+  'team-lead',
+  'product-manager',
+  'architect',
+  'ux-designer',
+  'frontend-engineer',
+  'backend-engineer',
+  'qa-engineer',
+  'devops-engineer',
+  'researcher',
+  'docs-writer',
+  'code-reviewer',
+  'security-auditor',
+  'data-engineer',
+]);
+
+/**
+ * Resolve the illustrated avatar image for an agent by its catalog id (or the
+ * Team Lead by kind). Returns null when there's no bespoke art (PM, Architect,
+ * and custom agents), so the caller falls back to the emoji gradient badge.
+ */
+export function agentAvatar(catalogId?: string | null, kind?: string): string | null {
+  const id = kind === 'lead' ? 'team-lead' : (catalogId ?? '');
+  return AVATAR_IDS.has(id) ? `/avatars/${id}.png` : null;
+}
+
 export function Avatar({
   emoji,
   color,
   size = 36,
+  src,
 }: {
   emoji: string;
   color: string;
   size?: number;
+  /** Optional illustrated avatar; when set it renders instead of the emoji badge. */
+  src?: string | null;
 }): React.JSX.Element {
+  if (src) {
+    return (
+      <span
+        className="relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[28%]"
+        style={{
+          width: size,
+          height: size,
+          background: `linear-gradient(145deg, ${color}2e, ${color}0d)`,
+          boxShadow: `inset 0 0 0 1px ${color}33`,
+        }}
+        aria-hidden="true"
+      >
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          className="h-full w-full object-cover"
+          style={{ width: size, height: size }}
+        />
+      </span>
+    );
+  }
   const light = shade(color, 0.32);
   const deep = shade(color, -0.24);
   return (

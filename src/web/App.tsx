@@ -40,10 +40,11 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
           className="flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-100"
         >
           <span
-            className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-600/20 text-accent-400"
+            className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg"
+            style={{ background: 'linear-gradient(145deg,#2b2b3f,#12121d)' }}
             aria-hidden="true"
           >
-            🧭
+            <img src="/brand/mark.png" alt="" className="h-full w-full object-contain" />
           </span>
           <span>ateam</span>
         </NavLink>

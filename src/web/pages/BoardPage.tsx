@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner, Modal } from '../components/ui';
+import { Avatar, Banner, Modal, agentAvatar } from '../components/ui';
 import { Markdown } from '../components/Markdown';
 
 const COLUMNS: { status: WorkItemStatus; label: string }[] = [
@@ -241,7 +241,14 @@ function WorkItemCard({
           <span className={`text-xs font-medium ${PRIORITY_COLOR[item.priority]}`}>
             ● {item.priority}
           </span>
-          {assignee && <Avatar emoji={assignee.emoji} color={assignee.color} size={22} />}
+          {assignee && (
+            <Avatar
+              emoji={assignee.emoji}
+              color={assignee.color}
+              src={agentAvatar(assignee.catalogId, assignee.kind)}
+              size={22}
+            />
+          )}
         </div>
         {!isEpic && (
           <>

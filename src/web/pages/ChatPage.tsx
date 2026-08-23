@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Thread } from '@shared/index';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner, EmptyState } from '../components/ui';
+import { Avatar, Banner, EmptyState, agentAvatar } from '../components/ui';
 import { Markdown } from '../components/Markdown';
 
 const THREAD_META: Record<Thread['kind'], { icon: string; label: string }> = {
@@ -149,7 +149,12 @@ export function ChatPage(): React.JSX.Element {
               >
                 {!isUser &&
                   (author ? (
-                    <Avatar emoji={author.emoji} color={author.color} size={30} />
+                    <Avatar
+                      emoji={author.emoji}
+                      color={author.color}
+                      src={agentAvatar(author.catalogId, author.kind)}
+                      size={30}
+                    />
                   ) : (
                     <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-accent-600/20 text-accent-400">
                       🧭
@@ -179,7 +184,13 @@ export function ChatPage(): React.JSX.Element {
             <div className="flex animate-fadeIn items-center gap-2.5" data-testid="team-working">
               <div className="flex -space-x-1.5">
                 {working.slice(0, 4).map((a) => (
-                  <Avatar key={a.id} emoji={a.emoji} color={a.color} size={30} />
+                  <Avatar
+                    key={a.id}
+                    emoji={a.emoji}
+                    color={a.color}
+                    src={agentAvatar(a.catalogId, a.kind)}
+                    size={30}
+                  />
                 ))}
               </div>
               <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-surface-border bg-surface-1 px-4 py-2.5">
