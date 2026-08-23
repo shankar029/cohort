@@ -111,25 +111,19 @@ export function Avatar({
   src?: string | null;
 }): React.JSX.Element {
   if (src) {
+    // Illustrated avatars are transparent PNGs — render them bare so they blend
+    // with whatever surface is behind them (no tinted badge).
     return (
-      <span
-        className="relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-[28%]"
-        style={{
-          width: size,
-          height: size,
-          background: `linear-gradient(145deg, ${color}2e, ${color}0d)`,
-          boxShadow: `inset 0 0 0 1px ${color}33`,
-        }}
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        width={size}
+        height={size}
+        className="shrink-0 object-contain"
+        style={{ width: size, height: size }}
         aria-hidden="true"
-      >
-        <img
-          src={src}
-          alt=""
-          draggable={false}
-          className="h-full w-full object-cover"
-          style={{ width: size, height: size }}
-        />
-      </span>
+      />
     );
   }
   const light = shade(color, 0.32);

@@ -10,7 +10,8 @@ const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
  * are role-aware and honor markers embedded in the prompt so every branch
  * (discussion, escalation, permission-gated write, group-chat request) can be
  * driven from tests and Playwright E2E without an LLM:
- *   [[ASK]]              → the agent escalates a question to the user
+ *   [[ASK]]              → the agent asks a question; the Team Lead resolves it
+ *   [[ASK_USER]]         → the agent asks a question the Lead escalates to the user
  *   [[WRITE]]            → the agent requests a file-write permission
  *   [[NEEDS_DISCUSSION]] → the agent asks the Lead to open a group chat
  *   [[POST: text]]       → the agent posts a message to the team via its app tools
@@ -96,9 +97,12 @@ class FakeAgentSession implements AgentSession {
     }
 
     let extra = '';
-    if (/\[\[ASK\]\]/.test(prompt)) {
+    const askUser = /\[\[ASK_USER\]\]/.test(prompt);
+    if (askUser || /\[\[ASK\]\]/.test(prompt)) {
       const answer = await this.config.onUserInput({
-        question: `Which approach should the ${displayName} take?`,
+        question: askUser
+          ? `Which approach should the ${displayName} take? (needs user decision)`
+          : `Which approach should the ${displayName} take?`,
         choices: ['Option A', 'Option B'],
       });
       extra = ` I'll proceed with: ${answer}.`;
@@ -113,7 +117,13 @@ class FakeAgentSession implements AgentSession {
           ? `Reviewed the diff; correctness and tests look good. [[APPROVE]]`
           : `Reviewed the diff; needs coverage before merge. [[REQUEST_CHANGES: add tests for edge cases]]`;
     } else if (role === 'lead') {
-      text = `Here's my read as Team Lead: ${summarize(prompt)}.${extra}`;
+      // When resolving a specialist's blocking question, defer to the user only
+      // when the question explicitly needs a human decision; otherwise decide.
+      if (/needs a decision to continue/i.test(prompt) && /needs user decision/i.test(prompt)) {
+        text = `ESCALATE: The team needs your call. ${summarize(prompt)}`;
+      } else {
+        text = `Here's my read as Team Lead: ${summarize(prompt)}.${extra}`;
+      }
     } else {
       text = `As the ${displayName}, my recommendation: ${idea(displayName, prompt)}.${extra}`;
       if (/\[\[NEEDS_DISCUSSION\]\]/.test(prompt)) {

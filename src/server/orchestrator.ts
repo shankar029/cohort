@@ -158,6 +158,11 @@ class ProjectOrchestrator {
   private readonly streamBuffers = new Map<string, string>();
   private static readonly MAX_REVIEW_ITER = 3;
 
+  /** Work items with an in-flight runWorkItem, so the manager never double-starts one. */
+  private readonly running = new Set<string>();
+  /** Work items parked awaiting a human/Lead decision, so the manager won't re-drive them. */
+  private readonly awaitingInput = new Set<string>();
+
   /** Team Lead proactive manager loop. */
   private readonly leadTickMs = Number(process.env.ATEAM_LEAD_TICK_MS ?? 15000);
   private leadStarted = false;
@@ -752,6 +757,7 @@ class ProjectOrchestrator {
   private leadTick(): void {
     if (this.disposed) return;
     this.assignUnassignedWork();
+    this.driveAssignedWork();
     this.superviseAgents();
   }
 
@@ -767,7 +773,8 @@ class ProjectOrchestrator {
     if (specs.length === 0) return 0;
     let assigned = 0;
     for (const item of items) {
-      if (item.kind === 'epic' || item.assigneeAgentId || item.status !== 'todo') continue;
+      if (item.kind === 'epic' || item.assigneeAgentId) continue;
+      if (item.status !== 'todo' && item.status !== 'backlog') continue;
       const depsMet =
         item.dependsOn.length === 0 ||
         item.dependsOn.every((d) => {
@@ -795,6 +802,37 @@ class ProjectOrchestrator {
       void this.onItemAssigned(item.id).catch(() => undefined);
     }
     return assigned;
+  }
+
+  /**
+   * Self-healing driver: (re)start any assigned task the Lead has handed out that
+   * isn't actually running. This covers work that was assigned but never kicked
+   * off, and tasks whose run stalled (agent went idle mid-flight after a crash or
+   * restart). Parked tasks (assignee awaiting input, or dependency-blocked) are
+   * left alone. This is what keeps the board moving without the user re-pinging.
+   */
+  private driveAssignedWork(): void {
+    const items = this.deps.store.listWorkItems(this.projectId);
+    const statusById = new Map(items.map((i) => [i.id, i.status]));
+    for (const item of items) {
+      if (item.kind === 'epic' || !item.assigneeAgentId) continue;
+      if (item.status !== 'todo' && item.status !== 'in_progress') continue;
+      if (this.running.has(item.id) || this.awaitingInput.has(item.id)) continue;
+      const depsMet =
+        item.dependsOn.length === 0 ||
+        item.dependsOn.every((d) => {
+          const s = statusById.get(d);
+          return s === 'review' || s === 'done';
+        });
+      if (!depsMet) continue;
+      const agent = this.deps.store.getAgent(item.assigneeAgentId);
+      if (!agent || agent.kind !== 'specialist') continue;
+      // Skip agents that are parked awaiting a decision; only resume a stalled
+      // in-progress task once its agent has actually gone idle.
+      if (agent.status === 'needs_input' || agent.status === 'blocked') continue;
+      if (item.status === 'in_progress' && agent.status !== 'idle') continue;
+      void this.runWorkItem(item.id).catch(() => undefined);
+    }
   }
 
   /** Specialists eligible to build (excludes the design/product advisory roles). */
@@ -992,7 +1030,21 @@ class ProjectOrchestrator {
     if (!item || !item.assigneeAgentId) return;
     const agent = this.deps.store.getAgent(item.assigneeAgentId);
     if (!agent || agent.kind !== 'specialist') return;
-    if (item.status === 'done' || item.status === 'in_progress') return;
+    if (item.status === 'done' || item.status === 'review') return;
+    // One in-flight run per item. A stalled 'in_progress' item (no active run) is
+    // allowed through so the manager can resume it after a crash/restart.
+    if (this.running.has(workItemId)) return;
+    this.running.add(workItemId);
+    try {
+      await this.runWorkItemInner(item.id, agent);
+    } finally {
+      this.running.delete(workItemId);
+    }
+  }
+
+  private async runWorkItemInner(workItemId: string, agent: Agent): Promise<void> {
+    const item = this.deps.store.getWorkItem(workItemId);
+    if (!item) return;
 
     this.moveItem(item.id, 'in_progress');
     this.setProgress(item.id, Math.max(10, item.progress), agent);
@@ -1051,6 +1103,7 @@ class ProjectOrchestrator {
     // "complete" with no deliverable.
     if (gate && worktree && !produced) {
       this.setStatus(agent.id, 'needs_input');
+      this.awaitingInput.add(item.id);
       this.emitEvent(
         agent.id,
         'system',
@@ -1069,8 +1122,19 @@ class ProjectOrchestrator {
       void this.raiseQuestion(
         agent.id,
         `${agent.displayName} produced no code for “${item.title}” after ${MAX_ATTEMPTS} attempts. How should we proceed?`,
-        ['Retry', 'Reassign', 'Skip this task'],
-      );
+        ['Retry', 'Skip this task'],
+      ).then((ans) => {
+        this.awaitingInput.delete(item.id);
+        this.setStatus(agent.id, 'idle');
+        if (ans.toLowerCase().startsWith('skip')) {
+          this.moveItem(item.id, 'done');
+          this.maybeFinishEpic(item.parentId);
+        } else {
+          // Retry: put it back in the queue and let the manager re-drive it.
+          this.moveItem(item.id, 'todo');
+          this.pokeLead();
+        }
+      });
       return;
     }
 
@@ -1731,10 +1795,61 @@ class ProjectOrchestrator {
   }
 
   async handleUserInput(agent: Agent, ask: UserInputAsk): Promise<string> {
+    // A specialist's question goes to the Team Lead first — the Lead owns the
+    // conversation with the user. The Lead decides from product/tech direction
+    // and answers, and only escalates to the human when it genuinely needs a
+    // decision only the user can make.
+    if (agent.kind === 'specialist') {
+      this.setStatus(agent.id, 'needs_input');
+      try {
+        return await this.resolveViaLead(agent, ask);
+      } finally {
+        this.setStatus(agent.id, 'working');
+      }
+    }
     this.setStatus(agent.id, 'needs_input');
     const answer = await this.raiseQuestion(agent.id, ask.question, ask.choices);
     this.setStatus(agent.id, 'working');
     return answer;
+  }
+
+  /**
+   * The Team Lead resolves a specialist's blocking question. The Lead answers
+   * directly when it can, or replies `ESCALATE: <question>` to defer to the user
+   * — in which case we surface that question and relay the human's answer back to
+   * the specialist. Everything is posted to main chat so ownership stays visible.
+   */
+  private async resolveViaLead(agent: Agent, ask: UserInputAsk): Promise<string> {
+    const lead = this.lead();
+    const main = this.ensureMainThread();
+    const choicesTxt = ask.choices?.length ? `\nOptions: ${ask.choices.join(' | ')}` : '';
+    this.emitEvent(agent.id, 'escalation', `Asked the Team Lead: ${ask.question}`, null, null);
+    const prompt =
+      `${agent.displayName} is blocked and needs a decision to continue:\n\n` +
+      `“${ask.question}”${choicesTxt}\n\n` +
+      `As Team Lead you own delivery and the user relationship. Resolve this so the work ` +
+      `can proceed. If you can decide from the product/technical direction, reply with a ` +
+      `clear, actionable answer addressed to ${agent.displayName} (name the option to take if ` +
+      `there are choices). Only if this genuinely requires the human user's decision, reply ` +
+      `with exactly “ESCALATE: <the specific question to ask the user>”. Keep it concise.`;
+    let decision: string;
+    try {
+      decision = (await this.actor(lead).ask(prompt, main.id, null)).trim();
+    } catch {
+      decision = '';
+    }
+    const esc = /ESCALATE:\s*([\s\S]+)/i.exec(decision);
+    if (esc || !decision) {
+      const userQuestion = esc ? (esc[1]?.trim() ?? ask.question) : ask.question;
+      const answer = await this.raiseQuestion(agent.id, userQuestion, ask.choices);
+      this.postMessage(
+        main.id,
+        lead,
+        `@${agent.displayName} the user says: ${answer}. Please proceed on that basis.`,
+      );
+      return answer;
+    }
+    return decision;
   }
 
   private raiseQuestion(

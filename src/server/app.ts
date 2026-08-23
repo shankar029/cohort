@@ -177,6 +177,8 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { id } = req.params as { id: string };
     requireProject(id);
     const input = createAgentSchema.parse(req.body);
+    if (input.catalogId && store.listAgents(id).some((a) => a.catalogId === input.catalogId))
+      throw new HttpError(409, 'That agent is already on the team');
     const agent = createAgent(store, config, id, input);
     bus.publish({ type: 'agent.updated', projectId: id, agent });
     await orchestrators.invalidate(id);

@@ -35,6 +35,8 @@ async function createProject(page: Page, name: string): Promise<void> {
 async function addSpecialist(page: Page, catalogId: string): Promise<void> {
   await page.getByTestId('add-agent').click();
   await page.getByTestId(`add-catalog-${catalogId}`).click();
+  await expect(page.getByTestId(`added-${catalogId}`)).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByTestId('agent-list')).toBeVisible();
 }
 
@@ -67,6 +69,8 @@ test('agents: catalog add, custom agent, edit, and agent detail surfaces', async
   await expect(page.getByTestId('catalog-grid')).toBeVisible();
   await shot(page, 'agents-catalog');
   await page.getByTestId('add-catalog-frontend-engineer').click();
+  await expect(page.getByTestId('added-frontend-engineer')).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByTestId('agent-list')).toContainText('Frontend Engineer');
 
   // Custom agent tab.
@@ -87,6 +91,26 @@ test('agents: catalog add, custom agent, edit, and agent detail surfaces', async
   // Agent detail: task board / notes / plan / log exist (may be empty pre-work).
   await expect(page.getByTestId('scratchpad').or(page.getByTestId('agent-notes'))).toBeVisible();
   await shot(page, 'agent-detail');
+});
+
+test('agents: duplicate catalog add is blocked, and remove works from the list', async ({
+  page,
+}) => {
+  await createProject(page, 'Cov Agents Dup');
+
+  await page.getByTestId('add-agent').click();
+  await page.getByTestId('add-catalog-frontend-engineer').click();
+  // The card flips to “Added” so it can't be added again, and the panel stays open.
+  await expect(page.getByTestId('added-frontend-engineer')).toBeVisible();
+  await expect(page.getByTestId('add-catalog-frontend-engineer')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByTestId('agent-list')).toContainText('Frontend Engineer');
+
+  // Remove it from the Agents list (confirm dialog auto-accepted).
+  page.on('dialog', (d) => void d.accept());
+  await page.getByTestId('remove-agent').first().click();
+  await expect(page.getByTestId('remove-agent')).toHaveCount(0);
+  await expect(page.getByText('No specialists yet')).toBeVisible();
 });
 
 // ---------------------------------------------------------------- Board (item, filter, detail, progress)
@@ -148,7 +172,7 @@ test('chat escalation: a question surfaces and answering resumes the work', asyn
 
   await nav(page, 'Board');
   await page.getByTestId('add-workitem').click();
-  await page.getByTestId('workitem-title').fill('Ambiguous API [[ASK]]');
+  await page.getByTestId('workitem-title').fill('Ambiguous API [[ASK_USER]]');
   await page.getByTestId('workitem-assignee').selectOption({ label: '⚙️ Backend Engineer' });
   await page.getByTestId('workitem-submit').click();
 

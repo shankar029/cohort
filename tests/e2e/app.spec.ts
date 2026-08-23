@@ -25,6 +25,8 @@ async function addSpecialist(
 ): Promise<void> {
   await page.getByTestId('add-agent').click();
   await page.getByTestId(`add-catalog-${catalogId}`).click();
+  await expect(page.getByTestId(`added-${catalogId}`)).toBeVisible();
+  await page.getByRole('button', { name: 'Close' }).click();
   await expect(page.getByTestId('agent-list')).toBeVisible();
 }
 
@@ -97,7 +99,7 @@ test('escalation: a specialist question is surfaced and answering resumes the wo
 
   await page.getByRole('link', { name: 'Board', exact: true }).click();
   await page.getByTestId('add-workitem').click();
-  await page.getByTestId('workitem-title').fill('Ambiguous API [[ASK]]');
+  await page.getByTestId('workitem-title').fill('Ambiguous API [[ASK_USER]]');
   await page.getByTestId('workitem-assignee').selectOption({ label: '⚙️ Backend Engineer' });
   await page.getByTestId('workitem-submit').click();
 

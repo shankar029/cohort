@@ -32,9 +32,15 @@ export interface CatalogAgentDTOShape {
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  // Only advertise a JSON body when we actually send one — Fastify rejects an
+  // empty body when Content-Type is application/json (breaks body-less DELETEs).
+  const hasBody = options?.body != null;
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: {
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+      ...(options?.headers ?? {}),
+    },
   });
   if (res.status === 204) return undefined as T;
   const text = await res.text();

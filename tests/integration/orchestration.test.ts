@@ -176,14 +176,14 @@ describe('chat: multi-agent discussion', () => {
 });
 
 describe('escalation (specialist → team lead → user)', () => {
-  it('raises a question and resumes once the user answers', async () => {
+  it('the Lead escalates to the user when a decision needs a human, then resumes', async () => {
     const { projectId } = await createProject();
     const agentId = await addSpecialist(projectId);
 
     await ctx.app.inject({
       method: 'POST',
       url: `/api/projects/${projectId}/workitems`,
-      payload: { title: 'Ambiguous task [[ASK]]', status: 'todo', assigneeAgentId: agentId },
+      payload: { title: 'Ambiguous task [[ASK_USER]]', status: 'todo', assigneeAgentId: agentId },
     });
 
     const questionMsg = (await ctx.waitFor(
@@ -200,6 +200,20 @@ describe('escalation (specialist → team lead → user)', () => {
     expect(answerRes.statusCode).toBe(200);
 
     // Work resumes and reaches review after the answer.
+    await ctx.waitFor((m) => m.type === 'workitem.updated' && m.workItem.status === 'review', 8000);
+  });
+
+  it('the Lead resolves a routine specialist question itself without pinging the user', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId);
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Routine task [[ASK]]', status: 'todo', assigneeAgentId: agentId },
+    });
+
+    // The Lead decides, so the task proceeds to review with no user question raised.
     await ctx.waitFor((m) => m.type === 'workitem.updated' && m.workItem.status === 'review', 8000);
   });
 });

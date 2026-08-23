@@ -8,11 +8,18 @@ import { Avatar, Banner, ModelSelect, StatusPill, agentAvatar } from '../compone
 export function AgentsPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const { deleteAgent } = useApp();
   const bundle = useBundle(projectId);
   const [showAdd, setShowAdd] = useState(false);
 
   const lead = bundle.agents.find((a) => a.kind === 'lead');
   const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
+
+  const removeAgent = (a: (typeof specialists)[number]): void => {
+    if (!projectId) return;
+    if (!window.confirm(`Remove ${a.displayName} from the team?`)) return;
+    void deleteAgent(projectId, a.id);
+  };
 
   return (
     <div className="h-full overflow-auto">
@@ -37,6 +44,7 @@ export function AgentsPage(): React.JSX.Element {
             <AgentRow
               emoji={lead.emoji}
               color={lead.color}
+              src={agentAvatar(lead.catalogId, lead.kind)}
               displayName={lead.displayName}
               description={lead.description}
               model={lead.model}
@@ -67,6 +75,7 @@ export function AgentsPage(): React.JSX.Element {
                   model={a.model}
                   status={a.status}
                   onClick={() => navigate(`/p/${projectId}/agents/${a.id}`)}
+                  onRemove={() => removeAgent(a)}
                 />
               ))}
             </div>
@@ -90,6 +99,7 @@ function AgentRow({
   model,
   status,
   onClick,
+  onRemove,
 }: {
   emoji: string;
   color: string;
@@ -99,23 +109,37 @@ function AgentRow({
   model: string;
   status: import('@shared/index').AgentStatus;
   onClick: () => void;
+  onRemove?: () => void;
 }): React.JSX.Element {
   return (
-    <button
-      className="card flex w-full items-center gap-3 p-3 text-left hover:border-blue-500/50"
-      onClick={onClick}
-      data-testid="agent-card"
-    >
-      <Avatar emoji={emoji} color={color} src={src} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-slate-100">{displayName}</span>
-          <StatusPill status={status} />
+    <div className="card flex w-full items-center gap-3 p-3 hover:border-blue-500/50">
+      <button
+        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        onClick={onClick}
+        data-testid="agent-card"
+      >
+        <Avatar emoji={emoji} color={color} src={src} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-slate-100">{displayName}</span>
+            <StatusPill status={status} />
+          </div>
+          <p className="truncate text-xs text-slate-500">{description}</p>
         </div>
-        <p className="truncate text-xs text-slate-500">{description}</p>
-      </div>
+      </button>
       <span className="rounded bg-surface-2 px-2 py-0.5 text-xs text-slate-400">{model}</span>
-    </button>
+      {onRemove && (
+        <button
+          className="btn-ghost !min-h-0 px-2 py-1 text-slate-400 hover:text-red-400"
+          data-testid="remove-agent"
+          title={`Remove ${displayName}`}
+          aria-label={`Remove ${displayName}`}
+          onClick={onRemove}
+        >
+          ✕
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -142,15 +166,18 @@ function AddAgentDrawer({
       .catch(() => setSkills([]));
   }, [projectId]);
 
-  const add = async (input: Record<string, unknown>): Promise<void> => {
+  const add = async (input: Record<string, unknown>, opts?: { close?: boolean }): Promise<void> => {
     setError(null);
     try {
       await createAgent(projectId, input);
-      onClose();
+      if (opts?.close) onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add agent');
     }
   };
+
+  // Catalog agents already on the team (by catalogId) can't be added twice.
+  const present = new Set(bundle.agents.map((a) => a.catalogId).filter(Boolean) as string[]);
 
   return (
     <div
@@ -198,25 +225,45 @@ function AddAgentDrawer({
 
           {tab === 'catalog' ? (
             <div className="grid gap-3" data-testid="catalog-grid">
-              {catalog.map((c) => (
-                <div key={c.id} className="card flex items-center gap-3 p-3">
-                  <Avatar emoji={c.emoji} color={c.color} src={agentAvatar(c.id)} />
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-slate-100">{c.displayName}</p>
-                    <p className="text-xs text-slate-500">{c.description}</p>
+              <p className="text-xs text-slate-500">
+                Add as many as you need — this panel stays open. Agents already on the team are
+                marked.
+              </p>
+              {catalog.map((c) => {
+                const added = present.has(c.id);
+                return (
+                  <div key={c.id} className="card flex items-center gap-3 p-3">
+                    <Avatar emoji={c.emoji} color={c.color} src={agentAvatar(c.id)} />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-slate-100">{c.displayName}</p>
+                      <p className="text-xs text-slate-500">{c.description}</p>
+                    </div>
+                    {added ? (
+                      <span
+                        className="rounded bg-surface-2 px-3 py-1.5 text-xs font-medium text-emerald-400"
+                        data-testid={`added-${c.id}`}
+                      >
+                        ✓ Added
+                      </span>
+                    ) : (
+                      <button
+                        className="btn-primary"
+                        data-testid={`add-catalog-${c.id}`}
+                        onClick={() => void add({ catalogId: c.id, model })}
+                      >
+                        Add
+                      </button>
+                    )}
                   </div>
-                  <button
-                    className="btn-primary"
-                    data-testid={`add-catalog-${c.id}`}
-                    onClick={() => void add({ catalogId: c.id, model })}
-                  >
-                    Add
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
-            <CustomAgentForm skills={skills} model={model} onSubmit={add} />
+            <CustomAgentForm
+              skills={skills}
+              model={model}
+              onSubmit={(input) => add(input, { close: true })}
+            />
           )}
         </div>
       </div>
