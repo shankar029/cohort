@@ -200,6 +200,10 @@ export interface PullRequest {
   baseBranch: string;
   diff: string;
   status: PrStatus;
+  /** Commits that landed on the branch (captured at merge, kept after cleanup). */
+  commits: GitCommit[];
+  /** Files changed on the branch (captured at merge, kept after cleanup). */
+  files: GitFileChange[];
   createdAt: string;
   updatedAt: string;
 }

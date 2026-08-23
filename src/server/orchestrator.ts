@@ -802,6 +802,10 @@ class ProjectOrchestrator {
         }
       }
       const pr = prs.find((p) => p.workItemId === epic.id) ?? null;
+      // Merged epics have their clone reclaimed; fall back to the commits/files
+      // captured on the PR at merge time so the detail persists.
+      if ((!active || commits.length === 0) && pr && pr.commits.length > 0) commits = pr.commits;
+      if ((!active || files.length === 0) && pr && pr.files.length > 0) files = pr.files;
       const tasks = this.deps.store.listChildTasks(epic.id).map((t) => ({
         id: t.id,
         title: t.title,
@@ -1704,6 +1708,15 @@ class ProjectOrchestrator {
           (f) => !f.path.startsWith('.ateam/'),
         );
       }
+      // Persist the landed commits/files on the PR so the Git page keeps full
+      // detail after the epic clone is reclaimed.
+      const withStats = this.deps.store.updatePR(prId, { commits, files });
+      if (withStats)
+        this.deps.bus.publish({
+          type: 'pull_request.updated',
+          projectId: this.projectId,
+          pr: withStats,
+        });
       this.postEpicCompletion(epic, branch, base, commits, files);
     } catch {
       /* reporting is best-effort */

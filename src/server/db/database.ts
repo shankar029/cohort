@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS pull_requests (
   base_branch TEXT NOT NULL,
   diff TEXT NOT NULL,
   status TEXT NOT NULL,
+  stats TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -209,6 +210,7 @@ function migrate(db: DB): void {
   add('work_items', 'progress', 'progress INTEGER NOT NULL DEFAULT 0');
   add('chat_messages', 'thread_id', "thread_id TEXT NOT NULL DEFAULT ''");
   add('chat_messages', 'author_agent_id', 'author_agent_id TEXT');
+  add('pull_requests', 'stats', "stats TEXT NOT NULL DEFAULT '{}'");
 }
 
 export function openDatabase(dbPath: string): DB {

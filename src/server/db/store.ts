@@ -10,6 +10,8 @@ import type {
   AgentTaskStatus,
   ChatMessage,
   ChatRole,
+  GitCommit,
+  GitFileChange,
   Project,
   ProjectSettings,
   PullRequest,
@@ -240,24 +242,41 @@ interface PrRow {
   base_branch: string;
   diff: string;
   status: string;
+  stats: string;
   created_at: string;
   updated_at: string;
 }
-const toPr = (r: PrRow): PullRequest => ({
-  id: r.id,
-  projectId: r.project_id,
-  workItemId: r.work_item_id ?? null,
-  authorAgentId: r.author_agent_id ?? null,
-  reviewerAgentId: r.reviewer_agent_id ?? null,
-  title: r.title,
-  description: r.description,
-  branch: r.branch,
-  baseBranch: r.base_branch,
-  diff: r.diff,
-  status: r.status as PrStatus,
-  createdAt: r.created_at,
-  updatedAt: r.updated_at,
-});
+const toPr = (r: PrRow): PullRequest => {
+  let commits: GitCommit[] = [];
+  let files: GitFileChange[] = [];
+  try {
+    const parsed = JSON.parse(r.stats || '{}') as {
+      commits?: GitCommit[];
+      files?: GitFileChange[];
+    };
+    commits = Array.isArray(parsed.commits) ? parsed.commits : [];
+    files = Array.isArray(parsed.files) ? parsed.files : [];
+  } catch {
+    /* tolerate legacy/malformed stats */
+  }
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    workItemId: r.work_item_id ?? null,
+    authorAgentId: r.author_agent_id ?? null,
+    reviewerAgentId: r.reviewer_agent_id ?? null,
+    title: r.title,
+    description: r.description,
+    branch: r.branch,
+    baseBranch: r.base_branch,
+    diff: r.diff,
+    status: r.status as PrStatus,
+    commits,
+    files,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+};
 
 interface PrCommentRow {
   id: string;
@@ -926,13 +945,14 @@ export class Store {
       base_branch: p.baseBranch,
       diff: p.diff,
       status: 'open',
+      stats: '{}',
       created_at: ts,
       updated_at: ts,
     };
     this.db
       .prepare(
-        `INSERT INTO pull_requests (id,project_id,work_item_id,author_agent_id,reviewer_agent_id,title,description,branch,base_branch,diff,status,created_at,updated_at)
-         VALUES (@id,@project_id,@work_item_id,@author_agent_id,@reviewer_agent_id,@title,@description,@branch,@base_branch,@diff,@status,@created_at,@updated_at)`,
+        `INSERT INTO pull_requests (id,project_id,work_item_id,author_agent_id,reviewer_agent_id,title,description,branch,base_branch,diff,status,stats,created_at,updated_at)
+         VALUES (@id,@project_id,@work_item_id,@author_agent_id,@reviewer_agent_id,@title,@description,@branch,@base_branch,@diff,@status,@stats,@created_at,@updated_at)`,
       )
       .run(row);
     return toPr(row);
@@ -940,21 +960,28 @@ export class Store {
 
   updatePR(
     prId: string,
-    patch: Partial<Pick<PullRequest, 'status' | 'reviewerAgentId' | 'description' | 'diff'>>,
+    patch: Partial<
+      Pick<PullRequest, 'status' | 'reviewerAgentId' | 'description' | 'diff' | 'commits' | 'files'>
+    >,
   ): PullRequest | undefined {
     const r = this.db.prepare(`SELECT * FROM pull_requests WHERE id=?`).get(prId) as
       PrRow | undefined;
     if (!r) return undefined;
     const m = toPr(r);
+    const stats = JSON.stringify({
+      commits: patch.commits ?? m.commits,
+      files: patch.files ?? m.files,
+    });
     this.db
       .prepare(
-        `UPDATE pull_requests SET status=?, reviewer_agent_id=?, description=?, diff=?, updated_at=? WHERE id=?`,
+        `UPDATE pull_requests SET status=?, reviewer_agent_id=?, description=?, diff=?, stats=?, updated_at=? WHERE id=?`,
       )
       .run(
         patch.status ?? m.status,
         patch.reviewerAgentId ?? m.reviewerAgentId,
         patch.description ?? m.description,
         patch.diff ?? m.diff,
+        stats,
         now(),
         prId,
       );

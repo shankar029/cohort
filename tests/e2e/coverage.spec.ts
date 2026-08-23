@@ -203,6 +203,8 @@ test('git: completed epic shows a branch, commits and a merged PR', async ({ pag
     timeout: 30000,
   });
   await expect(page.getByTestId('pr-card').first()).toContainText('Merged', { timeout: 30000 });
+  // Commits persist on the Git page even after the epic clone is reclaimed.
+  await expect(page.getByTestId('git-commits').first()).toBeVisible({ timeout: 30000 });
   await shot(page, 'git');
 });
 
