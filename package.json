@@ -29,6 +29,7 @@
     "@tailwindcss/typography": "^0.5.20",
     "better-sqlite3": "^12.4.1",
     "fastify": "^5.2.1",
+    "lucide-react": "^1.31.0",
     "nanoid": "^5.0.9",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

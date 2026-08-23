@@ -251,6 +251,30 @@ export function Banner({
   return <div className={`rounded-md border px-3 py-2 text-sm ${styles}`}>{children}</div>;
 }
 
+/**
+ * Module-level cache + in-flight de-dupe so every ModelSelect on a page shares a
+ * single `/api/models` fetch (the first one is a slow cold SDK connect). Once
+ * loaded, later pickers render populated instantly.
+ */
+let modelsCache: string[] | null = null;
+let modelsInFlight: Promise<string[]> | null = null;
+function loadModels(): Promise<string[]> {
+  if (modelsCache) return Promise.resolve(modelsCache);
+  if (!modelsInFlight) {
+    modelsInFlight = api
+      .models()
+      .then((r) => {
+        modelsCache = r.models;
+        return r.models;
+      })
+      .catch((err) => {
+        modelsInFlight = null; // allow a retry on the next mount
+        throw err;
+      });
+  }
+  return modelsInFlight;
+}
+
 /** A model picker populated from the models actually enabled on the account. */
 export function ModelSelect({
   id,
@@ -263,18 +287,19 @@ export function ModelSelect({
   onChange: (model: string) => void;
   testId?: string;
 }): React.JSX.Element {
-  const [models, setModels] = React.useState<string[]>([]);
+  const [models, setModels] = React.useState<string[]>(modelsCache ?? []);
+  const [loading, setLoading] = React.useState(modelsCache === null);
   React.useEffect(() => {
     let active = true;
-    void api
-      .models()
-      .then((r) => active && setModels(r.models))
-      .catch(() => active && setModels([]));
+    void loadModels()
+      .then((list) => active && (setModels(list), setLoading(false)))
+      .catch(() => active && setLoading(false));
     return () => {
       active = false;
     };
   }, []);
-  const options = models.includes(value) || !value ? models : [value, ...models];
+  // Always include the current value so a saved/custom model is never dropped.
+  const options = !value || models.includes(value) ? models : [value, ...models];
   return (
     <select
       id={id}
@@ -283,7 +308,9 @@ export function ModelSelect({
       value={value}
       onChange={(e) => onChange(e.target.value)}
     >
-      {options.length === 0 && <option value={value}>{value || 'auto'}</option>}
+      {options.length === 0 && (
+        <option value={value}>{loading ? 'Loading models…' : value || 'auto'}</option>
+      )}
       {options.map((m) => (
         <option key={m} value={m}>
           {m}

@@ -1,5 +1,16 @@
 import React, { useEffect } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  MessagesSquare,
+  KanbanSquare,
+  Bot,
+  GitBranch,
+  Radio,
+  Bell,
+  Settings,
+  type LucideIcon,
+} from 'lucide-react';
 import { useApp, useBundle } from './state';
 import { ThemeToggle } from './components/ui';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -13,15 +24,15 @@ import { GitPage } from './pages/GitPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 
-const NAV = [
-  { to: 'dashboard', label: 'Dashboard', icon: '📊' },
-  { to: 'chat', label: 'Chat', icon: '💬' },
-  { to: 'board', label: 'Board', icon: '🗂️' },
-  { to: 'agents', label: 'Agents', icon: '🤖' },
-  { to: 'git', label: 'Git', icon: '🌿' },
-  { to: 'activity', label: 'Activity', icon: '📡' },
-  { to: 'notifications', label: 'Notifications', icon: '🔔' },
-  { to: 'settings', label: 'Settings', icon: '⚙️' },
+const NAV: { to: string; label: string; icon: LucideIcon }[] = [
+  { to: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: 'chat', label: 'Chat', icon: MessagesSquare },
+  { to: 'board', label: 'Board', icon: KanbanSquare },
+  { to: 'agents', label: 'Agents', icon: Bot },
+  { to: 'git', label: 'Git', icon: GitBranch },
+  { to: 'activity', label: 'Activity', icon: Radio },
+  { to: 'notifications', label: 'Notifications', icon: Bell },
+  { to: 'settings', label: 'Settings', icon: Settings },
 ];
 
 function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
@@ -91,9 +102,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
                   />
                 )}
                 <span className="flex items-center gap-2.5">
-                  <span aria-hidden="true" className="text-base">
-                    {item.icon}
-                  </span>{' '}
+                  <item.icon aria-hidden="true" className="h-[1.05rem] w-[1.05rem] shrink-0" />{' '}
                   {item.label}
                 </span>
                 {item.to === 'board' && needsInput > 0 && (

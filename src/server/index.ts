@@ -92,6 +92,12 @@ async function main(): Promise<void> {
   await app.listen({ port: config.port, host: '0.0.0.0' });
   const banner = `\n  ateam server ready\n  → http://localhost:${config.port}  (adapter: ${adapter.name})\n`;
   process.stdout.write(banner);
+
+  // Warm the models cache in the background so the first model picker in the UI
+  // is instant instead of waiting ~5s on the cold SDK connect + models.list RPC.
+  void adapter
+    .listModels()
+    .catch((err) => process.stderr.write(`[models] warm-up failed: ${String(err)}\n`));
   if (!config.isProduction) {
     process.stdout.write(
       `  → web dev server: run \`npm run dev:web\` (Vite) at http://localhost:5319\n`,
