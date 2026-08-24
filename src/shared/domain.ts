@@ -26,6 +26,8 @@ export interface ProjectSettings {
   approvalMode: ApprovalMode;
   /** Extra home roots to scan for skills, in addition to the built-in defaults. */
   extraSkillRoots: string[];
+  /** When true the team is paused: no new agent-driven work starts. */
+  paused?: boolean;
 }
 
 export interface Project {

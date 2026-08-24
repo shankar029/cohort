@@ -620,3 +620,82 @@ describe('Team Lead ownership', () => {
     }
   });
 });
+
+describe('pause / resume', () => {
+  it('pausing halts pickup; resuming lets the work advance', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId);
+
+    const pause = await ctx.app.inject({ method: 'POST', url: `/api/projects/${projectId}/pause` });
+    expect(pause.statusCode).toBe(200);
+
+    const create = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Paused task', status: 'todo', assigneeAgentId: agentId },
+    });
+    const item = (create.json() as { workItem: WorkItem }).workItem;
+
+    // While paused it must stay put, not reach review.
+    await new Promise((r) => setTimeout(r, 700));
+    expect(ctx.store.getWorkItem(item.id)!.status).not.toBe('review');
+
+    // Resume: the assigned work now advances autonomously.
+    const resume = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/resume`,
+    });
+    expect(resume.statusCode).toBe(200);
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.id === item.id &&
+        m.workItem.status === 'review',
+      8000,
+    );
+  });
+});
+
+describe('board-created epics', () => {
+  it('creating an epic on the board is Lead-owned and decomposed into specialist tasks', async () => {
+    const { projectId, leadId } = await createProject();
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    const create = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Checkout redesign', description: 'Build a new checkout', kind: 'epic' },
+    });
+    expect(create.statusCode).toBe(201);
+    const epic = (create.json() as { workItem: WorkItem }).workItem;
+    expect(epic.kind).toBe('epic');
+
+    const child = (await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.parentId === epic.id &&
+        m.workItem.kind === 'task',
+      8000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    expect(child.workItem.parentId).toBe(epic.id);
+    expect(ctx.store.getWorkItem(epic.id)!.assigneeAgentId).toBe(leadId);
+  });
+
+  it('rejects reassigning an epic away from the Team Lead', async () => {
+    const { projectId } = await createProject();
+    const specialistId = await addSpecialist(projectId);
+    const create = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Owned epic', kind: 'epic' },
+    });
+    const epic = (create.json() as { workItem: WorkItem }).workItem;
+
+    const res = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/workitems/${epic.id}`,
+      payload: { assigneeAgentId: specialistId },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

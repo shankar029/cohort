@@ -122,6 +122,10 @@ export const api = {
     }),
   deleteWorkItem: (workItemId: string) =>
     request<void>(`/api/workitems/${workItemId}`, { method: 'DELETE' }),
+  pauseProject: (projectId: string) =>
+    request<{ project: Project }>(`/api/projects/${projectId}/pause`, { method: 'POST' }),
+  resumeProject: (projectId: string) =>
+    request<{ project: Project }>(`/api/projects/${projectId}/resume`, { method: 'POST' }),
 
   chatHistory: (projectId: string) =>
     request<{ messages: ChatMessage[] }>(`/api/projects/${projectId}/chat`),

@@ -49,6 +49,7 @@ export type UpdateAgentInput = z.infer<typeof updateAgentSchema>;
 export const createWorkItemSchema = z.object({
   title: z.string().trim().min(1, 'Title is required').max(160),
   description: z.string().trim().max(4000).optional(),
+  kind: z.enum(['task', 'epic']).optional(),
   priority: z.enum(WORK_ITEM_PRIORITIES).optional(),
   status: z.enum(WORK_ITEM_STATUSES).optional(),
   assigneeAgentId: z.string().nullable().optional(),

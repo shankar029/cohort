@@ -187,6 +187,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
         defaultModel: input.defaultModel ?? project.settings.defaultModel,
         approvalMode: input.approvalMode ?? project.settings.approvalMode,
         extraSkillRoots: input.extraSkillRoots ?? project.settings.extraSkillRoots,
+        paused: project.settings.paused,
       },
     });
     if (updated) {
@@ -194,6 +195,23 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       await orchestrators.invalidate(id);
     }
     return { project: updated };
+  });
+
+  app.post('/api/projects/:id/pause', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    await orchestrators.get(id).setPaused(true);
+    return { project: store.getProject(id) };
+  });
+
+  app.post('/api/projects/:id/resume', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    void orchestrators
+      .get(id)
+      .setPaused(false)
+      .catch(() => undefined);
+    return { project: store.getProject(id) };
   });
 
   app.delete('/api/projects/:id', async (req, reply) => {
@@ -334,6 +352,28 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { id } = req.params as { id: string };
     requireProject(id);
     const input = createWorkItemSchema.parse(req.body);
+
+    // An epic is always owned + planned by the Team Lead: create it, then let the
+    // orchestrator force Lead ownership and decompose it (deferred while paused).
+    if (input.kind === 'epic') {
+      const epic = store.createWorkItem({
+        projectId: id,
+        kind: 'epic',
+        title: input.title,
+        description: input.description ?? '',
+        status: 'in_progress',
+        priority: input.priority ?? 'medium',
+        assigneeAgentId: null,
+      });
+      bus.publish({ type: 'workitem.updated', projectId: id, workItem: epic });
+      reply.status(201);
+      void orchestrators
+        .get(id)
+        .onEpicCreated(epic.id)
+        .catch(() => undefined);
+      return { workItem: store.getWorkItem(epic.id) ?? epic };
+    }
+
     const scheduled = typeof input.scheduledAt === 'number';
     const item = store.createWorkItem({
       projectId: id,
@@ -367,6 +407,13 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const existing = store.getWorkItem(workItemId);
     if (!existing) throw new HttpError(404, 'Work item not found');
     const input = updateWorkItemSchema.parse(req.body);
+    // Epics are owned only by the Team Lead — never let one be reassigned away.
+    if (existing.kind === 'epic' && input.assigneeAgentId !== undefined) {
+      const lead = store.listAgents(existing.projectId).find((a) => a.kind === 'lead');
+      if (input.assigneeAgentId !== (lead?.id ?? null)) {
+        throw new HttpError(400, 'Epics are owned by the Team Lead and cannot be reassigned');
+      }
+    }
     const item = store.updateWorkItem(workItemId, input);
     if (item) {
       bus.publish({ type: 'workitem.updated', projectId: existing.projectId, workItem: item });

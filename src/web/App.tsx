@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -9,9 +9,12 @@ import {
   Radio,
   Bell,
   Settings,
+  Pause,
+  Play,
   type LucideIcon,
 } from 'lucide-react';
 import { useApp, useBundle } from './state';
+import { api } from './api';
 import { ThemeToggle } from './components/ui';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -42,6 +45,16 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
   const working = bundle.agents.filter((a) => a.status === 'working').length;
   const needsInput = bundle.questions.filter((q) => q.status === 'pending').length;
   const unread = bundle.notifications.filter((n) => !n.read).length;
+  const paused = project?.settings.paused === true;
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const togglePause = async (): Promise<void> => {
+    setPauseBusy(true);
+    try {
+      await (paused ? api.resumeProject(projectId) : api.pauseProject(projectId));
+    } finally {
+      setPauseBusy(false);
+    }
+  };
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-surface-border bg-surface-1">
@@ -124,6 +137,28 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
         ))}
       </nav>
       <div className="border-t border-surface-border p-3 text-xs text-slate-500">
+        <button
+          type="button"
+          onClick={() => void togglePause()}
+          disabled={pauseBusy}
+          data-testid="pause-toggle"
+          className={`mb-3 flex w-full items-center justify-center gap-2 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+            paused
+              ? 'border-status-working/40 bg-status-working/10 text-status-working hover:bg-status-working/20'
+              : 'border-surface-border text-slate-300 hover:bg-surface-2'
+          }`}
+          title={paused ? 'Resume the team' : 'Pause the team to change direction'}
+        >
+          {paused ? (
+            <>
+              <Play className="h-3.5 w-3.5" /> Resume team
+            </>
+          ) : (
+            <>
+              <Pause className="h-3.5 w-3.5" /> Pause team
+            </>
+          )}
+        </button>
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -133,7 +168,9 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
               {state.wsConnected ? 'Live' : 'Reconnecting…'}
             </div>
             <div className="mt-1 flex items-center gap-1.5">
-              {working > 0 ? (
+              {paused ? (
+                <span className="text-status-working">Paused — no new work</span>
+              ) : working > 0 ? (
                 <>
                   <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-status-working" />
                   {`${working} agent${working > 1 ? 's' : ''} working`}

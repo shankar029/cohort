@@ -533,6 +533,7 @@ function CreateItemModal({
   const bundle = useBundle(projectId);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [kind, setKind] = useState<'task' | 'epic'>('task');
   const [priority, setPriority] = useState('medium');
   const [assignee, setAssignee] = useState('');
   const [scheduleAt, setScheduleAt] = useState('');
@@ -546,6 +547,12 @@ function CreateItemModal({
     setBusy(true);
     setError(null);
     try {
+      if (kind === 'epic') {
+        // Epics are owned + planned by the Team Lead; no manual assignee/schedule.
+        await createWorkItem(projectId, { title, description, kind: 'epic', priority });
+        onClose();
+        return;
+      }
       const scheduledAt = scheduleAt ? new Date(scheduleAt).getTime() : undefined;
       await createWorkItem(projectId, {
         title,
@@ -572,7 +579,24 @@ function CreateItemModal({
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <form className="card w-full max-w-lg p-5" onSubmit={submit}>
-        <h2 className="mb-4 text-lg font-semibold text-slate-100">New work item</h2>
+        <h2 className="mb-4 text-lg font-semibold text-slate-100">
+          {kind === 'epic' ? 'New epic' : 'New work item'}
+        </h2>
+        <div className="mb-4 inline-flex rounded-md border border-surface-border p-0.5 text-xs">
+          {(['task', 'epic'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              data-testid={`kind-${k}`}
+              onClick={() => setKind(k)}
+              className={`rounded px-3 py-1 font-medium capitalize transition-colors ${
+                kind === k ? 'bg-accent-500 text-white' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
         <div className="space-y-3">
           <div>
             <label className="label" htmlFor="wi-title">
@@ -616,53 +640,63 @@ function CreateItemModal({
                 <option value="high">High</option>
               </select>
             </div>
-            <div>
-              <label className="label" htmlFor="wi-assignee">
-                Assign to
-              </label>
-              <select
-                id="wi-assignee"
-                className="input"
-                data-testid="workitem-assignee"
-                value={assignee}
-                onChange={(e) => setAssignee(e.target.value)}
-              >
-                <AssigneeOptions agents={bundle.agents} />
-              </select>
-            </div>
+            {kind === 'task' && (
+              <div>
+                <label className="label" htmlFor="wi-assignee">
+                  Assign to
+                </label>
+                <select
+                  id="wi-assignee"
+                  className="input"
+                  data-testid="workitem-assignee"
+                  value={assignee}
+                  onChange={(e) => setAssignee(e.target.value)}
+                >
+                  <AssigneeOptions agents={bundle.agents} />
+                </select>
+              </div>
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label" htmlFor="wi-schedule">
-                Schedule (optional)
-              </label>
-              <input
-                id="wi-schedule"
-                type="datetime-local"
-                className="input"
-                data-testid="workitem-schedule"
-                value={scheduleAt}
-                onChange={(e) => setScheduleAt(e.target.value)}
-              />
+          {kind === 'epic' ? (
+            <p className="rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-400">
+              👑 The Team Lead owns this epic — it will plan the approach and break it into tasks
+              across the team{' '}
+              <span className="text-slate-500">(or when you resume, if the team is paused)</span>.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label" htmlFor="wi-schedule">
+                  Schedule (optional)
+                </label>
+                <input
+                  id="wi-schedule"
+                  type="datetime-local"
+                  className="input"
+                  data-testid="workitem-schedule"
+                  value={scheduleAt}
+                  onChange={(e) => setScheduleAt(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="wi-recurrence">
+                  Repeat
+                </label>
+                <select
+                  id="wi-recurrence"
+                  className="input"
+                  value={recurrence}
+                  onChange={(e) => setRecurrence(e.target.value)}
+                  disabled={!scheduleAt}
+                >
+                  <option value="none">Once</option>
+                  <option value="hourly">Hourly</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </div>
             </div>
-            <div>
-              <label className="label" htmlFor="wi-recurrence">
-                Repeat
-              </label>
-              <select
-                id="wi-recurrence"
-                className="input"
-                value={recurrence}
-                onChange={(e) => setRecurrence(e.target.value)}
-                disabled={!scheduleAt}
-              >
-                <option value="none">Once</option>
-                <option value="hourly">Hourly</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-              </select>
-            </div>
-          </div>
+          )}
           {error && <Banner kind="error">{error}</Banner>}
         </div>
         <div className="mt-5 flex justify-end gap-2">
@@ -675,7 +709,7 @@ function CreateItemModal({
             data-testid="workitem-submit"
             disabled={busy}
           >
-            {busy ? 'Creating…' : 'Create'}
+            {busy ? 'Creating…' : kind === 'epic' ? 'Create epic' : 'Create'}
           </button>
         </div>
       </form>

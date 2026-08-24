@@ -221,6 +221,7 @@ interface AppContextValue {
     input: {
       title: string;
       description?: string;
+      kind?: 'task' | 'epic';
       priority?: string;
       assigneeAgentId?: string | null;
       scheduledAt?: number;

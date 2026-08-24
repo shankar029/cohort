@@ -366,7 +366,8 @@ class ProjectOrchestrator {
       await this.actor(lead).ask(prompt, main.id, null);
 
       // Route the request. A build/change request becomes an epic the Lead decomposes;
-      // a pure discussion request convenes a brainstorm.
+      // a pure discussion request convenes a brainstorm. While paused the Lead still
+      // replies above, but starts no new team work until the user resumes.
       const buildIntent =
         /\b(build|implement|create|add|develop|feature|fix|refactor|integrate|migrate|support)\b/i.test(
           content,
@@ -374,7 +375,9 @@ class ProjectOrchestrator {
       const discussIntent = /\b(brainstorm|discuss|approach|architect|explore|options)\b/i.test(
         content,
       );
-      if (buildIntent) {
+      if (this.paused) {
+        // no-op: user is redirecting; hold off on kicking off work
+      } else if (buildIntent) {
         await this.planEpic(content);
       } else if (discussIntent) {
         const participants = this.pickDiscussants();
@@ -398,8 +401,6 @@ class ProjectOrchestrator {
    */
   async planEpic(content: string): Promise<WorkItem> {
     const lead = this.lead();
-    const main = this.ensureMainThread();
-    const specs = this.specialists();
 
     // 1. Open the epic.
     const epic = this.deps.store.createWorkItem({
@@ -421,6 +422,20 @@ class ProjectOrchestrator {
       epic.id,
       lead.id,
     );
+
+    await this.decomposeEpic(epic, content);
+    return epic;
+  }
+
+  /**
+   * Plan + decompose an already-open epic: isolate its worktree, consult PM +
+   * Architect, then create stream-tagged task cards for the specialists. Shared by
+   * chat-originated epics (planEpic) and board-created epics (onEpicCreated).
+   */
+  private async decomposeEpic(epic: WorkItem, content: string): Promise<void> {
+    const lead = this.lead();
+    const main = this.ensureMainThread();
+    const specs = this.specialists();
 
     // Isolate the epic in its own git branch + worktree so parallel epics never
     // share a filesystem. Best-effort: fall back to the repo dir if git is unavailable.
@@ -601,8 +616,6 @@ class ProjectOrchestrator {
       epic.id,
       lead.id,
     );
-
-    return epic;
   }
 
   /* ------------------------------------------------------- group chats */
@@ -722,7 +735,71 @@ class ProjectOrchestrator {
 
   /* ---------------------------------------------------------- board work */
 
+  /**
+   * Pause/resume the team. Paused = no new agent-driven work starts (assignment,
+   * pickup, decomposition, group chats); chat with the Lead still works so the
+   * user can redirect. Resuming decomposes any epics opened while paused and kicks
+   * the manager loop so ready work flows again.
+   */
+  async setPaused(paused: boolean): Promise<void> {
+    const project = this.project();
+    if ((project.settings.paused === true) === paused) return;
+    const settings = { ...project.settings, paused };
+    const updated = this.deps.store.updateProject(this.projectId, { settings });
+    if (updated) this.deps.bus.publish({ type: 'project.updated', project: updated });
+    this.emitEvent(
+      this.lead().id,
+      'system',
+      paused ? 'Team paused by user' : 'Team resumed',
+      null,
+      null,
+    );
+    if (!paused) {
+      // Decompose any epics that were opened while paused (no child tasks yet).
+      for (const item of this.deps.store.listWorkItems(this.projectId)) {
+        if (item.kind !== 'epic' || item.status === 'done') continue;
+        if (this.deps.store.listChildTasks(item.id).length > 0) continue;
+        await this.decomposeEpic(item, item.description).catch(() => undefined);
+      }
+      this.pokeLead();
+    }
+  }
+
+  /**
+   * A user opened an epic from the board. Force Lead ownership, then plan +
+   * decompose it like a chat-originated epic — unless paused, in which case it
+   * waits until the user resumes.
+   */
+  async onEpicCreated(epicId: string): Promise<void> {
+    const epic = this.deps.store.getWorkItem(epicId);
+    if (!epic || epic.kind !== 'epic') return;
+    const lead = this.lead();
+    if (epic.assigneeAgentId !== lead.id) {
+      const owned = this.deps.store.updateWorkItem(epicId, { assigneeAgentId: lead.id });
+      if (owned)
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: owned,
+        });
+    }
+    this.emitEvent(lead.id, 'system', `Opened epic “${epic.title}”`, null, epic.id);
+    this.notify(
+      'epic',
+      `New epic: ${epic.title}`,
+      this.paused
+        ? 'Epic created while paused — the Team Lead will plan it when you resume.'
+        : 'The Team Lead opened an epic and is planning the work.',
+      'board',
+      epic.id,
+      lead.id,
+    );
+    if (this.paused) return;
+    await this.decomposeEpic(this.deps.store.getWorkItem(epicId) ?? epic, epic.description);
+  }
+
   onItemAssigned(workItemId: string): Promise<void> {
+    if (this.paused) return Promise.resolve();
     const item = this.deps.store.getWorkItem(workItemId);
     // Work handed to the Team Lead is a delegation request, not something the Lead
     // executes itself (the Lead is read-only and never builds). Route it through
@@ -770,7 +847,7 @@ class ProjectOrchestrator {
 
   /** Debounced immediate Lead pass, e.g. right after an unassigned card appears. */
   pokeLead(): void {
-    if (this.disposed || this.leadPoke) return;
+    if (this.disposed || this.paused || this.leadPoke) return;
     this.leadPoke = this.deps.scheduler.after(
       50,
       () => {
@@ -863,10 +940,15 @@ class ProjectOrchestrator {
   }
 
   private leadTick(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.paused) return;
     this.assignUnassignedWork();
     this.driveAssignedWork();
     this.superviseAgents();
+  }
+
+  /** True when the user has paused the team: no new agent-driven work starts. */
+  private get paused(): boolean {
+    return this.project().settings.paused === true;
   }
 
   /**
@@ -1295,6 +1377,7 @@ class ProjectOrchestrator {
   }
 
   private async runWorkItem(workItemId: string): Promise<void> {
+    if (this.paused) return;
     const item = this.deps.store.getWorkItem(workItemId);
     if (!item || !item.assigneeAgentId) return;
     const agent = this.deps.store.getAgent(item.assigneeAgentId);
