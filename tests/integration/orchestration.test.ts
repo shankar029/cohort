@@ -137,6 +137,34 @@ describe('board-driven autonomous work', () => {
     expect(events.length).toBeGreaterThan(0);
   });
 
+  it('a work item assigned to the Team Lead is delegated to a specialist, not run by the Lead', async () => {
+    const { projectId, leadId } = await createProject();
+    const specialistId = await addSpecialist(projectId);
+
+    // User hands the task to the Lead.
+    const create = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Build the login screen', status: 'todo', assigneeAgentId: leadId },
+    });
+    const item = (create.json() as { workItem: WorkItem }).workItem;
+    expect(item.assigneeAgentId).toBe(leadId);
+
+    // The Lead delegates it: it ends up reassigned to the specialist and advances.
+    const reviewed = (await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.id === item.id &&
+        m.workItem.assigneeAgentId === specialistId &&
+        m.workItem.status === 'review',
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    expect(reviewed.workItem.assigneeAgentId).toBe(specialistId);
+
+    // The Lead never executes work itself.
+    const leadTasks = await ctx.app.inject({ method: 'GET', url: `/api/agents/${leadId}/tasks` });
+    expect((leadTasks.json() as { tasks: AgentTask[] }).tasks).toHaveLength(0);
+  });
+
   it('after finishing one item, the agent pulls the next assigned item', async () => {
     const { projectId } = await createProject();
     const agentId = await addSpecialist(projectId);

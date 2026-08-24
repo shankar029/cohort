@@ -723,6 +723,14 @@ class ProjectOrchestrator {
   /* ---------------------------------------------------------- board work */
 
   onItemAssigned(workItemId: string): Promise<void> {
+    const item = this.deps.store.getWorkItem(workItemId);
+    // Work handed to the Team Lead is a delegation request, not something the Lead
+    // executes itself (the Lead is read-only and never builds). Route it through
+    // the manager loop, which reassigns it to the best-fit specialist.
+    if (item && item.kind !== 'epic' && item.assigneeAgentId === this.lead().id) {
+      this.pokeLead();
+      return Promise.resolve();
+    }
     return this.runWorkItem(workItemId);
   }
 
@@ -871,9 +879,14 @@ class ProjectOrchestrator {
     const status = new Map(items.map((i) => [i.id, i.status]));
     const specs = this.assignableSpecialists();
     if (specs.length === 0) return 0;
+    const leadId = this.lead().id;
     let assigned = 0;
     for (const item of items) {
-      if (item.kind === 'epic' || item.assigneeAgentId) continue;
+      if (item.kind === 'epic') continue;
+      // Eligible: genuinely unassigned work, OR work the user handed to the Lead
+      // for delegation (the Lead routes it but never builds it itself).
+      const toLead = item.assigneeAgentId === leadId;
+      if (item.assigneeAgentId && !toLead) continue;
       if (item.status !== 'todo' && item.status !== 'backlog') continue;
       const depsMet =
         item.dependsOn.length === 0 ||
@@ -894,7 +907,7 @@ class ProjectOrchestrator {
       this.emitEvent(
         this.lead().id,
         'system',
-        `Assigned “${item.title}” → ${agent.displayName}`,
+        `${toLead ? 'Delegated' : 'Assigned'} “${item.title}” → ${agent.displayName}`,
         null,
         item.id,
       );

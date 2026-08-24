@@ -1,9 +1,29 @@
 import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { WorkItem, WorkItemStatus } from '@shared/index';
+import type { Agent, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, Banner, Modal, agentAvatar } from '../components/ui';
 import { Markdown } from '../components/Markdown';
+
+/**
+ * Options for an assignee <select>: Unassigned, the Team Lead (who delegates the
+ * item to the best-fit specialist), then the specialists themselves.
+ */
+function AssigneeOptions({ agents }: { agents: Agent[] }): React.JSX.Element {
+  const lead = agents.find((a) => a.kind === 'lead');
+  const specialists = agents.filter((a) => a.kind === 'specialist');
+  return (
+    <>
+      <option value="">Unassigned</option>
+      {lead && <option value={lead.id}>👑 {lead.displayName} (delegates)</option>}
+      {specialists.map((a) => (
+        <option key={a.id} value={a.id}>
+          {a.emoji} {a.displayName}
+        </option>
+      ))}
+    </>
+  );
+}
 
 const COLUMNS: { status: WorkItemStatus; label: string }[] = [
   { status: 'backlog', label: 'Backlog' },
@@ -159,7 +179,6 @@ function WorkItemCard({
   const { updateWorkItem, deleteWorkItem } = useApp();
   const bundle = useBundle(projectId);
   const assignee = bundle.agents.find((a) => a.id === item.assigneeAgentId);
-  const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
   const isEpic = item.kind === 'epic';
   const parentEpic = item.parentId
     ? bundle.workItems.find((w) => w.id === item.parentId)
@@ -277,12 +296,7 @@ function WorkItemCard({
                 void updateWorkItem(projectId, item.id, { assigneeAgentId: e.target.value || null })
               }
             >
-              <option value="">Unassigned</option>
-              {specialists.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.emoji} {a.displayName}
-                </option>
-              ))}
+              <AssigneeOptions agents={bundle.agents} />
             </select>
           </>
         )}
@@ -302,7 +316,6 @@ function WorkItemDetailModal({
   const { updateWorkItem, deleteWorkItem } = useApp();
   const bundle = useBundle(projectId);
   const assignee = bundle.agents.find((a) => a.id === item.assigneeAgentId);
-  const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
   const parentEpic = item.parentId
     ? bundle.workItems.find((w) => w.id === item.parentId)
     : undefined;
@@ -366,12 +379,7 @@ function WorkItemDetailModal({
                 value={item.assigneeAgentId ?? ''}
                 onChange={(e) => set({ assigneeAgentId: e.target.value || null })}
               >
-                <option value="">Unassigned</option>
-                {specialists.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.emoji} {a.displayName}
-                  </option>
-                ))}
+                <AssigneeOptions agents={bundle.agents} />
               </select>
             </label>
           )}
@@ -523,7 +531,6 @@ function CreateItemModal({
   const { projectId } = useParams<{ projectId: string }>();
   const { createWorkItem } = useApp();
   const bundle = useBundle(projectId);
-  const specialists = bundle.agents.filter((a) => a.kind === 'specialist');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('medium');
@@ -620,12 +627,7 @@ function CreateItemModal({
                 value={assignee}
                 onChange={(e) => setAssignee(e.target.value)}
               >
-                <option value="">Unassigned</option>
-                {specialists.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.emoji} {a.displayName}
-                  </option>
-                ))}
+                <AssigneeOptions agents={bundle.agents} />
               </select>
             </div>
           </div>
