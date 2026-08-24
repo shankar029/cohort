@@ -1076,8 +1076,25 @@ class ProjectOrchestrator {
       // in-progress task once its agent has actually gone idle.
       if (agent.status === 'needs_input' || agent.status === 'blocked') continue;
       if (item.status === 'in_progress' && agent.status !== 'idle') continue;
+      // Serialize tasks WITHIN an epic: all child tasks of an epic share one
+      // worktree, so running siblings concurrently makes them clobber each
+      // other's files and cross-attribute commits. Different epics still run in
+      // parallel. A deferred task is retried on the next manager pass.
+      if (item.parentId && this.epicBusy(item.parentId)) continue;
       void this.runWorkItem(item.id).catch(() => undefined);
     }
+  }
+
+  /**
+   * Whether any currently-running work item is a child of `parentId`. Used to
+   * serialize sibling tasks that share an epic's single worktree.
+   */
+  private epicBusy(parentId: string): boolean {
+    for (const id of this.running) {
+      const it = this.deps.store.getWorkItem(id);
+      if (it?.parentId === parentId) return true;
+    }
+    return false;
   }
 
   /** Specialists eligible to build (excludes the design/product advisory roles). */
@@ -1497,11 +1514,18 @@ class ProjectOrchestrator {
     // One in-flight run per item. A stalled 'in_progress' item (no active run) is
     // allowed through so the manager can resume it after a crash/restart.
     if (this.running.has(workItemId)) return;
+    // Never run two children of the same epic at once — they share a worktree.
+    // Deferred here; the manager loop re-drives it once the epic is free.
+    if (item.parentId && this.epicBusy(item.parentId)) return;
     this.running.add(workItemId);
     try {
       await this.runWorkItemInner(item.id, agent);
     } finally {
       this.running.delete(workItemId);
+      // The epic slot is now free — re-drive so the next serialized sibling (or a
+      // task deferred while this one ran) starts promptly instead of waiting for
+      // the periodic manager tick.
+      this.pokeLead();
     }
   }
 

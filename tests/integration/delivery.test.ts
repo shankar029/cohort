@@ -174,3 +174,48 @@ describe('delivery correctness (worktree/cwd, empty-build gate, sequencing, GC)'
     expect(remaining.length).toBe(0);
   });
 });
+
+describe('same-epic tasks do not run concurrently (file-overwrite regression)', () => {
+  it('serializes sibling tasks so they never share the worktree at once', async () => {
+    const projectId = await createProject('Serialize');
+    // Several builder streams so decomposition yields parallel-eligible siblings.
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+    await addSpecialist(projectId, 'ux-designer');
+    await addSpecialist(projectId, 'docs-writer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    // Track how many child tasks of an epic are simultaneously in_progress.
+    const inProgress = new Set<string>();
+    const everRan = new Set<string>();
+    let maxConcurrent = 0;
+    const unsub = ctx.bus.subscribe((m) => {
+      if (m.type !== 'workitem.updated' || !m.workItem.parentId) return;
+      if (m.workItem.status === 'in_progress') {
+        inProgress.add(m.workItem.id);
+        everRan.add(m.workItem.id);
+      } else {
+        inProgress.delete(m.workItem.id);
+      }
+      if (inProgress.size > maxConcurrent) maxConcurrent = inProgress.size;
+    });
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.kind === 'epic' && m.workItem.status === 'done',
+      20000,
+    );
+    unsub();
+
+    // The epic must have decomposed into multiple sibling tasks (otherwise the
+    // test proves nothing), yet at no point did two run at the same time.
+    expect(everRan.size).toBeGreaterThanOrEqual(2);
+    expect(maxConcurrent).toBe(1);
+  });
+});
