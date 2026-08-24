@@ -95,9 +95,10 @@ async function main(): Promise<void> {
 
   // Warm the models cache in the background so the first model picker in the UI
   // is instant instead of waiting ~5s on the cold SDK connect + models.list RPC.
-  void adapter
-    .listModels()
-    .catch((err) => process.stderr.write(`[models] warm-up failed: ${String(err)}\n`));
+  // Retries with backoff so that if the Copilot SDK isn't authenticated yet, the
+  // list still populates automatically once the user signs in — the server keeps
+  // running the whole time.
+  warmModels(adapter);
   if (!config.isProduction) {
     process.stdout.write(
       `  → web dev server: run \`npm run dev:web\` (Vite) at http://localhost:5319\n`,
@@ -119,3 +120,41 @@ main().catch((err) => {
   process.stderr.write(`Fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
   process.exit(1);
 });
+
+/**
+ * Warm the model list in the background, retrying with backoff. A common startup
+ * state is "Copilot not authenticated yet" — rather than failing once and leaving
+ * an empty list, keep retrying quietly so the picker fills in as soon as the user
+ * signs in. The server stays up regardless.
+ */
+function warmModels(adapter: { listModels: () => Promise<string[]> }): void {
+  let attempt = 0;
+  let warnedAuth = false;
+  const tick = (): void => {
+    attempt++;
+    adapter
+      .listModels()
+      .then((models) => {
+        if (models.length) process.stdout.write(`  → ${models.length} models available\n`);
+        else if (attempt < 30) setTimeout(tick, backoff(attempt));
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/not authenticated|authenticate first/i.test(msg)) {
+          if (!warnedAuth) {
+            warnedAuth = true;
+            process.stderr.write(
+              `  ⚠ Copilot is not authenticated yet — sign in with the Copilot CLI ` +
+                `(\`copilot\` or \`gh copilot\`). The app keeps running and the model list ` +
+                `will populate automatically once you're signed in.\n`,
+            );
+          }
+        } else {
+          process.stderr.write(`[models] warm-up failed (attempt ${attempt}): ${msg}\n`);
+        }
+        if (attempt < 30) setTimeout(tick, backoff(attempt));
+      });
+  };
+  const backoff = (n: number): number => Math.min(30_000, 1_000 * 2 ** Math.min(n, 5));
+  tick();
+}
