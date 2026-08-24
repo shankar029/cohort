@@ -18,6 +18,7 @@ import { buildSystemPrompt } from './agents/context.js';
 import { discoverSkills, skillDirectories } from './agents/skillScanner.js';
 import type { Cancel, SchedulerService } from './scheduler.js';
 import type { GitService } from './git.js';
+import type { SessionRecorder } from './sessionRecorder.js';
 
 interface Deps {
   store: Store;
@@ -26,6 +27,7 @@ interface Deps {
   skillHomeRoots: string[];
   scheduler: SchedulerService;
   git: GitService;
+  recorder: SessionRecorder;
 }
 
 function isInsideWorkspace(repoDir: string, filePath: string | undefined): boolean {
@@ -42,7 +44,7 @@ const GROUPCHAT_RE = /\[\[REQUEST_GROUPCHAT:\s*([^\]]+)\]\]/i;
  * One independent, concurrent actor per agent: owns the agent's own Copilot
  * session (grounded with environment/project/team context) and a serialized
  * mailbox so a single agent isn't asked twice at once. Different actors run in
- * parallel — the team is truly async.
+ * parallel - the team is truly async.
  */
 class AgentActor {
   private sessions = new Map<string, AgentSession>();
@@ -81,18 +83,38 @@ class AgentActor {
     const session = await this.ensureSession(cwd);
     const placeholder = this.orch.postMessage(threadId, this.agent, '');
     this.orch.setStatus(this.agent.id, 'working');
+    const recording = this.orch.recordingActive;
+    if (recording) {
+      const wi = workItemId ? this.orch.deps.store.getWorkItem(workItemId) : null;
+      this.orch.deps.recorder.begin({
+        projectId: project.id,
+        agentId: this.agent.id,
+        agentName: this.agent.displayName,
+        agentKind: this.agent.kind,
+        workItemId,
+        workItemTitle: wi?.title ?? null,
+        threadId,
+        cwd,
+        model: this.agent.model || project.settings.defaultModel,
+        prompt,
+      });
+    }
     try {
       const text = await session.ask(prompt, placeholder.id);
       const reply = text.trim();
+      if (recording) this.orch.deps.recorder.end(this.agent.id, reply);
       if (reply) {
         this.orch.finalizeMessage(placeholder.id, reply);
         await this.orch.maybeHandleGroupChatRequest(this.agent, reply, workItemId);
       } else {
         // Tool-only turn (e.g. the agent acted via app tools): drop the empty
-        // placeholder instead of leaving a dangling "…" / "(no response)" bubble.
+        // placeholder instead of leaving a dangling “…” / “(no response)” bubble.
         this.orch.deleteMessage(placeholder.id);
       }
       return reply;
+    } catch (err) {
+      if (recording) this.orch.deps.recorder.discard(this.agent.id);
+      throw err;
     } finally {
       this.orch.setStatus(this.agent.id, 'idle');
     }
@@ -250,6 +272,29 @@ class ProjectOrchestrator {
   onSessionEvent(agent: Agent, e: SessionEvent, workItemId: string | null): void {
     const { bus } = this.deps;
     const pid = this.projectId;
+    if (this.recordingActive) {
+      if (e.kind === 'reasoning') {
+        this.deps.recorder.event(agent.id, {
+          at: new Date().toISOString(),
+          kind: 'reasoning',
+          label: e.text,
+        });
+      } else if (e.kind === 'tool_call') {
+        this.deps.recorder.event(agent.id, {
+          at: new Date().toISOString(),
+          kind: 'tool_call',
+          label: e.toolName,
+          detail: e.detail ?? null,
+        });
+      } else if (e.kind === 'tool_result') {
+        this.deps.recorder.event(agent.id, {
+          at: new Date().toISOString(),
+          kind: 'tool_result',
+          label: e.toolName,
+          detail: e.detail ?? null,
+        });
+      }
+    }
     switch (e.kind) {
       case 'delta':
         // Persist the growing text so a reconnect/re-fetch doesn't lose streamed
@@ -413,7 +458,7 @@ class ProjectOrchestrator {
       assigneeAgentId: lead.id,
     });
     this.deps.bus.publish({ type: 'workitem.updated', projectId: this.projectId, workItem: epic });
-    this.emitEvent(lead.id, 'system', `Opened epic “${epic.title}”`, null, epic.id);
+    this.emitEvent(lead.id, 'system', `Opened epic "${epic.title}"`, null, epic.id);
     this.notify(
       'epic',
       `New epic: ${epic.title}`,
@@ -474,7 +519,7 @@ class ProjectOrchestrator {
     const pm = specs.find((s) => s.name === 'pm');
     if (pm) {
       await this.actor(pm).ask(
-        `Product check for epic “${epic.title}”.\nRequest: ${content}\n` +
+        `Product check for epic "${epic.title}".\nRequest: ${content}\n` +
           `State the user outcome and 2-3 crisp acceptance criteria in a few sentences.`,
         main.id,
         epic.id,
@@ -487,7 +532,7 @@ class ProjectOrchestrator {
     const architect = specs.find((s) => s.name === 'architect');
     if (architect) {
       await this.actor(architect).ask(
-        `Design epic “${epic.title}” before the team builds it.\nRequest: ${content}\n` +
+        `Design epic "${epic.title}" before the team builds it.\nRequest: ${content}\n` +
           `Produce a concise technical design: approach and key decisions, the components/` +
           `interfaces, risks and mitigations, and a dependency-ordered breakdown into small ` +
           `stream-tagged tasks. Record it with update_plan and post a short design summary for ` +
@@ -507,7 +552,7 @@ class ProjectOrchestrator {
 
     // 3. Lead frames the plan for the team.
     await this.actor(lead).ask(
-      `You own epic “${epic.title}”. Break it into parallel tasks by stream for the team, ` +
+      `You own epic "${epic.title}". Break it into parallel tasks by stream for the team, ` +
         `note dependencies and the quality bar, and keep it concise.`,
       main.id,
       epic.id,
@@ -557,10 +602,10 @@ class ProjectOrchestrator {
         parentId: epic.id,
         title: opts.verify ? `[${s.name}] verify ${goal}` : `[${s.name}] ${goal}`,
         description: opts.verify
-          ? `Part of epic “${epic.title}”.\n\nAcceptance criteria: ${s.displayName} sign-off — ` +
+          ? `Part of epic "${epic.title}".\n\nAcceptance criteria: ${s.displayName} sign-off - ` +
             `verify the build tasks meet the quality bar before the epic is done.`
-          : `Part of epic “${epic.title}”.\n\nAcceptance criteria: deliver the ${s.displayName} ` +
-            `slice of “${goal}” to a principal-engineer standard — correct, tested, and matching ` +
+          : `Part of epic "${epic.title}".\n\nAcceptance criteria: deliver the ${s.displayName} ` +
+            `slice of "${goal}" to a principal-engineer standard - correct, tested, and matching ` +
             `project conventions.`,
         status: opts.dependsOn?.length ? 'backlog' : 'todo',
         priority: 'medium',
@@ -602,16 +647,16 @@ class ProjectOrchestrator {
       ? `${verifiers.map((v) => v.displayName).join(', ')} will verify against the quality bar, then I raise a PR and merge. `
       : 'I raise a PR and merge once the work meets the quality bar. ';
     const summary =
-      `📋 Plan for “${epic.title}”\n\n` +
+      `📋 Plan for "${epic.title}"\n\n` +
       `${goal}.\n\n` +
-      `I've broken this into ${builderTaskIds.length} build task(s) across ${streamList} — ` +
+      `I've broken this into ${builderTaskIds.length} build task(s) across ${streamList} - ` +
       `assigned and starting now in parallel. ${verifyNote}` +
       `Follow progress on the Board; I'll keep you posted here.`;
     this.postMessage(main.id, lead, summary);
     this.notify(
       'plan',
       `Plan ready: ${epic.title}`,
-      `${builderTaskIds.length} task(s) across ${streamList} — work is starting.`,
+      `${builderTaskIds.length} task(s) across ${streamList} - work is starting.`,
       'chat',
       epic.id,
       lead.id,
@@ -767,7 +812,7 @@ class ProjectOrchestrator {
 
   /**
    * A user opened an epic from the board. Force Lead ownership, then plan +
-   * decompose it like a chat-originated epic — unless paused, in which case it
+   * decompose it like a chat-originated epic - unless paused, in which case it
    * waits until the user resumes.
    */
   async onEpicCreated(epicId: string): Promise<void> {
@@ -783,12 +828,12 @@ class ProjectOrchestrator {
           workItem: owned,
         });
     }
-    this.emitEvent(lead.id, 'system', `Opened epic “${epic.title}”`, null, epic.id);
+    this.emitEvent(lead.id, 'system', `Opened epic "${epic.title}"`, null, epic.id);
     this.notify(
       'epic',
       `New epic: ${epic.title}`,
       this.paused
-        ? 'Epic created while paused — the Team Lead will plan it when you resume.'
+        ? 'Epic created while paused - the Team Lead will plan it when you resume.'
         : 'The Team Lead opened an epic and is planning the work.',
       'board',
       epic.id,
@@ -826,7 +871,7 @@ class ProjectOrchestrator {
   /**
    * The Team Lead proactively owns delivery: on a heartbeat (and whenever the
    * board changes) they assign ready unassigned work to the best-matching
-   * specialist, and keep an eye on the team — nudging blocked agents. Agents
+   * specialist, and keep an eye on the team - nudging blocked agents. Agents
    * never self-assign; the Lead hands out the work.
    */
   startLeadManager(): void {
@@ -951,6 +996,11 @@ class ProjectOrchestrator {
     return this.project().settings.paused === true;
   }
 
+  /** Whether this project is currently recording agent sessions to disk. */
+  get recordingActive(): boolean {
+    return this.project().settings.recordSessions === true;
+  }
+
   /**
    * Assign every ready (todo, dependency-satisfied) unassigned task to the
    * best-matching specialist. Runs in a single synchronous pass on one process,
@@ -989,7 +1039,7 @@ class ProjectOrchestrator {
       this.emitEvent(
         this.lead().id,
         'system',
-        `${toLead ? 'Delegated' : 'Assigned'} “${item.title}” → ${agent.displayName}`,
+        `${toLead ? 'Delegated' : 'Assigned'} "${item.title}" → ${agent.displayName}`,
         null,
         item.id,
       );
@@ -1051,7 +1101,7 @@ class ProjectOrchestrator {
   }
 
   /**
-   * Active supervision: the Lead doesn't just nudge — it engages. A blocked agent
+   * Active supervision: the Lead doesn't just nudge - it engages. A blocked agent
    * is invoked directly to resume; if it has accumulated unrecoverable trouble
    * signals, the Lead restarts its session (once) and re-drives the work.
    */
@@ -1096,7 +1146,7 @@ class ProjectOrchestrator {
     this.postMessage(
       main.id,
       lead,
-      `@${agent.displayName} you look blocked — I'm stepping in. Tell me the specific blocker ` +
+      `@${agent.displayName} you look blocked - I'm stepping in. Tell me the specific blocker ` +
         `and what you've tried; I'll unblock you or pull in the right people. Meanwhile, resume ` +
         `on your current task and make concrete progress.`,
     );
@@ -1170,7 +1220,7 @@ class ProjectOrchestrator {
       const inProgress = tasks.filter((t) => t.status === 'in_progress');
       const todo = tasks.filter((t) => t.status === 'todo' || t.status === 'backlog');
       lines.push(
-        `**${epic.title}** — ${epic.progress ?? 0}% (${done}/${tasks.length} tasks landed)`,
+        `**${epic.title}** - ${epic.progress ?? 0}% (${done}/${tasks.length} tasks landed)`,
       );
       for (const t of inProgress) {
         const who = t.assigneeAgentId ? nameById.get(t.assigneeAgentId)?.displayName : null;
@@ -1312,8 +1362,8 @@ class ProjectOrchestrator {
     cwd: string | undefined,
   ): Promise<AgentTask[]> {
     const planPrompt =
-      `Before writing any code, break this work item into a short checklist of 3–6 concrete, ` +
-      `verifiable sub-tasks that TOGETHER fully satisfy the requirement — no missing scope and ` +
+      `Before writing any code, break this work item into a short checklist of 3-6 concrete, ` +
+      `verifiable sub-tasks that TOGETHER fully satisfy the requirement - no missing scope and ` +
       `no invented scope. This checklist is your guard against missing requirements or ` +
       `hallucinating work.\n\n` +
       `Work item: ${item.title}\nDetails: ${item.description || '(none)'}\n\n` +
@@ -1343,7 +1393,7 @@ class ProjectOrchestrator {
     this.emitEvent(
       agent.id,
       'system',
-      `Planned ${tasks.length} sub-task(s) for “${item.title}”`,
+      `Planned ${tasks.length} sub-task(s) for "${item.title}"`,
       null,
       item.id,
     );
@@ -1469,7 +1519,7 @@ class ProjectOrchestrator {
     const cwd = worktree?.path;
     const runDir = worktree?.path ?? this.project().repoDir;
 
-    // PHASE 1 — plan. Before touching code the agent splits the work item into a
+    // PHASE 1 - plan. Before touching code the agent splits the work item into a
     // concrete sub-task checklist saved under it (agent → epic → work item →
     // tasks). This is the guard against hallucinating or missing requirements: the
     // agent commits to a scope up front and knocks each item off.
@@ -1477,7 +1527,7 @@ class ProjectOrchestrator {
     this.setSubtaskStatus(subtasks, 'doing');
     const checklist = subtasks.map((s, i) => `${i + 1}. ${s.title}`).join('\n');
 
-    // PHASE 2 — execute against that checklist.
+    // PHASE 2 - execute against that checklist.
     const qaStream = /^qa$/.test(item.stream ?? '');
     const testingClause = qaStream
       ? `This is a QA sign-off task: write end-to-end tests that exercise the feature the way an ` +
@@ -1485,7 +1535,7 @@ class ProjectOrchestrator {
         `Only sign off after those tests actually PASS, and cite the test files, the command you ` +
         `ran, and the passing output as evidence.\n`
       : worktree
-        ? `Testing is mandatory and part of “done”: add unit AND integration tests for what you ` +
+        ? `Testing is mandatory and part of "done": add unit AND integration tests for what you ` +
           `build, keep overall coverage at or above 80%, and leave the build green (typecheck, ` +
           `lint, tests).\n`
         : '';
@@ -1498,13 +1548,13 @@ class ProjectOrchestrator {
       (worktree
         ? `You are on branch ${worktree.branch} in an isolated worktree. Create/edit real files ` +
           `here using relative paths.\n`
-        : `Create and edit REAL files in the project directory using relative paths — actually ` +
+        : `Create and edit REAL files in the project directory using relative paths - actually ` +
           `write the code, do not just describe the changes.\n`) +
       `When done, summarize what you did and CITE EVIDENCE: list the exact files you ` +
       `created or edited and how you verified the work (tests run, commands, checks). ` +
       `Do not claim completion unless you actually created or edited real files.`;
 
-    // Build tasks must produce real, deliverable changes — an agent that only
+    // Build tasks must produce real, deliverable changes - an agent that only
     // narrates has not done the work. This holds whether the task runs in an
     // isolated epic clone or directly in the project checkout. Verifier streams
     // (qa/reviewer/security) legitimately may only sign off, so they are not gated.
@@ -1550,13 +1600,13 @@ class ProjectOrchestrator {
         this.emitEvent(
           agent.id,
           'system',
-          `“${item.title}” produced no code after ${MAX_ATTEMPTS} attempts — restarting session`,
+          `"${item.title}" produced no code after ${MAX_ATTEMPTS} attempts - restarting session`,
           null,
           item.id,
         );
         await this.restartAgentSession(
           agent.id,
-          `no deliverable on “${item.title}” after ${MAX_ATTEMPTS} attempts`,
+          `no deliverable on "${item.title}" after ${MAX_ATTEMPTS} attempts`,
         );
         return;
       }
@@ -1565,7 +1615,7 @@ class ProjectOrchestrator {
       this.emitEvent(
         agent.id,
         'system',
-        `“${item.title}” produced no code after a session restart — needs guidance`,
+        `"${item.title}" produced no code after a session restart - needs guidance`,
         null,
         item.id,
       );
@@ -1579,7 +1629,7 @@ class ProjectOrchestrator {
       );
       void this.raiseQuestion(
         agent.id,
-        `${agent.displayName} produced no code for “${item.title}” even after restarting its session. How should we proceed?`,
+        `${agent.displayName} produced no code for "${item.title}" even after restarting its session. How should we proceed?`,
         ['Retry', 'Skip this task'],
       ).then((ans) => {
         this.awaitingInput.delete(item.id);
@@ -1598,7 +1648,7 @@ class ProjectOrchestrator {
       return;
     }
 
-    // The task produced real work (or is a verifier sign-off) — clear any prior
+    // The task produced real work (or is a verifier sign-off) - clear any prior
     // trouble so a later hiccup starts a fresh recovery budget.
     this.clearTrouble(agent.id);
     // Record an audit note and commit the task's work on the epic branch.
@@ -1643,7 +1693,7 @@ class ProjectOrchestrator {
     if (latest && latest.status === 'in_progress') this.moveItem(item.id, 'review');
     this.setProgress(item.id, 100, agent);
     // Post a structured, evidence-backed completion report to the team so the
-    // branch/commit/files are visible and “done” can't hide an empty branch.
+    // branch/commit/files are visible and "done" can't hide an empty branch.
     this.postTaskCompletion(agent, item, completion, summary, isVerifier);
     this.notify(
       'task',
@@ -1662,9 +1712,9 @@ class ProjectOrchestrator {
     await this.pullNext(agent.id);
   }
 
-  /** Render a `+a / −r` line for a changed file (binary shows `bin`). */
+  /** Render a `+a / -r` line for a changed file (binary shows `bin`). */
   private fileLine(f: GitFileChange): string {
-    const stat = f.added < 0 || f.removed < 0 ? 'bin' : `+${f.added} / −${f.removed}`;
+    const stat = f.added < 0 || f.removed < 0 ? 'bin' : `+${f.added} / -${f.removed}`;
     return `- \`${f.path}\` (${stat})`;
   }
 
@@ -1686,22 +1736,22 @@ class ProjectOrchestrator {
     const lines: string[] = [];
     const header =
       completion && !completion.hash && isVerifier
-        ? `### ✅ Task complete — ${item.title} _(verification — no code changes)_`
-        : `### ✅ Task complete — ${item.title}`;
+        ? `### ✅ Task complete - ${item.title} _(verification - no code changes)_`
+        : `### ✅ Task complete - ${item.title}`;
     lines.push(header);
     lines.push(
-      `**Agent:** ${agent.emoji} ${agent.displayName} · **Stream:** ${item.stream ?? '—'}`,
+      `**Agent:** ${agent.emoji} ${agent.displayName} · **Stream:** ${item.stream ?? '-'}`,
     );
     if (completion?.branch) lines.push(`**Branch:** \`${completion.branch}\``);
     if (completion?.hash) {
       lines.push(
-        `**Commit:** \`${completion.hash.slice(0, 8)}\` — task(${item.stream ?? 'task'}): ${item.title}`,
+        `**Commit:** \`${completion.hash.slice(0, 8)}\` - task(${item.stream ?? 'task'}): ${item.title}`,
       );
     }
     if (files.length > 0) {
       lines.push(`**Files changed (${files.length}):**`);
       for (const f of files.slice(0, 20)) lines.push(this.fileLine(f));
-      if (files.length > 20) lines.push(`- …and ${files.length - 20} more`);
+      if (files.length > 20) lines.push(`- ...and ${files.length - 20} more`);
     } else if (!isVerifier && completion) {
       lines.push(`**Files changed:** _none_`);
     }
@@ -1722,21 +1772,21 @@ class ProjectOrchestrator {
     const main = this.ensureMainThread();
     const lead = this.lead();
     const lines: string[] = [];
-    lines.push(`### 🚀 Epic merged — ${epic.title}`);
+    lines.push(`### 🚀 Epic merged - ${epic.title}`);
     lines.push(
-      `**Branch:** \`${branch || '—'}\` → \`${base || 'main'}\` · ` +
+      `**Branch:** \`${branch || '-'}\` → \`${base || 'main'}\` · ` +
         `**${commits.length}** commit${commits.length === 1 ? '' : 's'} · ` +
         `**${files.length}** file${files.length === 1 ? '' : 's'} changed`,
     );
     if (commits.length > 0) {
       lines.push('**Commits:**');
       for (const c of commits.slice(0, 15)) lines.push(`- \`${c.hash.slice(0, 8)}\` ${c.subject}`);
-      if (commits.length > 15) lines.push(`- …and ${commits.length - 15} more`);
+      if (commits.length > 15) lines.push(`- ...and ${commits.length - 15} more`);
     }
     if (files.length > 0) {
       lines.push('**Files:**');
       for (const f of files.slice(0, 20)) lines.push(this.fileLine(f));
-      if (files.length > 20) lines.push(`- …and ${files.length - 20} more`);
+      if (files.length > 20) lines.push(`- ...and ${files.length - 20} more`);
     }
     this.postMessage(main.id, lead, lines.join('\n'));
   }
@@ -1758,7 +1808,7 @@ class ProjectOrchestrator {
         this.emitEvent(
           t.assigneeAgentId,
           'system',
-          `Dependencies met — starting ${t.title}`,
+          `Dependencies met - starting ${t.title}`,
           null,
           t.id,
         );
@@ -1842,14 +1892,14 @@ class ProjectOrchestrator {
         workItemId: epic.id,
         authorAgentId: lead.id,
         title: `PR: ${epic.title}`,
-        description: `Epic “${epic.title}” ready for review.`,
+        description: `Epic "${epic.title}" ready for review.`,
         branch,
         baseBranch: base,
         diff,
       });
       prId = pr.id;
       this.epicPr.set(epic.id, prId);
-      this.emitEvent(lead.id, 'pull_request', `Raised PR for “${epic.title}”`, null, epic.id);
+      this.emitEvent(lead.id, 'pull_request', `Raised PR for "${epic.title}"`, null, epic.id);
       this.notify(
         'pr',
         `PR opened: ${epic.title}`,
@@ -1883,7 +1933,7 @@ class ProjectOrchestrator {
     // the ask.
     this.reviewContext.set(reviewer.id, { epicId: epic.id, prId });
     const prompt =
-      `Please review the pull request for epic “${epic.title}” against the design and the ` +
+      `Please review the pull request for epic "${epic.title}" against the design and the ` +
       `quality bar.\n\n` +
       `Diff:\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
       `For every issue, call add_review_comment(body, targetStream) routed to the responsible ` +
@@ -1955,7 +2005,7 @@ class ProjectOrchestrator {
         kind: 'task',
         parentId: epic.id,
         title: `[${stream ?? 'fix'}] fix: ${c.body.slice(0, 60)}`,
-        description: `Review comment on “${epic.title}”:\n\n${c.body}`,
+        description: `Review comment on "${epic.title}":\n\n${c.body}`,
         status: 'todo',
         priority: 'high',
         assigneeAgentId: target?.id ?? null,
@@ -1973,7 +2023,7 @@ class ProjectOrchestrator {
       this.emitEvent(
         lead.id,
         'system',
-        `Assigned fix “${fix.title}”${target ? ` → ${target.displayName}` : ''}`,
+        `Assigned fix "${fix.title}"${target ? ` → ${target.displayName}` : ''}`,
         null,
         fix.id,
       );
@@ -2014,7 +2064,7 @@ class ProjectOrchestrator {
         projectId: this.projectId,
         pr: approved,
       });
-    this.emitEvent(approver.id, 'pull_request', `Approved PR for “${epic.title}”`, null, epic.id);
+    this.emitEvent(approver.id, 'pull_request', `Approved PR for "${epic.title}"`, null, epic.id);
 
     if (branch) {
       try {
@@ -2053,7 +2103,7 @@ class ProjectOrchestrator {
     this.emitEvent(
       this.lead().id,
       'system',
-      `Epic “${epic.title}” merged and closed`,
+      `Epic "${epic.title}" merged and closed`,
       null,
       epic.id,
     );
@@ -2345,7 +2395,7 @@ class ProjectOrchestrator {
 
   async handlePermission(ask: PermissionAsk, agent?: Agent): Promise<'approve' | 'reject'> {
     const project = this.project();
-    // The Team Lead orchestrates and reviews — it must NEVER modify files or run
+    // The Team Lead orchestrates and reviews - it must NEVER modify files or run
     // mutating shell itself. All code is produced by specialists in their epic
     // clones; the Lead's edits would land in the main checkout, orphaned. Reads
     // are fine (it may inspect the repo to plan).
@@ -2353,7 +2403,7 @@ class ProjectOrchestrator {
     if (project.settings.approvalMode === 'auto-workspace') {
       if (ask.kind === 'read') return 'approve';
       // Writes/shell are allowed inside the project checkout OR inside a managed
-      // epic clone (under the worktree root) — specialists work in their clone,
+      // epic clone (under the worktree root) - specialists work in their clone,
       // which lives outside repoDir.
       const inRepo = isInsideWorkspace(project.repoDir, ask.fileName);
       const inClone = isInsideWorkspace(this.deps.git.root, ask.fileName);
@@ -2370,7 +2420,7 @@ class ProjectOrchestrator {
   }
 
   async handleUserInput(agent: Agent, ask: UserInputAsk): Promise<string> {
-    // A specialist's question goes to the Team Lead first — the Lead owns the
+    // A specialist's question goes to the Team Lead first - the Lead owns the
     // conversation with the user. The Lead decides from product/tech direction
     // and answers, and only escalates to the human when it genuinely needs a
     // decision only the user can make.
@@ -2391,7 +2441,7 @@ class ProjectOrchestrator {
   /**
    * The Team Lead resolves a specialist's blocking question. The Lead answers
    * directly when it can, or replies `ESCALATE: <question>` to defer to the user
-   * — in which case we surface that question and relay the human's answer back to
+   * - in which case we surface that question and relay the human's answer back to
    * the specialist. Everything is posted to main chat so ownership stays visible.
    */
   private async resolveViaLead(agent: Agent, ask: UserInputAsk): Promise<string> {
@@ -2401,12 +2451,12 @@ class ProjectOrchestrator {
     this.emitEvent(agent.id, 'escalation', `Asked the Team Lead: ${ask.question}`, null, null);
     const prompt =
       `${agent.displayName} is blocked and needs a decision to continue:\n\n` +
-      `“${ask.question}”${choicesTxt}\n\n` +
+      `"${ask.question}"${choicesTxt}\n\n` +
       `As Team Lead you own delivery and the user relationship. Resolve this so the work ` +
       `can proceed. If you can decide from the product/technical direction, reply with a ` +
       `clear, actionable answer addressed to ${agent.displayName} (name the option to take if ` +
       `there are choices). Only if this genuinely requires the human user's decision, reply ` +
-      `with exactly “ESCALATE: <the specific question to ask the user>”. Keep it concise.`;
+      `with exactly "ESCALATE: <the specific question to ask the user>". Keep it concise.`;
     let decision: string;
     try {
       decision = (await this.actor(lead).ask(prompt, main.id, null)).trim();
@@ -2488,10 +2538,10 @@ function shortGoal(content: string): string {
     .replace(/^\s*(please|can you|could you|hey|hi)[,\s]+/i, '')
     .replace(/[.?!]+\s*$/, '')
     .trim();
-  return (cleaned.length > 70 ? `${cleaned.slice(0, 67)}…` : cleaned) || 'the requested work';
+  return (cleaned.length > 70 ? `${cleaned.slice(0, 67)}...` : cleaned) || 'the requested work';
 }
 
-/** Epic title from a request — capitalized short goal. */
+/** Epic title from a request - capitalized short goal. */
 function epicTitle(content: string): string {
   const g = shortGoal(content);
   return g.charAt(0).toUpperCase() + g.slice(1);

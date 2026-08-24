@@ -7,6 +7,7 @@ import {
   Bot,
   GitBranch,
   Radio,
+  ScrollText,
   Bell,
   Settings,
   Pause,
@@ -23,6 +24,7 @@ import { BoardPage } from './pages/BoardPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AgentDetailPage } from './pages/AgentDetailPage';
 import { ActivityPage } from './pages/ActivityPage';
+import { RecordingsPage } from './pages/RecordingsPage';
 import { GitPage } from './pages/GitPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NotificationsPage } from './pages/NotificationsPage';
@@ -34,6 +36,7 @@ const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: 'agents', label: 'Agents', icon: Bot },
   { to: 'git', label: 'Git', icon: GitBranch },
   { to: 'activity', label: 'Activity', icon: Radio },
+  { to: 'recordings', label: 'Recordings', icon: ScrollText },
   { to: 'notifications', label: 'Notifications', icon: Bell },
   { to: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -227,6 +230,7 @@ export function App(): React.JSX.Element {
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:agentId" element={<AgentDetailPage />} />
         <Route path="activity" element={<ActivityPage />} />
+        <Route path="recordings" element={<RecordingsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="git" element={<GitPage />} />
         <Route path="pulls" element={<Navigate to="../git" replace />} />

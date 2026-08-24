@@ -28,6 +28,11 @@ export interface ProjectSettings {
   extraSkillRoots: string[];
   /** When true the team is paused: no new agent-driven work starts. */
   paused?: boolean;
+  /**
+   * When true, every agent turn (prompt, response, reasoning, tool calls) is
+   * recorded to disk for later review. Off by default.
+   */
+  recordSessions?: boolean;
 }
 
 export interface Project {
@@ -336,4 +341,55 @@ export interface Notification {
   agentId: string | null;
   read: boolean;
   createdAt: string;
+}
+
+/** A single recorded event that occurred during an agent turn. */
+export interface RecordedSessionEvent {
+  at: string;
+  kind: 'reasoning' | 'tool_call' | 'tool_result';
+  label: string;
+  detail?: Record<string, unknown> | null;
+}
+
+/**
+ * A full recording of one agent turn: the exact prompt it received, the reply it
+ * produced, every reasoning/tool step in between, and timing. Written to disk
+ * (one JSON object per line) when a project has session recording enabled.
+ */
+export interface RecordedTurn {
+  id: string;
+  projectId: string;
+  agentId: string | null;
+  agentName: string;
+  agentKind: AgentKind;
+  workItemId: string | null;
+  workItemTitle: string | null;
+  threadId: string;
+  cwd: string;
+  model: string;
+  prompt: string;
+  response: string;
+  events: RecordedSessionEvent[];
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+}
+
+/** Lightweight list view of a recorded turn (heavy fields replaced by previews). */
+export interface RecordedTurnSummary {
+  id: string;
+  projectId: string;
+  agentId: string | null;
+  agentName: string;
+  agentKind: AgentKind;
+  workItemId: string | null;
+  workItemTitle: string | null;
+  model: string;
+  promptPreview: string;
+  responsePreview: string;
+  eventCount: number;
+  toolCount: number;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
 }

@@ -13,6 +13,7 @@ export function SettingsPage(): React.JSX.Element {
   const [defaultModel, setDefaultModel] = useState('');
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('auto-workspace');
   const [extraRoots, setExtraRoots] = useState('');
+  const [recordSessions, setRecordSessions] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,8 +22,12 @@ export function SettingsPage(): React.JSX.Element {
       setDefaultModel(project.settings.defaultModel);
       setApprovalMode(project.settings.approvalMode);
       setExtraRoots(project.settings.extraSkillRoots.join(', '));
+      setRecordSessions(project.settings.recordSessions === true);
     }
-  }, [project]);
+    // Initialize the form only when switching projects — not on every background
+    // project update (WS heartbeats), which would clobber unsaved edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id]);
 
   if (!project) return <div className="p-6 text-sm text-slate-500">Project not found.</div>;
 
@@ -37,6 +42,7 @@ export function SettingsPage(): React.JSX.Element {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
+        recordSessions,
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -118,6 +124,28 @@ export function SettingsPage(): React.JSX.Element {
           <p className="mt-1 text-xs text-slate-500">
             Scanned in addition to the built-in home roots and this project's own skill folders.
           </p>
+        </div>
+
+        <div>
+          <span className="label">Session recording</span>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              data-testid="record-sessions"
+              checked={recordSessions}
+              onChange={(e) => setRecordSessions(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-slate-200">Record all agent sessions</span>
+              <span className="block text-xs text-slate-500">
+                Captures every agent turn — the full prompt, reasoning, tool calls, and reply — to
+                disk so you and the Team Lead can review what happened on the{' '}
+                <span className="font-medium">Recordings</span> page. Transcripts may include repo
+                content; they stay on this machine and can be cleared anytime.
+              </span>
+            </span>
+          </label>
         </div>
 
         {error && <Banner kind="error">{error}</Banner>}

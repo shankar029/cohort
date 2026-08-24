@@ -6,6 +6,7 @@ import { z, ZodError } from 'zod';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
 import type { OrchestratorManager } from './orchestrator.js';
+import type { SessionRecorder } from './sessionRecorder.js';
 import {
   answerQuestionSchema,
   createAgentSchema,
@@ -23,6 +24,7 @@ export interface AppContext {
   store: Store;
   bus: Bus;
   orchestrators: OrchestratorManager;
+  recorder: SessionRecorder;
   config: { defaultModel: string; skillHomeRoots: string[] };
   listModels: () => Promise<string[]>;
 }
@@ -104,7 +106,7 @@ export function listDirs(dir?: string): DirListing {
 
 export function buildApp(ctx: AppContext): FastifyInstance {
   const app = Fastify({ logger: false });
-  const { store, bus, orchestrators, config } = ctx;
+  const { store, bus, orchestrators, recorder, config } = ctx;
 
   app.setErrorHandler((err: unknown, _req, reply) => {
     if (err instanceof ZodError) {
@@ -188,6 +190,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
         approvalMode: input.approvalMode ?? project.settings.approvalMode,
         extraSkillRoots: input.extraSkillRoots ?? project.settings.extraSkillRoots,
         paused: project.settings.paused,
+        recordSessions: input.recordSessions ?? project.settings.recordSessions,
       },
     });
     if (updated) {
@@ -212,6 +215,49 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       .setPaused(false)
       .catch(() => undefined);
     return { project: store.getProject(id) };
+  });
+
+  /* ------------------------------------------------------- recordings */
+  app.get('/api/projects/:id/recordings', async (req) => {
+    const { id } = req.params as { id: string };
+    const project = requireProject(id);
+    return {
+      enabled: project.settings.recordSessions === true,
+      recordings: recorder.list(id),
+    };
+  });
+
+  app.get('/api/projects/:id/recordings/export.jsonl', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    reply
+      .header('Content-Type', 'application/x-ndjson')
+      .header('Content-Disposition', `attachment; filename="recordings-${id}.jsonl"`);
+    return recorder.rawJsonl(id);
+  });
+
+  app.get('/api/projects/:id/recordings/export.md', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const project = requireProject(id);
+    reply
+      .header('Content-Type', 'text/markdown; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="recordings-${id}.md"`);
+    return recorder.markdown(id, project.name);
+  });
+
+  app.get('/api/projects/:id/recordings/:turnId', async (req) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    requireProject(id);
+    const turn = recorder.get(id, turnId);
+    if (!turn) throw new HttpError(404, 'Recording not found');
+    return { recording: turn };
+  });
+
+  app.delete('/api/projects/:id/recordings', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    recorder.clear(id);
+    return { ok: true };
   });
 
   app.delete('/api/projects/:id', async (req, reply) => {

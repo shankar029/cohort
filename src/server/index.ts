@@ -8,6 +8,7 @@ import { Bus } from './bus.js';
 import { OrchestratorManager } from './orchestrator.js';
 import { SchedulerService } from './scheduler.js';
 import { GitService } from './git.js';
+import { SessionRecorder } from './sessionRecorder.js';
 import { buildApp } from './app.js';
 import { FakeCopilotAdapter } from './agents/fakeAdapter.js';
 import { RealCopilotAdapter } from './agents/realAdapter.js';
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
   const bus = new Bus();
   const scheduler = new SchedulerService();
   const git = new GitService(config.worktreeRoot);
+  const recorder = new SessionRecorder(config.recordingsDir);
   const adapter: CopilotAdapter = config.fakeSdk
     ? new FakeCopilotAdapter()
     : new RealCopilotAdapter();
@@ -41,12 +43,14 @@ async function main(): Promise<void> {
     skillHomeRoots: config.skillHomeRoots,
     scheduler,
     git,
+    recorder,
   });
 
   const app = buildApp({
     store,
     bus,
     orchestrators,
+    recorder,
     config: { defaultModel: config.defaultModel, skillHomeRoots: config.skillHomeRoots },
     listModels: () => adapter.listModels(),
   });

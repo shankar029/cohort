@@ -13,6 +13,8 @@ export interface Config {
   webDistDir: string;
   /** Base directory for per-epic git worktrees. */
   worktreeRoot: string;
+  /** Base directory for on-disk agent session recordings. */
+  recordingsDir: string;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -43,6 +45,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // (a relative path here previously caused the app to commit into its own repo).
     worktreeRoot: path.resolve(
       env.ATEAM_WORKTREE_ROOT ?? path.join(os.tmpdir(), 'ateam-worktrees'),
+    ),
+    recordingsDir: path.resolve(
+      env.ATEAM_RECORDINGS_DIR ?? path.join(process.cwd(), 'data', 'recordings'),
     ),
   };
 }

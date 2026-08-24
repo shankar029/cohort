@@ -4,6 +4,7 @@ import { Bus } from '../../src/server/bus.js';
 import { OrchestratorManager } from '../../src/server/orchestrator.js';
 import { SchedulerService } from '../../src/server/scheduler.js';
 import { GitService } from '../../src/server/git.js';
+import { SessionRecorder } from '../../src/server/sessionRecorder.js';
 import { buildApp } from '../../src/server/app.js';
 import { FakeCopilotAdapter } from '../../src/server/agents/fakeAdapter.js';
 import type { ServerMessage } from '../../src/shared/index.js';
@@ -19,6 +20,8 @@ export interface TestApp {
   messages: ServerMessage[];
   /** Root under which per-epic git worktrees are created (for assertions/GC checks). */
   worktreeRoot: string;
+  /** Root under which session recordings are written. */
+  recordingsRoot: string;
   /** Resolve once a bus message matching the predicate is published. */
   waitFor: (predicate: (m: ServerMessage) => boolean, timeoutMs?: number) => Promise<ServerMessage>;
   close: () => Promise<void>;
@@ -32,6 +35,8 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
   const scheduler = new SchedulerService();
   const worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-wt-'));
   const git = new GitService(worktreeRoot);
+  const recordingsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-rec-'));
+  const recorder = new SessionRecorder(recordingsRoot);
   const orchestrators = new OrchestratorManager({
     store,
     bus,
@@ -39,11 +44,13 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
     skillHomeRoots: homeRoots,
     scheduler,
     git,
+    recorder,
   });
   const app = buildApp({
     store,
     bus,
     orchestrators,
+    recorder,
     config: { defaultModel: 'test-model', skillHomeRoots: homeRoots },
     listModels: () => adapter.listModels(),
   });
@@ -84,6 +91,7 @@ export function createTestApp(homeRoots: string[] = []): TestApp {
     orchestrators,
     messages,
     worktreeRoot,
+    recordingsRoot,
     waitFor,
     close: async () => {
       await orchestrators.shutdown();

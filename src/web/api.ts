@@ -15,6 +15,8 @@ import type {
   PrComment,
   Thread,
   SkillInfo,
+  RecordedTurn,
+  RecordedTurnSummary,
   UpdateProjectSettingsInput,
   UpdateWorkItemInput,
   WorkItem,
@@ -77,6 +79,17 @@ export const api = {
       body: JSON.stringify(input),
     }),
   deleteProject: (id: string) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+
+  recordings: (projectId: string) =>
+    request<{ enabled: boolean; recordings: RecordedTurnSummary[] }>(
+      `/api/projects/${projectId}/recordings`,
+    ),
+  recording: (projectId: string, turnId: string) =>
+    request<{ recording: RecordedTurn }>(`/api/projects/${projectId}/recordings/${turnId}`),
+  clearRecordings: (projectId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${projectId}/recordings`, { method: 'DELETE' }),
+  recordingsExportUrl: (projectId: string, format: 'jsonl' | 'md') =>
+    `/api/projects/${projectId}/recordings/export.${format}`,
 
   notifications: (projectId: string) =>
     request<{ notifications: Notification[] }>(`/api/projects/${projectId}/notifications`),
