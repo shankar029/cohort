@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, createLogger } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
@@ -18,7 +18,25 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
+// Vite's internal http-proxy handler logs `ws proxy socket error:` with a full
+// stack trace on every one of those same benign teardowns. It's handled (no
+// crash), just noise — filter those specific lines while keeping every other
+// error intact.
+const logger = createLogger();
+const baseError = logger.error;
+logger.error = (msg, options) => {
+  if (
+    typeof msg === 'string' &&
+    msg.includes('ws proxy socket error') &&
+    [...BENIGN].some((code) => msg.includes(code))
+  ) {
+    return;
+  }
+  baseError(msg, options);
+};
+
 export default defineConfig({
+  customLogger: logger,
   plugins: [react()],
   resolve: {
     alias: {
