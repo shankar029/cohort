@@ -699,3 +699,52 @@ describe('board-created epics', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('standalone task deliverable gate', () => {
+  it('a standalone task that writes no files is gated, not silently completed', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId, 'frontend-engineer');
+    // Narrate-only persona: the agent reports progress but writes no files.
+    await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/agents/${agentId}`,
+      payload: { prompt: 'You build UI. [[NOOP]]' },
+    });
+
+    const create = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Add a settings page', status: 'todo', assigneeAgentId: agentId },
+    });
+    const item = (create.json() as { workItem: WorkItem }).workItem;
+
+    // The empty-build gate fires instead of accepting a fabricated "done".
+    await ctx.waitFor(
+      (m) => m.type === 'event.appended' && /Produced no file changes/i.test(m.event.summary),
+      10000,
+    );
+    expect(ctx.store.getWorkItem(item.id)!.status).not.toBe('review');
+  });
+
+  it('a standalone task that writes real files advances to review', async () => {
+    const { projectId } = await createProject();
+    const agentId = await addSpecialist(projectId, 'frontend-engineer');
+
+    const create = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { title: 'Add a settings page', status: 'todo', assigneeAgentId: agentId },
+    });
+    const item = (create.json() as { workItem: WorkItem }).workItem;
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.id === item.id &&
+        m.workItem.status === 'review',
+      10000,
+    );
+    // Real deliverable files were written into the project checkout.
+    expect(fs.existsSync(path.join(repoDir, 'deliverables'))).toBe(true);
+  });
+});

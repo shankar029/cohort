@@ -1376,6 +1376,67 @@ class ProjectOrchestrator {
     }
   }
 
+  /**
+   * Snapshot of file path -> mtime under `dir`, skipping VCS/build/dependency
+   * noise and ateam's own bookkeeping. Bounded so a huge repo can't stall a run.
+   * Used to verify a non-worktree task actually created/edited real files.
+   */
+  private snapshotFiles(dir: string): Map<string, number> {
+    const out = new Map<string, number>();
+    const SKIP = new Set([
+      '.git',
+      '.ateam',
+      'node_modules',
+      'dist',
+      'build',
+      'coverage',
+      '.next',
+      'out',
+      '.turbo',
+      '.cache',
+    ]);
+    const CAP = 8000;
+    const walk = (d: string): void => {
+      if (out.size >= CAP) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        if (SKIP.has(e.name)) continue;
+        if (e.isDirectory() && e.name.startsWith('.')) continue; // skip hidden dirs
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.isFile()) {
+          try {
+            out.set(full, fs.statSync(full).mtimeMs);
+          } catch {
+            /* ignore unreadable file */
+          }
+          if (out.size >= CAP) return;
+        }
+      }
+    };
+    try {
+      walk(dir);
+    } catch {
+      /* ignore */
+    }
+    return out;
+  }
+
+  /** True if any file under `dir` was added or modified since `before`. */
+  private producedRealChanges(dir: string, before: Map<string, number>): boolean {
+    const after = this.snapshotFiles(dir);
+    for (const [file, mtime] of after) {
+      const prev = before.get(file);
+      if (prev === undefined || mtime > prev) return true;
+    }
+    return false;
+  }
+
   private async runWorkItem(workItemId: string): Promise<void> {
     if (this.paused) return;
     const item = this.deps.store.getWorkItem(workItemId);
@@ -1402,9 +1463,11 @@ class ProjectOrchestrator {
     this.setProgress(item.id, Math.max(10, item.progress), agent);
     const main = this.ensureMainThread();
 
-    // Run in the epic's isolated worktree when this task belongs to an epic.
+    // Run in the epic's isolated worktree when this task belongs to an epic;
+    // otherwise the task runs directly in the project checkout.
     const worktree = item.parentId ? this.epicWorktrees.get(item.parentId) : undefined;
     const cwd = worktree?.path;
+    const runDir = worktree?.path ?? this.project().repoDir;
 
     // PHASE 1 — plan. Before touching code the agent splits the work item into a
     // concrete sub-task checklist saved under it (agent → epic → work item →
@@ -1435,17 +1498,23 @@ class ProjectOrchestrator {
       (worktree
         ? `You are on branch ${worktree.branch} in an isolated worktree. Create/edit real files ` +
           `here using relative paths.\n`
-        : '') +
+        : `Create and edit REAL files in the project directory using relative paths — actually ` +
+          `write the code, do not just describe the changes.\n`) +
       `When done, summarize what you did and CITE EVIDENCE: list the exact files you ` +
       `created or edited and how you verified the work (tests run, commands, checks). ` +
       `Do not claim completion unless you actually created or edited real files.`;
 
-    // Build tasks must produce real, committable changes — an agent that only
-    // narrates has not done the work. Verifier streams (qa/reviewer/security)
-    // legitimately may only sign off, so they are not gated.
+    // Build tasks must produce real, deliverable changes — an agent that only
+    // narrates has not done the work. This holds whether the task runs in an
+    // isolated epic clone or directly in the project checkout. Verifier streams
+    // (qa/reviewer/security) legitimately may only sign off, so they are not gated.
     const isVerifier = /^(qa|reviewer|security)$/.test(item.stream ?? '');
-    const gate = !!worktree && !isVerifier;
+    const gate = !isVerifier;
     const MAX_ATTEMPTS = 2;
+    // For non-worktree runs, snapshot the checkout so we can tell whether the
+    // agent actually created/edited files (the clone starts clean, so it uses
+    // git status instead).
+    const fsBaseline = gate && !worktree ? this.snapshotFiles(runDir) : null;
 
     let summary = '';
     let produced = !gate;
@@ -1456,8 +1525,10 @@ class ProjectOrchestrator {
             `MUST create or edit real files (relative paths) before you summarize.`
           : '';
       summary = await this.actor(agent).ask(basePrompt + firm, main.id, item.id, cwd);
-      if (!gate || !worktree) break;
-      produced = await this.deps.git.hasRealChanges(worktree.path);
+      if (!gate) break;
+      produced = worktree
+        ? await this.deps.git.hasRealChanges(worktree.path)
+        : this.producedRealChanges(runDir, fsBaseline ?? new Map());
       if (produced) break;
       this.emitEvent(
         agent.id,
@@ -1472,7 +1543,7 @@ class ProjectOrchestrator {
     // tries the strongest automatic recovery: restart the agent's session once
     // (fresh Copilot session, clean slate) and re-drive the task. Only if it is
     // STILL empty after that restart do we park it and escalate for guidance.
-    if (gate && worktree && !produced) {
+    if (gate && !produced) {
       this.troubleSignal(agent.id);
       if (!this.restartedOnce.has(agent.id)) {
         this.restartedOnce.add(agent.id);
