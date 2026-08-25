@@ -86,4 +86,25 @@ describe('runProjectTests', () => {
     expect(r.passed).toBe(false);
     expect(r.output).toContain('[timed out]');
   });
+
+  it('runs the suite with CI=1 (deterministic, non-interactive)', async () => {
+    const r = await runProjectTests(
+      dir,
+      `"${process.execPath}" -e "process.exit(process.env.CI ? 0 : 1)"`,
+    );
+    expect(r.ran).toBe(true);
+    expect(r.passed).toBe(true);
+  });
+
+  it('does not inherit stdin, so a suite that reads input cannot hang', async () => {
+    // stdin is 'ignore', so reading it hits EOF immediately instead of blocking.
+    const r = await runProjectTests(
+      dir,
+      `"${process.execPath}" -e "process.stdin.on('end',()=>process.exit(0));process.stdin.resume()"`,
+      3000,
+    );
+    expect(r.ran).toBe(true);
+    expect(r.passed).toBe(true);
+    expect(r.output).not.toContain('[timed out]');
+  });
 });

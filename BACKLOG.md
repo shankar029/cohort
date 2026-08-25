@@ -6,22 +6,33 @@ Deferred ideas not yet scheduled. Newest first.
 
 ## QA gate stability when running heavy real-repo test suites
 
-**Status:** proposed / not started
+**Status:** partially addressed 2026-08-25 (isolation shipped); out-of-process supervisor still open
 **Added:** 2026-08-25
 **Context:** During the brownfield `ky` re-run, the server process crashed at
 t+737s while a verifier ran the repo's toolchain (`npm install` + `xo`/`ava` via
-the QA gate) on Windows — no error in the server log (consistent with a native
-abort or resource exhaustion). The eval harness now survives this and writes a
-partial report, but the **app server dying mid-run** is the real problem.
+the QA gate) on Windows — no error in the server log (both `uncaughtException`
+and `unhandledRejection` handlers were already present and silent), consistent
+with a native abort or an external/console-control kill.
 
-**Ideas:**
-- Run the QA test command in a more isolated child (detached process group,
-  capped memory/CPU, hard wall-clock) so a crashing/among heavy suite can never
-  take the server down; double-check `killTree` never targets an ancestor pid.
-- Skip/needs-input a suite that requires `npm install` of a huge dep tree rather
-  than running it inline; or make the install step opt-in per project.
-- Consider running the gate out-of-process (worker) so a native abort is
-  contained.
+**Done (commit with this update):** the QA test child is now isolated so a heavy
+or crashing suite can't take the server down:
+- POSIX: spawned `detached` (own process group); timeout/error kill the whole
+  group via the negative pid, reaping all test workers and never signalling an
+  ancestor. Windows: `taskkill /t` tree-kill + `windowsHide` (POSIX-style
+  `detached` breaks piped stdio on Windows).
+- No inherited stdin (`stdio: ['ignore','pipe','pipe']`) so a suite that reads
+  input can't hang the gate.
+- `CI=1` for deterministic, non-interactive runs; single-settle guard so every
+  exit path (exit/error/timeout) resolves exactly once and always clears the
+  timer + kills the tree.
+- Tests: CI-injected, stdin-EOF-no-hang, plus existing pass/fail/timeout.
+
+**Still open:**
+- Run the gate fully out-of-process (worker/supervisor) so even a native abort
+  in the suite is contained — the only thing in-process isolation can't cover.
+- Optionally skip/needs-input a suite that would require a fresh heavy
+  `npm install` rather than running it inline (make install opt-in per project).
+- Consider capping child memory/CPU (carefully — too low causes false QA fails).
 
 ---
 
