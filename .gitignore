@@ -14,3 +14,4 @@ coverage/
 *.log
 data/worktrees
 worktrees/
+evals/reports/
