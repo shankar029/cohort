@@ -285,8 +285,34 @@ export class EvalHarness {
   async monitorUntil(until, { timeoutMs = 45 * 60_000, intervalMs = 5000 } = {}) {
     const t0 = Date.now();
     let last = '';
+    let lastSnap = {
+      epics: [],
+      tasks: [],
+      epicStatus: {},
+      taskStatus: {},
+      pulls: [],
+      agents: [],
+    };
+    let fails = 0;
+    const MAX_FAILS = 6; // ~30s of unreachable server => treat as crashed
     for (;;) {
-      const snap = await this.snapshot();
+      let snap;
+      try {
+        snap = await this.snapshot();
+        fails = 0;
+        lastSnap = snap;
+      } catch (err) {
+        fails += 1;
+        this.log(`⚠ snapshot failed (${fails}/${MAX_FAILS}): ${err.message ?? err}`);
+        if (fails >= MAX_FAILS) {
+          this.log('⚠ server appears to have crashed mid-run — ending monitor.');
+          return { done: false, crashed: true, snap: lastSnap, elapsedMs: Date.now() - t0 };
+        }
+        if (Date.now() - t0 > timeoutMs)
+          return { done: false, snap: lastSnap, elapsedMs: Date.now() - t0 };
+        await sleep(intervalMs);
+        continue;
+      }
       const el = Math.round((Date.now() - t0) / 1000);
       const merged = snap.pulls.filter((p) => p.status === 'merged').length;
       const line =
@@ -397,6 +423,7 @@ export class EvalHarness {
       scenario: scenario.name,
       adapter: this.fake ? 'fake' : 'real',
       completed: monitorResult.done,
+      crashed: monitorResult.crashed === true,
       elapsedSec: Math.round(monitorResult.elapsedMs / 1000),
       epics: snap.epics.map((e) => ({ id: e.id, title: e.title, status: e.status })),
       epicsDone: snap.epics.filter((e) => e.status === 'done').length,
@@ -429,6 +456,10 @@ function renderReport(scenario, o, chat, h) {
   lines.push('');
   lines.push(`- **Adapter:** ${o.adapter}`);
   lines.push(`- **Completed within window:** ${check(o.completed)} (${o.elapsedSec}s)`);
+  if (o.crashed)
+    lines.push(
+      `- **⚠ SERVER CRASHED mid-run** — results below are the last snapshot before it died.`,
+    );
   lines.push(`- **Epics done:** ${o.epicsDone}/${o.epicsTotal}`);
   lines.push(`- **PRs merged:** ${o.prsMerged}/${o.prs.length}`);
   lines.push(`- **Deliverable files on default branch:** ${o.deliverableCount}`);

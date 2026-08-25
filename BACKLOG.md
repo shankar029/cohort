@@ -4,6 +4,27 @@ Deferred ideas not yet scheduled. Newest first.
 
 ---
 
+## QA gate stability when running heavy real-repo test suites
+
+**Status:** proposed / not started
+**Added:** 2026-08-25
+**Context:** During the brownfield `ky` re-run, the server process crashed at
+t+737s while a verifier ran the repo's toolchain (`npm install` + `xo`/`ava` via
+the QA gate) on Windows — no error in the server log (consistent with a native
+abort or resource exhaustion). The eval harness now survives this and writes a
+partial report, but the **app server dying mid-run** is the real problem.
+
+**Ideas:**
+- Run the QA test command in a more isolated child (detached process group,
+  capped memory/CPU, hard wall-clock) so a crashing/among heavy suite can never
+  take the server down; double-check `killTree` never targets an ancestor pid.
+- Skip/needs-input a suite that requires `npm install` of a huge dep tree rather
+  than running it inline; or make the install step opt-in per project.
+- Consider running the gate out-of-process (worker) so a native abort is
+  contained.
+
+---
+
 ## Steer brownfield decomposition toward one concrete tested change
 
 **Status:** ✅ implemented 2026-08-25 (commit follows this doc)

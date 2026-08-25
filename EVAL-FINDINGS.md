@@ -70,6 +70,25 @@ decomposition toward a concrete, tested change. Tracked in `BACKLOG.md`.
 > is markdown. Greenfield keeps its parallel per-stream fan-out. Covered by a new
 > integration test.
 
+### Live re-run (2026-08-25) — fix validated
+
+Re-ran `brownfield` against `ky` with the fix:
+
+- **New shape confirmed live:** the epic decomposed into **1 build task + 3
+  verifiers** (was 8 tasks / one doc per stream before).
+- **Real code landed, not docs.** The Backend Engineer studied the repo, found
+  the `test.failing('removes undefined value headers')` case, recognized `ky`'s
+  source already supports that behavior, and **promoted the pending test to an
+  active one** (`test/headers.ts`) — a small, maintainer-grade change in the
+  repo's own style, with cited files + commands. Exactly the intended outcome.
+- **Server crashed at t+737s during verification** (last activity was a verifier
+  running `ky`'s toolchain via powershell; no error in the server log — likely a
+  native abort or the QA gate's heavy `npm install`/test on Windows). The harness
+  now **survives a mid-run server death**: the monitor loop catches connection
+  failures, ends after ~30s unreachable, and still writes a partial report with a
+  `⚠ SERVER CRASHED` banner (previously it threw with no report). Root-causing the
+  QA-gate-on-heavy-real-repos stability issue is tracked separately in `BACKLOG.md`.
+
 ---
 
 ## Harness findings — fixed this commit
