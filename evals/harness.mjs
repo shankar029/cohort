@@ -87,6 +87,7 @@ export class EvalHarness {
     this.eventsPath = path.join(this.scratch, 'events.jsonl');
     this.events = []; // captured WS messages
     this.authWarned = false;
+    this.baselineFiles = new Set(); // repo files present BEFORE agents run
     fs.mkdirSync(this.scratch, { recursive: true });
     fs.mkdirSync(REPORTS_DIR, { recursive: true });
   }
@@ -157,12 +158,6 @@ export class EvalHarness {
       msg._t = Date.now();
       this.events.push(msg);
       fs.appendFileSync(this.eventsPath, JSON.stringify(msg) + '\n');
-      // Surface auth problems loudly in real mode.
-      const s = JSON.stringify(msg);
-      if (!this.authWarned && /not authenticated|authenticate first|unauthor/i.test(s)) {
-        this.authWarned = true;
-        this.log('⚠ AUTH: the SDK looks unauthenticated — run `copilot` and sign in, then re-run.');
-      }
     });
     this.ws.on('error', () => undefined);
   }
@@ -201,10 +196,27 @@ export class EvalHarness {
 
   /* --------------------------------------------------------- driving the app */
 
+  /**
+   * Auth is judged from the SERVER log (warm-up prints a specific hint when the
+   * SDK is unauthenticated) — never from agent/tool content, which legitimately
+   * mentions words like "unauthorized" (e.g. a REST API's 401 handling).
+   */
+  detectAuthIssue() {
+    try {
+      const log = fs.readFileSync(this.logPath, 'utf8');
+      return /not authenticated|authenticate first/i.test(log);
+    } catch {
+      return false;
+    }
+  }
+
   async createProject(name, repoDir, settings = {}) {
     const { project } = await this.api.post('/api/projects', { name, repoDir });
     this.projectId = project.id;
     this.repoDir = repoDir;
+    // Snapshot the repo BEFORE any agent work so deliverables can be measured as
+    // "what the team added/changed", not the pre-existing tree (brownfield).
+    this.baselineFiles = new Set(this.gitTrackedFiles(repoDir));
     if (Object.keys(settings).length) await this.api.patch(`/api/projects/${project.id}`, settings);
     this.log(`project ${project.id} → ${repoDir}`);
     return project;
@@ -317,20 +329,69 @@ export class EvalHarness {
     }
   }
 
+  /**
+   * Files the team ADDED or changed, regardless of merge state: new files on the
+   * default branch (vs the pre-run baseline) plus files changed on any active
+   * epic-branch clone under the worktree root. Excludes ateam bookkeeping.
+   */
+  collectDeliverables() {
+    const out = new Set();
+    const keep = (f) =>
+      f && !f.startsWith('.ateam') && f !== '.ateam-keep' && !f.startsWith('.git');
+    // 1. New files merged onto the default branch (vs baseline).
+    for (const f of this.gitTrackedFiles(this.repoDir)) {
+      if (keep(f) && !this.baselineFiles.has(f)) out.add(f);
+    }
+    // 2. Files changed on epic-branch clones that have not merged yet.
+    try {
+      const projDir = path.join(this.worktreeRoot, this.projectId ?? '');
+      const epicDirs = fs.existsSync(projDir)
+        ? fs.readdirSync(projDir).map((d) => path.join(projDir, d))
+        : [];
+      for (const dir of epicDirs) {
+        let base = '';
+        try {
+          base = execFileSync('git', ['merge-base', 'HEAD', 'main'], {
+            cwd: dir,
+            encoding: 'utf8',
+          }).trim();
+        } catch {
+          try {
+            base = execFileSync('git', ['merge-base', 'HEAD', 'master'], {
+              cwd: dir,
+              encoding: 'utf8',
+            }).trim();
+          } catch {
+            base = '';
+          }
+        }
+        if (!base) continue;
+        const names = execFileSync('git', ['diff', '--name-only', `${base}..HEAD`], {
+          cwd: dir,
+          encoding: 'utf8',
+        })
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(keep);
+        for (const f of names) out.add(f);
+      }
+    } catch {
+      /* no clones / git unavailable */
+    }
+    return [...out];
+  }
+
   /** Build a structured outcome + a human-readable markdown report. */
   async report(scenario, monitorResult) {
     const snap = monitorResult.snap;
-    const tracked = this.gitTrackedFiles();
-    const deliverables = tracked.filter(
-      (f) => !f.startsWith('.ateam') && f !== '.ateam-keep' && !f.startsWith('.git'),
-    );
+    const deliverables = this.collectDeliverables();
     const merged = snap.pulls.filter((p) => p.status === 'merged');
     const chat = await this.chat();
 
-    // Event-derived signals.
+    // Event-derived signals (server-authoritative, not fuzzy keyword matches).
     const evStr = this.events.map((e) => JSON.stringify(e)).join('\n');
-    const qaSignoff = /qa|sign.?off/i.test(evStr) && /review|done|approve/i.test(evStr);
-    const authIssue = this.authWarned;
+    const qaSignoff = /QA gate: .* passed/.test(evStr);
+    const authIssue = this.detectAuthIssue();
 
     const outcome = {
       scenario: scenario.name,

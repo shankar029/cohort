@@ -4,6 +4,33 @@ Deferred ideas not yet scheduled. Newest first.
 
 ---
 
+## Steer brownfield decomposition toward one concrete tested change
+
+**Status:** proposed / not started
+**Added:** 2026-08-25
+**Context:** From the `brownfield` eval (see `EVAL-FINDINGS.md`). On an existing
+mature repo (`ky`), the team's comprehension was excellent but execution
+produced only per-stream analysis DOCS (ux/frontend/backend/devops each wrote a
+`.md`) and zero source/test changes — then timed out with no PR.
+
+**Idea:** when an epic targets a non-empty/brownfield repo and the ask is
+open-ended, decomposition should converge on a SINGLE concrete, tested code
+change rather than fanning out one analysis task per stream:
+- Detect brownfield (repo already has substantial tracked source at project
+  creation) and adjust the Lead's decomposition prompt.
+- Shape work as "study → pick ONE improvement → implement it with tests in the
+  repo's existing style → review", assigning the change to the best-fit stream
+  and letting others support, not each produce a doc.
+- Bias the deliverable gate for brownfield build tasks toward source/test files
+  (a `.md` in `docs/` alone should not satisfy a build task).
+- Consider fewer, larger tasks for brownfield to fit the wall-clock (per-epic
+  serialization makes many small sequential tasks slow).
+
+**Scope:** orchestrator `decomposeEpic` prompt/shape + a brownfield signal +
+possibly the deliverable gate. Needs its own PLAN + confirm before building.
+
+---
+
 ## Parallel intra-epic execution (per-task branch → merge back)
 
 **Status:** proposed / not started

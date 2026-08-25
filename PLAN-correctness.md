@@ -43,9 +43,9 @@ Capture findings → fixes.
 - [x] 2. Unit/integration tests for the QA gate (fake adapter) ✅ 2026-08-25 — 9 unit + 2 integration
 - [x] 3. Full gate + commit (Thread 1) ✅ 2026-08-25
 - [x] 4. Rebuild eval harness (real adapter, isolated port/DB/repo) ✅ 2026-08-25 — `evals/` (fake-mode self-test green)
-- [ ] 5. Greenfield medium-scale parallel-epics run + findings
-- [ ] 6. Brownfield medium-scale run + findings
-- [ ] 7. Fixes from evals + re-validate + report
+- [x] 5. Greenfield medium-scale parallel-epics run + findings ✅ 2026-08-25 — PASS (2 epics merged, QA gate ran real tests)
+- [x] 6. Brownfield medium-scale run + findings ✅ 2026-08-25 — strong comprehension; execution produced docs not a tested change
+- [~] 7. Fixes from evals + re-validate + report — harness measurement bugs fixed; brownfield-decomposition steer queued in BACKLOG; see EVAL-FINDINGS.md
 
 ## Risks
 - Real-SDK evals are slow, consume quota, and need auth; results are
