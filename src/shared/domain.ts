@@ -33,6 +33,12 @@ export interface ProjectSettings {
    * recorded to disk for later review. Off by default.
    */
   recordSessions?: boolean;
+  /**
+   * Command used to verify the build during QA sign-off (e.g. `npm test`,
+   * `pytest`, `go test ./...`). When set it overrides auto-detection from
+   * package.json. QA cannot sign off unless this command actually passes.
+   */
+  testCommand?: string;
 }
 
 export interface Project {

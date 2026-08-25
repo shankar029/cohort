@@ -13,6 +13,7 @@ export function SettingsPage(): React.JSX.Element {
   const [defaultModel, setDefaultModel] = useState('');
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('auto-workspace');
   const [extraRoots, setExtraRoots] = useState('');
+  const [testCommand, setTestCommand] = useState('');
   const [recordSessions, setRecordSessions] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,6 +23,7 @@ export function SettingsPage(): React.JSX.Element {
       setDefaultModel(project.settings.defaultModel);
       setApprovalMode(project.settings.approvalMode);
       setExtraRoots(project.settings.extraSkillRoots.join(', '));
+      setTestCommand(project.settings.testCommand ?? '');
       setRecordSessions(project.settings.recordSessions === true);
     }
     // Initialize the form only when switching projects — not on every background
@@ -42,6 +44,7 @@ export function SettingsPage(): React.JSX.Element {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
+        testCommand: testCommand.trim() || undefined,
         recordSessions,
       });
       setSaved(true);
@@ -123,6 +126,26 @@ export function SettingsPage(): React.JSX.Element {
           />
           <p className="mt-1 text-xs text-slate-500">
             Scanned in addition to the built-in home roots and this project's own skill folders.
+          </p>
+        </div>
+
+        <div>
+          <label className="label" htmlFor="s-testcmd">
+            QA test command
+          </label>
+          <input
+            id="s-testcmd"
+            className="input font-mono text-xs"
+            data-testid="test-command"
+            value={testCommand}
+            onChange={(e) => setTestCommand(e.target.value)}
+            placeholder="npm test  ·  pytest -q  ·  go test ./..."
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Run by QA before sign-off — a task can't be verified unless this command actually
+            passes. Leave blank to auto-detect from <span className="font-mono">package.json</span>{' '}
+            (<span className="font-mono">test:e2e</span> → <span className="font-mono">e2e</span> →{' '}
+            <span className="font-mono">test</span>).
           </p>
         </div>
 

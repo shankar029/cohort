@@ -219,3 +219,64 @@ describe('same-epic tasks do not run concurrently (file-overwrite regression)', 
     expect(maxConcurrent).toBe(1);
   });
 });
+
+describe('QA sign-off is gated on the project test command actually passing', () => {
+  it('lets QA sign off and the epic merge when the test command passes', async () => {
+    const projectId = await createProject('QAGatePass');
+    await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}`,
+      payload: { testCommand: 'node -e "process.exit(0)"' },
+    });
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    // QA must have actually RUN the command and seen it pass.
+    await ctx.waitFor(
+      (m) => m.type === 'event.appended' && /QA gate: .* passed/.test(m.event.summary),
+      20000,
+    );
+    // And the normal pipeline still completes.
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 20000);
+  });
+
+  it('blocks QA sign-off (no merge) when the test command fails', async () => {
+    const projectId = await createProject('QAGateFail');
+    await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}`,
+      payload: { testCommand: 'node -e "process.exit(1)"' },
+    });
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    let merged = false;
+    const unsub = ctx.bus.subscribe((m) => {
+      if (m.type === 'pull_request.updated' && m.pr.status === 'merged') merged = true;
+    });
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    // The failing suite blocks sign-off — surfaced explicitly.
+    await ctx.waitFor(
+      (m) => m.type === 'event.appended' && /QA gate FAILED/.test(m.event.summary),
+      20000,
+    );
+    unsub();
+    // The epic must NOT have merged on the back of a failing QA gate.
+    expect(merged).toBe(false);
+    const epic = (await ctx.app
+      .inject({ method: 'GET', url: `/api/projects/${projectId}/workitems` })
+      .then((r) => r.json())) as { workItems: WorkItem[] };
+    expect(epic.workItems.find((w) => w.kind === 'epic')?.status).not.toBe('done');
+  });
+});

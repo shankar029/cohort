@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { runProjectTests } from './qaGate.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { GitFileChange } from '@shared/index';
@@ -1670,6 +1671,80 @@ class ProjectOrchestrator {
         }
       });
       return;
+    }
+
+    // QA sign-off is EVIDENCE-ENFORCED: a QA task cannot advance to review on a
+    // narrated "looks good". If the project has a runnable test command, it must
+    // actually PASS here; a failing (or timed-out) suite blocks sign-off and is
+    // surfaced with the command + output. When nothing is runnable we let QA
+    // proceed but record that no automated verification happened, so the Lead can
+    // see the gap. This runs in the same dir the agent worked in (epic clone or
+    // repo checkout), after QA has had its chance to add/fix tests.
+    if (qaStream) {
+      const test = await runProjectTests(
+        runDir,
+        this.project().settings.testCommand,
+        Number(process.env.ATEAM_QA_TEST_TIMEOUT_MS ?? 240_000),
+      );
+      if (test.ran && !test.passed) {
+        const tail = test.output.split('\n').slice(-25).join('\n').slice(-2000);
+        this.emitEvent(
+          agent.id,
+          'system',
+          `QA gate FAILED: \`${test.command}\` did not pass - blocking sign-off`,
+          tail ? { output: tail } : null,
+          item.id,
+        );
+        this.troubleSignal(agent.id);
+        // First failure: restart QA's session once and re-drive so it can fix the
+        // tests/feature. Still failing after that -> park and ask the user.
+        if (!this.restartedOnce.has(agent.id)) {
+          this.restartedOnce.add(agent.id);
+          await this.restartAgentSession(
+            agent.id,
+            `QA tests failing on "${item.title}" (${test.command})`,
+          );
+          return;
+        }
+        this.setStatus(agent.id, 'needs_input');
+        this.awaitingInput.add(item.id);
+        this.notify(
+          'question',
+          `QA blocked: ${item.title}`,
+          `${agent.displayName} cannot sign off - \`${test.command}\` is failing.`,
+          'board',
+          item.id,
+          agent.id,
+        );
+        void this.raiseQuestion(
+          agent.id,
+          `QA cannot sign off on "${item.title}": \`${test.command}\` is still failing after a session restart. How should we proceed?`,
+          ['Retry', 'Skip this task'],
+        ).then((ans) => {
+          this.awaitingInput.delete(item.id);
+          this.setStatus(agent.id, 'idle');
+          if (ans.toLowerCase().startsWith('skip')) {
+            this.clearTrouble(agent.id);
+            this.moveItem(item.id, 'done');
+            this.maybeFinishEpic(item.parentId);
+          } else {
+            this.restartedOnce.delete(agent.id);
+            this.moveItem(item.id, 'todo');
+            this.pokeLead();
+          }
+        });
+        return;
+      }
+      const okTail = test.ran ? test.output.split('\n').slice(-8).join('\n').slice(-1000) : '';
+      this.emitEvent(
+        agent.id,
+        'system',
+        test.ran
+          ? `QA gate: \`${test.command}\` passed`
+          : `QA signed off WITHOUT an automated test run (no test command detected)`,
+        okTail ? { output: okTail } : null,
+        item.id,
+      );
     }
 
     // The task produced real work (or is a verifier sign-off) - clear any prior

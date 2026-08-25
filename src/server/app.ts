@@ -191,6 +191,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
         extraSkillRoots: input.extraSkillRoots ?? project.settings.extraSkillRoots,
         paused: project.settings.paused,
         recordSessions: input.recordSessions ?? project.settings.recordSessions,
+        testCommand: input.testCommand ?? project.settings.testCommand,
       },
     });
     if (updated) {

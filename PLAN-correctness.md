@@ -39,9 +39,9 @@ Capture findings → fixes.
 3. Targets: greenfield app choice; brownfield repo choice.
 
 ## Steps
-- [ ] 1. Implement QA E2E enforcement gate + repo test-command detection
-- [ ] 2. Unit/integration tests for the QA gate (fake adapter)
-- [ ] 3. Full gate + commit (Thread 1)
+- [x] 1. Implement QA E2E enforcement gate + repo test-command detection ✅ 2026-08-25 — `qaGate.ts` + orchestrator QA gate + `testCommand` setting
+- [x] 2. Unit/integration tests for the QA gate (fake adapter) ✅ 2026-08-25 — 9 unit + 2 integration
+- [x] 3. Full gate + commit (Thread 1) ✅ 2026-08-25
 - [x] 4. Rebuild eval harness (real adapter, isolated port/DB/repo) ✅ 2026-08-25 — `evals/` (fake-mode self-test green)
 - [ ] 5. Greenfield medium-scale parallel-epics run + findings
 - [ ] 6. Brownfield medium-scale run + findings

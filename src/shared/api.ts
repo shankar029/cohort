@@ -20,6 +20,7 @@ export const updateProjectSettingsSchema = z.object({
   approvalMode: z.enum(APPROVAL_MODES).optional(),
   extraSkillRoots: z.array(z.string().trim()).optional(),
   recordSessions: z.boolean().optional(),
+  testCommand: z.string().trim().max(200).optional(),
   name: z.string().trim().min(1).max(80).optional(),
 });
 export type UpdateProjectSettingsInput = z.infer<typeof updateProjectSettingsSchema>;
