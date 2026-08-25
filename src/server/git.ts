@@ -150,22 +150,38 @@ export class GitService {
    * OUTSIDE ateam's own bookkeeping (`.ateam/`). Used to reject "empty" build
    * tasks where the agent narrated but produced no code.
    */
-  async hasRealChanges(worktreePath: string): Promise<boolean> {
+  /** Working-tree paths changed vs HEAD (excludes ateam bookkeeping). */
+  async changedFiles(worktreePath: string): Promise<string[]> {
     const abs = path.resolve(worktreePath);
-    if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot) return false;
+    if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot) return [];
     const status = await this.run(['status', '--porcelain'], worktreePath);
     return status.stdout
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean)
-      .some((l) => {
+      .map((l) =>
         // porcelain lines look like "XY path" or "XY old -> new"; take the path.
-        const p = l
+        l
           .replace(/^..\s+/, '')
           .replace(/^.*->\s*/, '')
-          .replace(/^"|"$/g, '');
-        return p.length > 0 && !p.startsWith('.ateam/') && p !== '.ateam';
-      });
+          .replace(/^"|"$/g, ''),
+      )
+      .filter((p) => p.length > 0 && !p.startsWith('.ateam/') && p !== '.ateam');
+  }
+
+  async hasRealChanges(worktreePath: string): Promise<boolean> {
+    return (await this.changedFiles(worktreePath)).length > 0;
+  }
+
+  /** Repo-relative tracked file paths (via `git ls-files`). */
+  async listTrackedFiles(repoDir: string): Promise<string[]> {
+    const r = await this.run(['ls-files'], repoDir);
+    return r.ok
+      ? r.stdout
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
   }
 
   async currentBranch(dir: string): Promise<string> {

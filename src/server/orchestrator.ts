@@ -222,6 +222,8 @@ class ProjectOrchestrator {
   private lastStatusSig = '';
   /** reviewerAgentId -> the PR they are actively reviewing (for add_review_comment). */
   private readonly reviewContext = new Map<string, { epicId: string; prId: string }>();
+  /** Cached brownfield signal (repo already has substantial source). */
+  private brownfieldCache: boolean | undefined;
 
   constructor(
     private readonly projectId: string,
@@ -478,6 +480,28 @@ class ProjectOrchestrator {
    * Architect, then create stream-tagged task cards for the specialists. Shared by
    * chat-originated epics (planEpic) and board-created epics (onEpicCreated).
    */
+  /**
+   * True when the project's repo already contains substantial source code (an
+   * existing/"brownfield" codebase) rather than an empty greenfield scaffold.
+   * Cached per orchestrator. Used to steer decomposition toward one concrete,
+   * tested change instead of a per-stream fan-out.
+   */
+  private async isBrownfieldRepo(): Promise<boolean> {
+    if (this.brownfieldCache !== undefined) return this.brownfieldCache;
+    let result = false;
+    try {
+      const files = await this.deps.git.listTrackedFiles(this.project().repoDir);
+      const codeExt =
+        /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|h|cc|cpp|hpp|cs|swift|kt|scala|vue|svelte)$/i;
+      const code = files.filter((f) => codeExt.test(f) && !f.includes('node_modules/'));
+      result = code.length >= 8;
+    } catch {
+      result = false;
+    }
+    this.brownfieldCache = result;
+    return result;
+  }
+
   private async decomposeEpic(epic: WorkItem, content: string): Promise<void> {
     const lead = this.lead();
     const main = this.ensureMainThread();
@@ -581,7 +605,10 @@ class ProjectOrchestrator {
       if (c.stream && !existingByStream.has(c.stream)) existingByStream.set(c.stream, c.id);
     }
 
-    const makeTask = (s: Agent, opts: { verify?: boolean; dependsOn?: string[] }): string => {
+    const makeTask = (
+      s: Agent,
+      opts: { verify?: boolean; dependsOn?: string[]; concrete?: boolean },
+    ): string => {
       // Reuse an existing same-stream task rather than duplicating it.
       const existing = existingByStream.get(s.name);
       if (existing) {
@@ -605,9 +632,16 @@ class ProjectOrchestrator {
         description: opts.verify
           ? `Part of epic "${epic.title}".\n\nAcceptance criteria: ${s.displayName} sign-off - ` +
             `verify the build tasks meet the quality bar before the epic is done.`
-          : `Part of epic "${epic.title}".\n\nAcceptance criteria: deliver the ${s.displayName} ` +
-            `slice of "${goal}" to a principal-engineer standard - correct, tested, and matching ` +
-            `project conventions.`,
+          : opts.concrete
+            ? `Part of epic "${epic.title}".\n\nThis is an EXISTING codebase. First STUDY the ` +
+              `relevant code, structure, and conventions. Then make ONE small, well-scoped, ` +
+              `concrete improvement a maintainer would accept - implement it as REAL source ` +
+              `changes WITH tests in the repo's existing style. Do NOT just write documentation ` +
+              `or analysis; a docs-only change does not satisfy this task. Cite the files you ` +
+              `changed and the test command you ran.`
+            : `Part of epic "${epic.title}".\n\nAcceptance criteria: deliver the ${s.displayName} ` +
+              `slice of "${goal}" to a principal-engineer standard - correct, tested, and matching ` +
+              `project conventions.`,
         status: opts.dependsOn?.length ? 'backlog' : 'todo',
         priority: 'medium',
         assigneeAgentId: s.id,
@@ -634,12 +668,27 @@ class ProjectOrchestrator {
       return task.id;
     };
 
-    const coreTaskIds = coreBuilders.map((s) => makeTask(s, {}));
-    const postTaskIds = postBuilders.map((s) => makeTask(s, { dependsOn: coreTaskIds }));
-    const builderTaskIds = [...coreTaskIds, ...postTaskIds];
+    // Existing codebase: converge on ONE concrete, tested change assigned to a
+    // single primary builder, instead of fanning out a task per stream (which
+    // tends to make each stream write its own analysis doc and land no code).
+    // Greenfield keeps the parallel per-stream fan-out.
+    const brownfield = await this.isBrownfieldRepo();
+    let builderTaskIds: string[];
+    let builders: Agent[];
+    if (brownfield && coreBuilders.length) {
+      const order = ['backend', 'frontend', 'ux', 'data', 'devops', 'docs'];
+      const primary =
+        order.map((n) => coreBuilders.find((s) => s.name === n)).find((s): s is Agent => !!s) ??
+        coreBuilders[0]!;
+      builderTaskIds = [makeTask(primary, { concrete: true })];
+      builders = [primary];
+    } else {
+      const coreTaskIds = coreBuilders.map((s) => makeTask(s, {}));
+      const postTaskIds = postBuilders.map((s) => makeTask(s, { dependsOn: coreTaskIds }));
+      builderTaskIds = [...coreTaskIds, ...postTaskIds];
+      builders = allBuilders;
+    }
     for (const v of verifiers) makeTask(v, { verify: true, dependsOn: builderTaskIds });
-
-    const builders = allBuilders;
 
     // 5. Post a clear, user-facing plan summary in the main chat so the user knows
     //    exactly what was decided and what happens next.
@@ -1597,13 +1646,37 @@ class ProjectOrchestrator {
       const firm =
         attempt > 1
           ? `\n\nYour previous attempt produced NO file changes in the working directory. You ` +
-            `MUST create or edit real files (relative paths) before you summarize.`
+            `MUST create or edit real files (relative paths) before you summarize. Documentation ` +
+            `or analysis alone does not count - write real code and tests.`
           : '';
       summary = await this.actor(agent).ask(basePrompt + firm, main.id, item.id, cwd);
       if (!gate) break;
       produced = worktree
         ? await this.deps.git.hasRealChanges(worktree.path)
         : this.producedRealChanges(runDir, fsBaseline ?? new Map());
+      // On an existing codebase, a build task whose ONLY output is documentation
+      // has not made the change - require real code/tests. Fake mode intentionally
+      // writes markdown deliverables, so it is exempt.
+      if (
+        produced &&
+        worktree &&
+        item.stream !== 'docs' &&
+        this.deps.adapter.name !== 'fake' &&
+        (await this.isBrownfieldRepo())
+      ) {
+        const changed = await this.deps.git.changedFiles(worktree.path);
+        const nonDoc = changed.filter((f) => !/\.md$/i.test(f) && !f.startsWith('docs/'));
+        if (nonDoc.length === 0) {
+          produced = false;
+          this.emitEvent(
+            agent.id,
+            'git',
+            'Only documentation changed - this build task needs real code + tests',
+            null,
+            item.id,
+          );
+        }
+      }
       if (produced) break;
       this.emitEvent(
         agent.id,

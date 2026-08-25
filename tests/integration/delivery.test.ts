@@ -280,3 +280,45 @@ describe('QA sign-off is gated on the project test command actually passing', ()
     expect(epic.workItems.find((w) => w.kind === 'epic')?.status).not.toBe('done');
   });
 });
+
+describe('brownfield epics converge on a single concrete build task', () => {
+  it('creates ONE primary build task (not a per-stream fan-out) on an existing codebase', async () => {
+    // Seed the repo with substantial existing source so it reads as brownfield.
+    fs.mkdirSync(path.join(repoDir, 'src'), { recursive: true });
+    for (let i = 0; i < 10; i++) {
+      fs.writeFileSync(
+        path.join(repoDir, 'src', `mod${i}.ts`),
+        `export const v${i} = ${i};\nexport function f${i}() {\n  return v${i};\n}\n`,
+      );
+    }
+
+    const projectId = await createProject('Brownfield');
+    // A multi-stream team that WOULD normally fan out one task per stream.
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+    await addSpecialist(projectId, 'ux-designer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please add a small improvement to this codebase.' },
+    });
+
+    // Fake mode is exempt from the docs-only gate, so the epic still merges.
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 20000);
+
+    const { workItems } = (await ctx.app
+      .inject({ method: 'GET', url: `/api/projects/${projectId}/workitems` })
+      .then((r) => r.json())) as { workItems: WorkItem[] };
+    const epic = workItems.find((w) => w.kind === 'epic');
+    expect(epic).toBeTruthy();
+    const isVerifier = (s: string | null | undefined) => /^(qa|reviewer|security)$/.test(s ?? '');
+    const buildTasks = workItems.filter(
+      (w) => w.kind === 'task' && w.parentId === epic!.id && !isVerifier(w.stream),
+    );
+    // Exactly one concrete build task, assigned to the primary builder (backend).
+    expect(buildTasks.length).toBe(1);
+    expect(buildTasks[0]!.stream).toBe('backend');
+  });
+});

@@ -45,7 +45,7 @@ Capture findings → fixes.
 - [x] 4. Rebuild eval harness (real adapter, isolated port/DB/repo) ✅ 2026-08-25 — `evals/` (fake-mode self-test green)
 - [x] 5. Greenfield medium-scale parallel-epics run + findings ✅ 2026-08-25 — PASS (2 epics merged, QA gate ran real tests)
 - [x] 6. Brownfield medium-scale run + findings ✅ 2026-08-25 — strong comprehension; execution produced docs not a tested change
-- [~] 7. Fixes from evals + re-validate + report — harness measurement bugs fixed; brownfield-decomposition steer queued in BACKLOG; see EVAL-FINDINGS.md
+- [x] 7. Fixes from evals + re-validate + report ✅ 2026-08-25 — harness measurement bugs fixed; **brownfield decomposition steer implemented** (single concrete tested build task + docs-only deliverable gate); see EVAL-FINDINGS.md
 
 ## Risks
 - Real-SDK evals are slow, consume quota, and need auth; results are

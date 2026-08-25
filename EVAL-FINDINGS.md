@@ -62,6 +62,14 @@ no merge.
 **Recommendation:** treat finding #1 as the next app fix — steer brownfield
 decomposition toward a concrete, tested change. Tracked in `BACKLOG.md`.
 
+> **Update 2026-08-25 — implemented.** Brownfield is now detected (repo already
+> has substantial tracked source) and its epics converge on a **single concrete,
+> tested build task** assigned to one primary builder (with a "real code + tests,
+> not documentation" prompt) instead of a per-stream fan-out. A **docs-only
+> deliverable gate** additionally blocks a real-mode build task whose only output
+> is markdown. Greenfield keeps its parallel per-stream fan-out. Covered by a new
+> integration test.
+
 ---
 
 ## Harness findings — fixed this commit

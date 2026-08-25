@@ -6,7 +6,7 @@ Deferred ideas not yet scheduled. Newest first.
 
 ## Steer brownfield decomposition toward one concrete tested change
 
-**Status:** proposed / not started
+**Status:** ✅ implemented 2026-08-25 (commit follows this doc)
 **Added:** 2026-08-25
 **Context:** From the `brownfield` eval (see `EVAL-FINDINGS.md`). On an existing
 mature repo (`ky`), the team's comprehension was excellent but execution
