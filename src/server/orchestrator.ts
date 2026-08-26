@@ -270,6 +270,53 @@ class ProjectOrchestrator {
     return t;
   }
 
+  private readonly epicThreadCache = new Map<string, string>();
+
+  /**
+   * The dedicated discussion thread for an epic, created on demand. All of an
+   * epic's planning and delivery chatter routes here so the Threads rail can
+   * group conversations per epic instead of dumping everything into main.
+   */
+  private ensureEpicThread(epic: WorkItem): Thread {
+    const cachedId = this.epicThreadCache.get(epic.id);
+    if (cachedId) {
+      const t = this.deps.store.getThread(cachedId);
+      if (t) return t;
+    }
+    const existing = this.deps.store
+      .listThreads(this.projectId)
+      .find((t) => t.kind === 'group' && t.workItemId === epic.id);
+    if (existing) {
+      this.epicThreadCache.set(epic.id, existing.id);
+      return existing;
+    }
+    const thread = this.deps.store.createThread({
+      projectId: this.projectId,
+      kind: 'group',
+      topic: 'Team discussion',
+      workItemId: epic.id,
+      participantAgentIds: [this.lead().id],
+      includesUser: true,
+    });
+    this.epicThreadCache.set(epic.id, thread.id);
+    this.deps.bus.publish({ type: 'thread.updated', projectId: this.projectId, thread });
+    return thread;
+  }
+
+  /**
+   * Which conversation a work item's discussion belongs to: its epic's dedicated
+   * thread when the item is an epic or an epic child, otherwise the main channel
+   * (standalone tasks and direct user↔Lead talk stay in main).
+   */
+  private threadForWorkItem(item: WorkItem): Thread {
+    const epicId = item.kind === 'epic' ? item.id : item.parentId;
+    if (epicId) {
+      const epic = this.deps.store.getWorkItem(epicId);
+      if (epic && epic.kind === 'epic') return this.ensureEpicThread(epic);
+    }
+    return this.ensureMainThread();
+  }
+
   /* -------------------------------------------------------------- events */
 
   onSessionEvent(agent: Agent, e: SessionEvent, workItemId: string | null): void {
@@ -504,7 +551,7 @@ class ProjectOrchestrator {
 
   private async decomposeEpic(epic: WorkItem, content: string): Promise<void> {
     const lead = this.lead();
-    const main = this.ensureMainThread();
+    const thread = this.ensureEpicThread(epic);
     const specs = this.specialists();
 
     // Isolate the epic in its own git branch + worktree so parallel epics never
@@ -546,7 +593,7 @@ class ProjectOrchestrator {
       await this.actor(pm).ask(
         `Product check for epic "${epic.title}".\nRequest: ${content}\n` +
           `State the user outcome and 2-3 crisp acceptance criteria in a few sentences.`,
-        main.id,
+        thread.id,
         epic.id,
       );
     }
@@ -562,7 +609,7 @@ class ProjectOrchestrator {
           `interfaces, risks and mitigations, and a dependency-ordered breakdown into small ` +
           `stream-tagged tasks. Record it with update_plan and post a short design summary for ` +
           `the team. Ground it in the existing codebase and conventions.`,
-        main.id,
+        thread.id,
         epic.id,
       );
       this.notify(
@@ -579,7 +626,7 @@ class ProjectOrchestrator {
     await this.actor(lead).ask(
       `You own epic "${epic.title}". Break it into parallel tasks by stream for the team, ` +
         `note dependencies and the quality bar, and keep it concise.`,
-      main.id,
+      thread.id,
       epic.id,
     );
 
@@ -702,7 +749,7 @@ class ProjectOrchestrator {
       `I've broken this into ${builderTaskIds.length} build task(s) across ${streamList} - ` +
       `assigned and starting now in parallel. ${verifyNote}` +
       `Follow progress on the Board; I'll keep you posted here.`;
-    this.postMessage(main.id, lead, summary);
+    this.postMessage(thread.id, lead, summary);
     this.notify(
       'plan',
       `Plan ready: ${epic.title}`,
@@ -1633,7 +1680,8 @@ class ProjectOrchestrator {
 
     this.moveItem(item.id, 'in_progress');
     this.setProgress(item.id, Math.max(10, item.progress), agent);
-    const main = this.ensureMainThread();
+    // Route this task's chatter to its epic's thread (or main for standalone work).
+    const thread = this.threadForWorkItem(item);
 
     // Run in the epic's isolated worktree when this task belongs to an epic;
     // otherwise the task runs directly in the project checkout.
@@ -1645,7 +1693,7 @@ class ProjectOrchestrator {
     // concrete sub-task checklist saved under it (agent → epic → work item →
     // tasks). This is the guard against hallucinating or missing requirements: the
     // agent commits to a scope up front and knocks each item off.
-    const subtasks = await this.planSubtasks(agent, item, main.id, cwd);
+    const subtasks = await this.planSubtasks(agent, item, thread.id, cwd);
     this.setSubtaskStatus(subtasks, 'doing');
     const checklist = subtasks.map((s, i) => `${i + 1}. ${s.title}`).join('\n');
 
@@ -1697,7 +1745,7 @@ class ProjectOrchestrator {
             `MUST create or edit real files (relative paths) before you summarize. Documentation ` +
             `or analysis alone does not count - write real code and tests.`
           : '';
-      summary = await this.actor(agent).ask(basePrompt + firm, main.id, item.id, cwd);
+      summary = await this.actor(agent).ask(basePrompt + firm, thread.id, item.id, cwd);
       if (!gate) break;
       produced = worktree
         ? await this.deps.git.hasRealChanges(worktree.path)
@@ -1950,7 +1998,7 @@ class ProjectOrchestrator {
     summary: string,
     isVerifier: boolean,
   ): void {
-    const main = this.ensureMainThread();
+    const thread = this.threadForWorkItem(item);
     // Exclude ateam bookkeeping from the deliverable evidence.
     const files = (completion?.files ?? []).filter((f) => !f.path.startsWith('.ateam/'));
     const lines: string[] = [];
@@ -1978,7 +2026,7 @@ class ProjectOrchestrator {
     lines.push('');
     lines.push('**Evidence**');
     lines.push(summary.trim() || '_(no summary provided)_');
-    this.postMessage(main.id, agent, lines.join('\n'));
+    this.postMessage(thread.id, agent, lines.join('\n'));
   }
 
   /** Post the epic-level merge report (branch, commit count, files) to the team. */
@@ -1989,7 +2037,7 @@ class ProjectOrchestrator {
     commits: GitCommit[],
     files: GitFileChange[],
   ): void {
-    const main = this.ensureMainThread();
+    const thread = this.threadForWorkItem(epic);
     const lead = this.lead();
     const lines: string[] = [];
     lines.push(`### 🚀 Epic merged - ${epic.title}`);
@@ -2008,7 +2056,7 @@ class ProjectOrchestrator {
       for (const f of files.slice(0, 20)) lines.push(this.fileLine(f));
       if (files.length > 20) lines.push(`- ...and ${files.length - 20} more`);
     }
-    this.postMessage(main.id, lead, lines.join('\n'));
+    this.postMessage(thread.id, lead, lines.join('\n'));
   }
 
   /** Promote backlog tasks whose dependencies are all satisfied (review/done). */
@@ -2078,7 +2126,7 @@ class ProjectOrchestrator {
     if (this.disposed) return;
     const iter = (this.epicReviewIter.get(epic.id) ?? 0) + 1;
     this.epicReviewIter.set(epic.id, iter);
-    const main = this.ensureMainThread();
+    const thread = this.threadForWorkItem(epic);
     const lead = this.lead();
     const repoDir = this.project().repoDir;
     const branch = epic.branch ?? '';
@@ -2159,7 +2207,7 @@ class ProjectOrchestrator {
       `For every issue, call add_review_comment(body, targetStream) routed to the responsible ` +
       `stream. If it meets the bar, leave no comments and it will be approved.`;
     try {
-      await this.actor(reviewer).ask(prompt, main.id, epic.id, wt?.path);
+      await this.actor(reviewer).ask(prompt, thread.id, epic.id, wt?.path);
     } finally {
       this.reviewContext.delete(reviewer.id);
     }

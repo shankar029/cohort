@@ -158,6 +158,10 @@ test('chat: build request → Lead reply + specialist contribution + threads/mar
   await page.getByTestId('chat-send').click();
 
   await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
+  // The epic's delivery discussion lands in its own thread, grouped under the epic.
+  const epicThread = page.getByTestId('thread-item').filter({ hasText: 'Team discussion' });
+  await expect(epicThread).toBeVisible({ timeout: 20000 });
+  await epicThread.click();
   await expect(page.getByTestId('agent-message').first()).toContainText('Frontend Engineer', {
     timeout: 20000,
   });

@@ -13,8 +13,9 @@ const THREAD_META: Record<Thread['kind'], { icon: string; label: string }> = {
 
 export function ChatPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
-  const { sendChat, answerQuestion, markThreadsSeen } = useApp();
+  const { sendChat, answerQuestion, markThreadsSeen, loadThreadMessages } = useApp();
   const bundle = useBundle(projectId);
+  const loadedThreads = useRef<Set<string>>(new Set());
 
   // While the Threads page is open, keep it marked as read so the nav badge stays
   // cleared as new messages stream in.
@@ -125,6 +126,15 @@ export function ChatPage(): React.JSX.Element {
     scrollToBottom('auto');
   }, [selectedId, scrollToBottom]);
 
+  // Load a non-main thread's history the first time it's opened (main history is
+  // fetched with the bundle; other threads are lazy).
+  useEffect(() => {
+    if (!projectId || !selectedId || onMain) return;
+    if (loadedThreads.current.has(selectedId)) return;
+    loadedThreads.current.add(selectedId);
+    void loadThreadMessages(projectId, selectedId);
+  }, [projectId, selectedId, onMain, loadThreadMessages]);
+
   const send = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     const content = input.trim();
@@ -226,7 +236,7 @@ export function ChatPage(): React.JSX.Element {
           </h1>
           <p className="text-sm text-slate-500">
             {onMain
-              ? "Talk to your Team Lead. The whole team's discussions and decisions show up here."
+              ? 'Talk to your Team Lead here. Each epic gets its own thread on the left where its delivery discussion happens.'
               : 'A team discussion — watch specialists brainstorm and align.'}
           </p>
         </header>

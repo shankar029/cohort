@@ -2,20 +2,19 @@
 
 **Goal:** Address five reported issues: dashboard color contrast, per-epic threads,
 nav responsiveness, unread-thread badge, and notifications reset-on-view.
-**Status:** in progress
+**Status:** done
 
 ## Steps
-- [ ] 1. Dashboard: In Progress vs To Do colors are too similar in dark mode → give
-       To Do a distinct hue.
-- [ ] 2. Notifications: visiting the Notifications page resets the unread count
-       (mark all read on view).
-- [ ] 3. Nav perf: switching pages is sometimes slow/unresponsive → coalesce
-       high-frequency WS updates (deltas/events) into one render per frame.
-- [ ] 4. Threads: show an unread-message badge on the Threads nav item (like
-       Notifications) and clear it when the Threads page is viewed.
-- [ ] 5. Threads grouped by epics: give each epic its own discussion thread and
-       route that epic's work into it, so the rail groups threads under epics.
-       Load a non-main thread's history on selection.
+- [x] 1. Dashboard: To Do → violet (distinct from the blue In Progress). ✅
+- [x] 2. Notifications: mark all read on view (badge resets). ✅
+- [x] 3. Nav perf: coalesce WS frames into one render per ~40ms (setTimeout, not
+       rAF, so headless/background tabs still update); fixed a render loop from an
+       unstable `markThreadsSeen` callback that pegged the page. ✅
+- [x] 4. Threads unread badge on the nav item, cleared on view; per-project
+       "seen at" timestamp in localStorage. ✅
+- [x] 5. Per-epic threads: each epic gets a dedicated thread; planning, work,
+       completion and review posts route there; non-main thread history loads on
+       selection. ✅
 
 ## Risks & rollback
 - Step 5 touches orchestrator message routing (server) — highest risk. Guard with

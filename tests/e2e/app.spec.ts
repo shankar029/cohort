@@ -72,7 +72,11 @@ test('chat: a build request becomes an epic and a specialist contributes', async
 
   // The Team Lead responds…
   await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
-  // …and the assigned specialist contributes as itself while working the decomposed task.
+  // …and the assigned specialist contributes as itself in the epic's own thread
+  // while working the decomposed task.
+  const epicThread = page.getByTestId('thread-item').filter({ hasText: 'Team discussion' });
+  await expect(epicThread).toBeVisible({ timeout: 20000 });
+  await epicThread.click();
   await expect(page.getByTestId('agent-message').first()).toContainText('Frontend Engineer', {
     timeout: 20000,
   });

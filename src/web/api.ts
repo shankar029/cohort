@@ -142,6 +142,8 @@ export const api = {
 
   chatHistory: (projectId: string) =>
     request<{ messages: ChatMessage[] }>(`/api/projects/${projectId}/chat`),
+  threadMessages: (threadId: string) =>
+    request<{ messages: ChatMessage[] }>(`/api/threads/${threadId}/messages`),
   sendChat: (projectId: string, content: string) =>
     request<{ accepted: boolean }>(`/api/projects/${projectId}/chat`, {
       method: 'POST',

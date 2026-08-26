@@ -782,3 +782,39 @@ describe('Lead delegation picks the best-fit specialist', () => {
     );
   });
 });
+
+describe('per-epic threads', () => {
+  it('gives each epic its own thread and routes the epic discussion into it', async () => {
+    const { projectId } = await createProject('EpicThreads');
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: {
+        kind: 'epic',
+        title: 'Trip Calculator',
+        description: 'Build a trip cost splitter web page.',
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const epicId = (res.json() as { workItem: { id: string } }).workItem.id;
+
+    // A dedicated group thread is created for the epic (workItemId === epic).
+    const evt = await ctx.waitFor(
+      (m) =>
+        m.type === 'thread.updated' && m.thread.kind === 'group' && m.thread.workItemId === epicId,
+      15000,
+    );
+    const epicThreadId = evt.type === 'thread.updated' ? evt.thread.id : '';
+    expect(epicThreadId).toBeTruthy();
+
+    // The epic's discussion lands in that thread, not the main channel.
+    await ctx.waitFor(
+      (m) => m.type === 'chat.message' && m.message.threadId === epicThreadId,
+      15000,
+    );
+    const main = ctx.store.ensureMainThread(projectId);
+    expect(main.id).not.toBe(epicThreadId);
+  });
+});

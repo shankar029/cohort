@@ -1,4 +1,12 @@
-import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+} from 'react';
 import type {
   Agent,
   AgentEvent,
@@ -272,6 +280,7 @@ interface AppContextValue {
   markAllNotificationsRead: (projectId: string) => Promise<void>;
   updateProject: (id: string, input: Record<string, unknown>) => Promise<void>;
   markThreadsSeen: (projectId: string) => void;
+  loadThreadMessages: (projectId: string, threadId: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -295,21 +304,27 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     let closed = false;
     let retry: ReturnType<typeof setTimeout>;
     let buffer: ServerMessage[] = [];
-    let raf = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const flush = (): void => {
-      raf = 0;
+      timer = null;
       if (buffer.length === 0) return;
       const batch = buffer;
       buffer = [];
       dispatch({ type: 'WS_BATCH', messages: batch });
     };
     const schedule = (): void => {
-      if (raf) return;
-      raf =
-        typeof requestAnimationFrame === 'function'
-          ? requestAnimationFrame(flush)
-          : (setTimeout(flush, 16) as unknown as number);
+      // Coalesce bursts into one render every ~40ms. setTimeout (not rAF) so
+      // updates still flow when the tab is backgrounded or under a headless
+      // browser, which throttles/pauses animation frames. A large burst flushes
+      // immediately so latency stays bounded.
+      if (buffer.length >= 64) {
+        if (timer) clearTimeout(timer);
+        flush();
+        return;
+      }
+      if (timer) return;
+      timer = setTimeout(flush, 40);
     };
 
     const connect = (): void => {
@@ -335,10 +350,31 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     return () => {
       closed = true;
       clearTimeout(retry);
-      if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
+      if (timer) clearTimeout(timer);
       socket?.close();
     };
   }, []);
+
+  // Stable (identity-preserving) callbacks so effects that depend on them don't
+  // re-run on every state change. dispatch/stateRef/api are all stable.
+  const markThreadsSeen = useCallback((projectId: string): void => {
+    dispatch({ type: 'MARK_THREADS_SEEN', projectId, at: Date.now() });
+  }, []);
+  const loadThreadMessages = useCallback(
+    async (projectId: string, threadId: string): Promise<void> => {
+      const { messages } = await api.threadMessages(threadId);
+      if (messages.length === 0) return;
+      const bundle = stateRef.current.bundles[projectId] ?? emptyBundle();
+      const merged = [...bundle.chat];
+      for (const m of messages) {
+        const i = merged.findIndex((x) => x.id === m.id);
+        if (i >= 0) merged[i] = m;
+        else merged.push(m);
+      }
+      dispatch({ type: 'SET_BUNDLE', projectId, bundle: { chat: merged } });
+    },
+    [],
+  );
 
   const value = useMemo<AppContextValue>(() => {
     const refreshProjects = async (): Promise<void> => {
@@ -393,9 +429,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       updateProject: async (id, input) => {
         await api.updateProject(id, input);
       },
-      markThreadsSeen: (projectId) => {
-        dispatch({ type: 'MARK_THREADS_SEEN', projectId, at: Date.now() });
-      },
+      markThreadsSeen,
+      loadThreadMessages,
       loadAgentTasks: async (projectId, agentId) => {
         const { tasks } = await api.agentTasks(agentId);
         const bundle = stateRef.current.bundles[projectId] ?? emptyBundle();
@@ -472,7 +507,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           });
       },
     };
-  }, [state]);
+  }, [state, markThreadsSeen, loadThreadMessages]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
