@@ -31,7 +31,7 @@ import { NotificationsPage } from './pages/NotificationsPage';
 
 const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: 'chat', label: 'Chat', icon: MessagesSquare },
+  { to: 'chat', label: 'Threads', icon: MessagesSquare },
   { to: 'board', label: 'Board', icon: KanbanSquare },
   { to: 'agents', label: 'Agents', icon: Bot },
   { to: 'git', label: 'Git', icon: GitBranch },

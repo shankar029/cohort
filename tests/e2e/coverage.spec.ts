@@ -119,7 +119,7 @@ test('board: create item, columns, epic filter, detail modal + progress', async 
   await addSpecialist(page, 'frontend-engineer');
 
   // Generate an epic via chat so the epic-filter dropdown renders.
-  await nav(page, 'Chat');
+  await nav(page, 'Threads');
   await page.getByTestId('chat-input').fill('Please build a settings panel.');
   await page.getByTestId('chat-send').click();
   await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
@@ -153,7 +153,7 @@ test('chat: build request → Lead reply + specialist contribution + threads/mar
   await createProject(page, 'Cov Chat');
   await addSpecialist(page, 'frontend-engineer');
 
-  await nav(page, 'Chat');
+  await nav(page, 'Threads');
   await page.getByTestId('chat-input').fill('Please build the header component.');
   await page.getByTestId('chat-send').click();
 
@@ -176,7 +176,7 @@ test('chat escalation: a question surfaces and answering resumes the work', asyn
   await page.getByTestId('workitem-assignee').selectOption({ label: '⚙️ Backend Engineer' });
   await page.getByTestId('workitem-submit').click();
 
-  await nav(page, 'Chat');
+  await nav(page, 'Threads');
   await expect(page.getByTestId('question-card')).toBeVisible({ timeout: 20000 });
   await shot(page, 'chat-question');
   await page.getByTestId('question-choice').first().click();
@@ -193,7 +193,7 @@ test('git: completed epic shows a branch, commits and a merged PR', async ({ pag
   await addSpecialist(page, 'frontend-engineer');
   await addSpecialist(page, 'qa-engineer');
 
-  await nav(page, 'Chat');
+  await nav(page, 'Threads');
   await page.getByTestId('chat-input').fill('Please build a profile page.');
   await page.getByTestId('chat-send').click();
 
@@ -213,7 +213,7 @@ test('notifications: activity produces notifications, badge + mark-all-read', as
   await createProject(page, 'Cov Notify');
   await addSpecialist(page, 'frontend-engineer');
 
-  await nav(page, 'Chat');
+  await nav(page, 'Threads');
   await page.getByTestId('chat-input').fill('Please build a small widget.');
   await page.getByTestId('chat-send').click();
 

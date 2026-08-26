@@ -20,6 +20,11 @@ export function ChatPage(): React.JSX.Element {
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the viewport is pinned to the newest message. Auto-scroll only when
+  // true, so a user reading older messages up top isn't yanked down by streaming
+  // updates. A ref (not state) so the scroll handler never triggers re-renders.
+  const atBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
 
   const pending = bundle.questions.filter((q) => q.status === 'pending');
 
@@ -86,9 +91,33 @@ export function ChatPage(): React.JSX.Element {
 
   const onMain = !selected || selected.kind === 'main';
 
+  const scrollToBottom = React.useCallback((behavior: ScrollBehavior = 'smooth'): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    atBottomRef.current = true;
+    setShowJump(false);
+  }, []);
+
+  const onScroll = (): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distance < 80;
+    atBottomRef.current = atBottom;
+    setShowJump(!atBottom);
+  };
+
+  // New messages / streaming progress scroll to the newest content ONLY when the
+  // user is already at the bottom; otherwise their scroll position is preserved.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, pending.length]);
+    if (atBottomRef.current) scrollToBottom('smooth');
+  }, [messages, pending.length, scrollToBottom]);
+
+  // Switching threads always jumps to that thread's latest message.
+  useEffect(() => {
+    scrollToBottom('auto');
+  }, [selectedId, scrollToBottom]);
 
   const send = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -187,9 +216,7 @@ export function ChatPage(): React.JSX.Element {
         <header className="border-b border-surface-border px-6 py-4">
           <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-100">
             {selected ? THREAD_META[selected.kind].icon : '💬'}{' '}
-            {selected && selected.kind !== 'main'
-              ? selected.topic || 'Discussion'
-              : 'Chat · Team Lead'}
+            {selected && selected.kind !== 'main' ? selected.topic || 'Discussion' : 'Team Lead'}
           </h1>
           <p className="text-sm text-slate-500">
             {onMain
@@ -198,98 +225,112 @@ export function ChatPage(): React.JSX.Element {
           </p>
         </header>
 
-        <div ref={scrollRef} className="flex-1 space-y-4 overflow-auto p-6">
-          {messages.length === 0 && pending.length === 0 && (
-            <EmptyState
-              title="Say hello to your Team Lead"
-              hint="Describe what you want built. The Team Lead will coordinate the right specialists — you only talk to the Lead."
-            />
-          )}
+        <div className="relative min-h-0 flex-1">
+          <div ref={scrollRef} onScroll={onScroll} className="h-full space-y-4 overflow-auto p-6">
+            {messages.length === 0 && pending.length === 0 && (
+              <EmptyState
+                title="Say hello to your Team Lead"
+                hint="Describe what you want built. The Team Lead will coordinate the right specialists — you only talk to the Lead."
+              />
+            )}
 
-          {visible.map((m) => {
-            const author = m.authorAgentId
-              ? bundle.agents.find((a) => a.id === m.authorAgentId)
-              : undefined;
-            const isUser = m.role === 'user';
-            const isLead = author?.kind === 'lead';
-            return (
-              <div
-                key={m.id}
-                className={`flex animate-fadeIn items-start gap-2.5 ${
-                  isUser ? 'flex-row-reverse' : ''
-                }`}
-              >
-                {!isUser &&
-                  (author ? (
+            {visible.map((m) => {
+              const author = m.authorAgentId
+                ? bundle.agents.find((a) => a.id === m.authorAgentId)
+                : undefined;
+              const isUser = m.role === 'user';
+              const isLead = author?.kind === 'lead';
+              return (
+                <div
+                  key={m.id}
+                  className={`flex animate-fadeIn items-start gap-2.5 ${
+                    isUser ? 'flex-row-reverse' : ''
+                  }`}
+                >
+                  {!isUser &&
+                    (author ? (
+                      <Avatar
+                        emoji={author.emoji}
+                        color={author.color}
+                        src={agentAvatar(author.catalogId, author.kind)}
+                        size={30}
+                      />
+                    ) : (
+                      <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-accent-600/20 text-accent-400">
+                        🧭
+                      </span>
+                    ))}
+                  <div
+                    className={`max-w-[72%] rounded-2xl px-4 py-2.5 text-sm shadow-card ${
+                      isUser
+                        ? 'whitespace-pre-wrap rounded-tr-sm bg-accent-600 text-white'
+                        : 'rounded-tl-sm border border-surface-border bg-surface-1 text-slate-200'
+                    }`}
+                    data-testid={
+                      isUser ? 'user-message' : isLead ? 'lead-message' : 'agent-message'
+                    }
+                  >
+                    {!isUser && author && (
+                      <div className="mb-1 text-xs font-semibold" style={{ color: author.color }}>
+                        {author.displayName}
+                        {isLead && <span className="ml-1 text-slate-500">· Team Lead</span>}
+                      </div>
+                    )}
+                    {isUser ? m.content : <Markdown content={m.content} />}
+                  </div>
+                </div>
+              );
+            })}
+
+            {working.length > 0 && (
+              <div className="flex animate-fadeIn items-center gap-2.5" data-testid="team-working">
+                <div className="flex -space-x-1.5">
+                  {working.slice(0, 4).map((a) => (
                     <Avatar
-                      emoji={author.emoji}
-                      color={author.color}
-                      src={agentAvatar(author.catalogId, author.kind)}
+                      key={a.id}
+                      emoji={a.emoji}
+                      color={a.color}
+                      src={agentAvatar(a.catalogId, a.kind)}
                       size={30}
                     />
-                  ) : (
-                    <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-accent-600/20 text-accent-400">
-                      🧭
-                    </span>
                   ))}
-                <div
-                  className={`max-w-[72%] rounded-2xl px-4 py-2.5 text-sm shadow-card ${
-                    isUser
-                      ? 'whitespace-pre-wrap rounded-tr-sm bg-accent-600 text-white'
-                      : 'rounded-tl-sm border border-surface-border bg-surface-1 text-slate-200'
-                  }`}
-                  data-testid={isUser ? 'user-message' : isLead ? 'lead-message' : 'agent-message'}
-                >
-                  {!isUser && author && (
-                    <div className="mb-1 text-xs font-semibold" style={{ color: author.color }}>
-                      {author.displayName}
-                      {isLead && <span className="ml-1 text-slate-500">· Team Lead</span>}
-                    </div>
-                  )}
-                  {isUser ? m.content : <Markdown content={m.content} />}
+                </div>
+                <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-surface-border bg-surface-1 px-4 py-2.5">
+                  <span className="flex gap-1" aria-hidden="true">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.2s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.1s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working" />
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    {working.length <= 2
+                      ? `${working.map((a) => a.displayName).join(' and ')} ${working.length === 1 ? 'is' : 'are'} working…`
+                      : `${working.length} teammates are working…`}
+                  </span>
                 </div>
               </div>
-            );
-          })}
+            )}
 
-          {working.length > 0 && (
-            <div className="flex animate-fadeIn items-center gap-2.5" data-testid="team-working">
-              <div className="flex -space-x-1.5">
-                {working.slice(0, 4).map((a) => (
-                  <Avatar
-                    key={a.id}
-                    emoji={a.emoji}
-                    color={a.color}
-                    src={agentAvatar(a.catalogId, a.kind)}
-                    size={30}
-                  />
-                ))}
-              </div>
-              <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm border border-surface-border bg-surface-1 px-4 py-2.5">
-                <span className="flex gap-1" aria-hidden="true">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.2s]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working [animation-delay:-0.1s]" />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-status-working" />
-                </span>
-                <span className="text-xs text-slate-400">
-                  {working.length <= 2
-                    ? `${working.map((a) => a.displayName).join(' and ')} ${working.length === 1 ? 'is' : 'are'} working…`
-                    : `${working.length} teammates are working…`}
-                </span>
-              </div>
-            </div>
+            {onMain &&
+              pending.map((q) => (
+                <QuestionCard
+                  key={q.id}
+                  question={q.question}
+                  choices={q.choices}
+                  from={agentName(q.agentId)}
+                  onAnswer={(a) => answerQuestion(q.id, a)}
+                />
+              ))}
+          </div>
+          {showJump && (
+            <button
+              type="button"
+              onClick={() => scrollToBottom('smooth')}
+              className="absolute bottom-3 right-4 rounded-full border border-surface-border bg-surface-2 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-pop hover:bg-surface-3"
+              data-testid="jump-to-latest"
+            >
+              ↓ Latest
+            </button>
           )}
-
-          {onMain &&
-            pending.map((q) => (
-              <QuestionCard
-                key={q.id}
-                question={q.question}
-                choices={q.choices}
-                from={agentName(q.agentId)}
-                onAnswer={(a) => answerQuestion(q.id, a)}
-              />
-            ))}
         </div>
 
         <form onSubmit={send} className="border-t border-surface-border p-4">

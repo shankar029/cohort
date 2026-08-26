@@ -748,3 +748,37 @@ describe('standalone task deliverable gate', () => {
     expect(fs.existsSync(path.join(repoDir, 'deliverables'))).toBe(true);
   });
 });
+
+describe('Lead delegation picks the best-fit specialist', () => {
+  it('routes a user-assigned task to the inferred stream, not an arbitrary specialist', async () => {
+    const { projectId, leadId } = await createProject('Delegation');
+    // UX is added FIRST so the old load-based fallback would have dumped the task
+    // on it; a frontend engineer is the correct target for a web-page task.
+    await addSpecialist(projectId, 'ux-designer');
+    const feId = await addSpecialist(projectId, 'frontend-engineer');
+
+    // A standalone task with no stream, handed to the Team Lead to delegate.
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: {
+        kind: 'task',
+        title: 'Build the tip calculator web page',
+        description: 'Frontend: index.html + styles.css, responsive layout.',
+        status: 'todo',
+        assigneeAgentId: leadId,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const itemId = (created.json() as { workItem: { id: string } }).workItem.id;
+
+    // The Lead delegates it to the frontend engineer (inferred), never UX.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.id === itemId &&
+        m.workItem.assigneeAgentId === feId,
+      15000,
+    );
+  });
+});

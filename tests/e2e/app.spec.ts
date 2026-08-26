@@ -66,7 +66,7 @@ test('chat: a build request becomes an epic and a specialist contributes', async
   await createProject(page, 'E2E Chat');
   await addSpecialist(page, 'frontend-engineer');
 
-  await page.getByRole('link', { name: 'Chat' }).click();
+  await page.getByRole('link', { name: 'Threads' }).click();
   await page.getByTestId('chat-input').fill('Please build the header component.');
   await page.getByTestId('chat-send').click();
 
@@ -83,7 +83,7 @@ test('pull requests: a completed epic raises a PR that merges', async ({ page })
   await addSpecialist(page, 'frontend-engineer');
   await addSpecialist(page, 'qa-engineer');
 
-  await page.getByRole('link', { name: 'Chat' }).click();
+  await page.getByRole('link', { name: 'Threads' }).click();
   await page.getByTestId('chat-input').fill('Please build a profile page.');
   await page.getByTestId('chat-send').click();
 
@@ -106,7 +106,7 @@ test('escalation: a specialist question is surfaced and answering resumes the wo
   await page.getByTestId('workitem-submit').click();
 
   // The escalation appears on the Chat page.
-  await page.getByRole('link', { name: 'Chat' }).click();
+  await page.getByRole('link', { name: 'Threads' }).click();
   await expect(page.getByTestId('question-card')).toBeVisible({ timeout: 20000 });
   await page.getByTestId('question-choice').first().click();
 

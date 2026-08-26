@@ -1159,12 +1159,60 @@ class ProjectOrchestrator {
       const byStream = specs.find((s) => s.name === stream);
       if (byStream) return byStream;
     }
+    // No explicit stream (e.g. a task the user created and handed to the Lead):
+    // infer the best-fit discipline from the title/description instead of blindly
+    // load-balancing onto whichever specialist happens to be first.
+    const inferred = this.inferSpecialist(item, specs);
+    if (inferred) return inferred;
     const all = this.deps.store.listWorkItems(this.projectId);
     const load = (a: Agent): number =>
       all.filter(
         (w) => w.assigneeAgentId === a.id && (w.status === 'todo' || w.status === 'in_progress'),
       ).length;
     return [...specs].sort((a, b) => load(a) - load(b))[0];
+  }
+
+  /**
+   * Best-effort discipline inference for an unstreamed task, matched against the
+   * specialists that actually exist. Build streams are preferred over verifier
+   * streams, and earlier rules win, so a "tip calculator web page" routes to
+   * frontend rather than UX/QA. Returns undefined when nothing matches.
+   */
+  private inferSpecialist(item: WorkItem, specs: Agent[]): Agent | undefined {
+    const text = `${item.title} ${item.description ?? ''}`.toLowerCase();
+    const rules: [string, RegExp][] = [
+      [
+        'frontend',
+        /\b(frontend|front-end|ui|css|html|react|vue|component|page|styles?|layout|button|form|responsive|tailwind)\b/,
+      ],
+      [
+        'backend',
+        /\b(backend|back-end|api|server|endpoint|database|db|sql|route|controller|persistence|migration)\b/,
+      ],
+      [
+        'ux',
+        /\b(ux|wireframe|mockup|usability|user experience|user flow|design system|figma|accessibility|wcag)\b/,
+      ],
+      ['data', /\b(data|etl|analytics|dataset|pipeline|warehouse|schema)\b/],
+      [
+        'devops',
+        /\b(devops|ci\/cd|\bci\b|\bcd\b|pipeline|deploy|docker|kubernetes|k8s|infra|infrastructure|workflow)\b/,
+      ],
+      ['docs', /\b(docs?|documentation|readme|guide|changelog|tutorial)\b/],
+      [
+        'security',
+        /\b(security|vulnerab|xss|csrf|owasp|encryption|auth[nz]?|authentication|authorization)\b/,
+      ],
+      ['qa', /\b(qa|e2e|regression|test coverage|test plan|quality assurance)\b/],
+      ['researcher', /\b(research|investigate|spike|evaluate options|feasibility)\b/],
+    ];
+    for (const [name, re] of rules) {
+      if (re.test(text)) {
+        const a = specs.find((s) => s.name === name);
+        if (a) return a;
+      }
+    }
+    return undefined;
   }
 
   /**
