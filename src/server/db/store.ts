@@ -22,6 +22,7 @@ import type {
   NotificationType,
   Thread,
   ThreadKind,
+  UsageEntry,
   WorkItem,
 } from '@shared/index';
 
@@ -122,6 +123,28 @@ const toWorkItem = (r: WorkItemRow): WorkItem => ({
   order: r.ord,
   progress: r.progress ?? 0,
   createdAt: r.created_at,
+  updatedAt: r.updated_at,
+});
+
+interface UsageRow {
+  id: string;
+  project_id: string;
+  work_item_id: string | null;
+  agent_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  time_ms: number;
+  turns: number;
+  updated_at: string;
+}
+const toUsage = (r: UsageRow): UsageEntry => ({
+  projectId: r.project_id,
+  workItemId: r.work_item_id ?? null,
+  agentId: r.agent_id,
+  inputTokens: r.input_tokens,
+  outputTokens: r.output_tokens,
+  timeMs: r.time_ms,
+  turns: r.turns,
   updatedAt: r.updated_at,
 });
 
@@ -1170,5 +1193,55 @@ export class Store {
 
   markAllNotificationsRead(projectId: string): void {
     this.db.prepare(`UPDATE notifications SET read=1 WHERE project_id=?`).run(projectId);
+  }
+
+  /* ------------------------------------------------------------- usage */
+
+  /**
+   * Accumulate time + token usage for an (agent, workItem) pair. Upserts on a
+   * composite key so repeated turns add up. Returns the running total.
+   */
+  recordUsage(input: {
+    projectId: string;
+    workItemId: string | null;
+    agentId: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    timeMs?: number;
+    turns?: number;
+  }): UsageEntry {
+    const rowId = `${input.workItemId ?? '_none'}::${input.agentId}`;
+    this.db
+      .prepare(
+        `INSERT INTO work_usage
+           (id,project_id,work_item_id,agent_id,input_tokens,output_tokens,time_ms,turns,updated_at)
+         VALUES (@id,@project_id,@work_item_id,@agent_id,@input_tokens,@output_tokens,@time_ms,@turns,@updated_at)
+         ON CONFLICT(id) DO UPDATE SET
+           input_tokens = input_tokens + excluded.input_tokens,
+           output_tokens = output_tokens + excluded.output_tokens,
+           time_ms = time_ms + excluded.time_ms,
+           turns = turns + excluded.turns,
+           updated_at = excluded.updated_at`,
+      )
+      .run({
+        id: rowId,
+        project_id: input.projectId,
+        work_item_id: input.workItemId,
+        agent_id: input.agentId,
+        input_tokens: Math.max(0, Math.round(input.inputTokens ?? 0)),
+        output_tokens: Math.max(0, Math.round(input.outputTokens ?? 0)),
+        time_ms: Math.max(0, Math.round(input.timeMs ?? 0)),
+        turns: Math.max(0, Math.round(input.turns ?? 0)),
+        updated_at: now(),
+      });
+    const r = this.db.prepare(`SELECT * FROM work_usage WHERE id=?`).get(rowId) as UsageRow;
+    return toUsage(r);
+  }
+
+  listUsage(projectId: string): UsageEntry[] {
+    return this.db
+      .prepare(`SELECT * FROM work_usage WHERE project_id=? ORDER BY updated_at DESC`)
+      .all(projectId)
+      .map((r) => toUsage(r as UsageRow));
   }
 }

@@ -3,7 +3,15 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { Agent, AgentNote, AgentTask, AgentTaskStatus, SkillInfo } from '@shared/index';
 import { api } from '../api';
 import { useApp, useBundle } from '../state';
-import { Avatar, EmptyState, ModelSelect, StatusPill, agentAvatar } from '../components/ui';
+import {
+  Avatar,
+  EmptyState,
+  ModelSelect,
+  StatusPill,
+  UsageChip,
+  agentAvatar,
+} from '../components/ui';
+import { formatDuration, formatTokens, usageForAgent } from '../usage';
 import { Markdown } from '../components/Markdown';
 
 const TASK_STATUS_META: Record<AgentTaskStatus, { label: string; dot: string; order: number }> = {
@@ -58,6 +66,16 @@ export function AgentDetailPage(): React.JSX.Element {
   // page reads per-epic instead of one flat board. workItemId points at a task
   // work item; its parentId is the epic. Items with no epic fall under 'General'.
   const wiById = new Map(bundle.workItems.map((w) => [w.id, w]));
+  const agentUsage = usageForAgent(bundle.usage, agent.id);
+  const usageItems = bundle.usage
+    .filter((u) => u.agentId === agent.id && (u.inputTokens + u.outputTokens > 0 || u.timeMs > 0))
+    .map((u) => ({
+      workItemId: u.workItemId,
+      item: u.workItemId ? wiById.get(u.workItemId) : undefined,
+      tokens: u.inputTokens + u.outputTokens,
+      timeMs: u.timeMs,
+    }))
+    .sort((a, b) => b.tokens - a.tokens);
   const epicIdOf = (workItemId: string | null): string | null => {
     if (!workItemId) return null;
     const wi = wiById.get(workItemId);
@@ -163,6 +181,49 @@ export function AgentDetailPage(): React.JSX.Element {
               <p className="text-xs text-slate-500">
                 No plan yet — the agent maintains this as it works.
               </p>
+            )}
+          </div>
+        </section>
+
+        {/* Time & tokens the agent has spent, in total and per work item. */}
+        <section data-testid="agent-usage">
+          <h2 className="mb-3 text-sm font-semibold text-slate-200">Time &amp; tokens</h2>
+          <div className="card p-4">
+            <div className="mb-3 grid grid-cols-3 gap-3 text-center">
+              <div>
+                <div className="text-lg font-semibold text-slate-100">
+                  {formatDuration(agentUsage.timeMs)}
+                </div>
+                <div className="text-xs text-slate-500">Time spent</div>
+              </div>
+              <div>
+                <div className="text-lg font-semibold text-slate-100">
+                  {formatTokens(agentUsage.tokens)}
+                </div>
+                <div className="text-xs text-slate-500">
+                  Tokens ({formatTokens(agentUsage.inputTokens)} in /{' '}
+                  {formatTokens(agentUsage.outputTokens)} out)
+                </div>
+              </div>
+              <div>
+                <div className="text-lg font-semibold text-slate-100">{agentUsage.turns}</div>
+                <div className="text-xs text-slate-500">Turns</div>
+              </div>
+            </div>
+            {usageItems.length === 0 ? (
+              <p className="text-xs text-slate-500">No usage recorded yet.</p>
+            ) : (
+              <ul className="space-y-1">
+                {usageItems.map((u) => (
+                  <li
+                    key={u.workItemId ?? '_none'}
+                    className="flex items-center justify-between gap-2 text-xs text-slate-300"
+                  >
+                    <span className="truncate">{u.item?.title ?? 'Direct Team Lead chat'}</span>
+                    <UsageChip tokens={u.tokens} timeMs={u.timeMs} />
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </section>

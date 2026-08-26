@@ -101,7 +101,16 @@ class AgentActor {
       });
     }
     try {
-      const text = await session.ask(prompt, placeholder.id);
+      const startedAt = Date.now();
+      let text: string;
+      try {
+        text = await session.ask(prompt, placeholder.id);
+      } finally {
+        this.orch.recordUsage(this.agent.id, workItemId, {
+          timeMs: Date.now() - startedAt,
+          turns: 1,
+        });
+      }
       const reply = text.trim();
       if (recording) this.orch.deps.recorder.end(this.agent.id, reply);
       if (reply) {
@@ -383,7 +392,29 @@ class ProjectOrchestrator {
         break;
       case 'idle':
         break;
+      case 'usage':
+        this.recordUsage(agent.id, workItemId, {
+          inputTokens: e.inputTokens,
+          outputTokens: e.outputTokens,
+        });
+        break;
     }
+  }
+
+  /** Accumulate + broadcast time/token usage for an agent on a work item. */
+  recordUsage(
+    agentId: string,
+    workItemId: string | null,
+    delta: { inputTokens?: number; outputTokens?: number; timeMs?: number; turns?: number },
+  ): void {
+    if (!delta.inputTokens && !delta.outputTokens && !delta.timeMs && !delta.turns) return;
+    const entry = this.deps.store.recordUsage({
+      projectId: this.projectId,
+      workItemId,
+      agentId,
+      ...delta,
+    });
+    this.deps.bus.publish({ type: 'usage.updated', projectId: this.projectId, entry });
   }
 
   /* -------------------------------------------------------- thread posts */

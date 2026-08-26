@@ -818,3 +818,37 @@ describe('per-epic threads', () => {
     expect(main.id).not.toBe(epicThreadId);
   });
 });
+
+describe('usage tracking', () => {
+  it('records time + tokens per agent as work is done, and rolls up per work item', async () => {
+    const { projectId } = await createProject('UsageTrack');
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/workitems`,
+      payload: { kind: 'epic', title: 'Usage Epic', description: 'Build a small widget.' },
+    });
+    const epicId = (res.json() as { workItem: { id: string } }).workItem.id;
+
+    // Usage is broadcast live as agents take turns.
+    const evt = await ctx.waitFor(
+      (m) => m.type === 'usage.updated' && m.entry.inputTokens + m.entry.outputTokens > 0,
+      15000,
+    );
+    expect(evt.type === 'usage.updated' && evt.entry.timeMs).toBeGreaterThanOrEqual(0);
+
+    // Give the epic a moment to fan out to the specialist, then assert the ledger
+    // has non-zero tokens and time recorded.
+    await ctx.waitFor(
+      (m) => m.type === 'workitem.updated' && m.workItem.parentId === epicId,
+      15000,
+    );
+    const ledger = ctx.store.listUsage(projectId);
+    expect(ledger.length).toBeGreaterThan(0);
+    const totalTokens = ledger.reduce((s, u) => s + u.inputTokens + u.outputTokens, 0);
+    const totalTime = ledger.reduce((s, u) => s + u.timeMs, 0);
+    expect(totalTokens).toBeGreaterThan(0);
+    expect(totalTime).toBeGreaterThan(0);
+  });
+});

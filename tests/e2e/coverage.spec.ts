@@ -127,6 +127,8 @@ test('board: create item, columns, epic filter, detail modal + progress', async 
   await nav(page, 'Board');
   await expect(page.getByTestId('board')).toBeVisible();
   await expect(page.getByTestId('workitem').first()).toBeVisible({ timeout: 20000 });
+  // Time + token usage accrues on the epic card as the team works it.
+  await expect(page.getByTestId('usage-chip').first()).toBeVisible({ timeout: 20000 });
 
   // Create an additional assigned item.
   await page.getByTestId('add-workitem').click();

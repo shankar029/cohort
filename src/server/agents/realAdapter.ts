@@ -107,6 +107,20 @@ class RealAgentSession implements AgentSession {
         }),
       );
       offs.push(
+        // Per-model-call token usage (input/output tokens, api-call duration).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.session.on('assistant.usage', (e: any) => {
+          const d = e?.data ?? {};
+          onEvent({
+            kind: 'usage',
+            inputTokens: Number(d.inputTokens ?? 0) || 0,
+            outputTokens: Number(d.outputTokens ?? 0) || 0,
+            model: String(d.model ?? ''),
+            durationMs: Number(d.duration ?? 0) || 0,
+          });
+        }),
+      );
+      offs.push(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.session.on('tool.execution_start', (e: any) => {
           onEvent({

@@ -4,6 +4,8 @@ import path from 'node:path';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const TICK = Number(process.env.ATEAM_FAKE_TICK ?? 2);
+/** Rough token estimate (~4 chars/token) for offline usage numbers. */
+const estimateTokens = (s: string): number => Math.max(1, Math.ceil(s.length / 4));
 
 /**
  * Deterministic, offline stand-in for a single agent's Copilot session. Replies
@@ -30,6 +32,14 @@ class FakeAgentSession implements AgentSession {
     const { onEvent, displayName, role } = this.config;
 
     onEvent({ kind: 'reasoning', text: `Considering: ${prompt.slice(0, 60)}` });
+    // Synthetic input-token usage so offline/fake mode surfaces non-zero numbers.
+    onEvent({
+      kind: 'usage',
+      inputTokens: estimateTokens(prompt),
+      outputTokens: 0,
+      model: this.config.model,
+      durationMs: 0,
+    });
     await sleep(TICK);
 
     // Planning phase: when the orchestrator asks the agent to split a work item
@@ -165,6 +175,13 @@ class FakeAgentSession implements AgentSession {
       await sleep(TICK);
     }
     onEvent({ kind: 'message', messageId, text });
+    onEvent({
+      kind: 'usage',
+      inputTokens: 0,
+      outputTokens: estimateTokens(text),
+      model: this.config.model,
+      durationMs: 0,
+    });
   }
 
   async dispose(): Promise<void> {

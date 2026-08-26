@@ -13,6 +13,7 @@ export type SessionEvent =
   | { kind: 'reasoning'; text: string }
   | { kind: 'tool_call'; toolName: string; detail?: Record<string, unknown> }
   | { kind: 'tool_result'; toolName: string; detail?: Record<string, unknown> }
+  | { kind: 'usage'; inputTokens: number; outputTokens: number; model: string; durationMs: number }
   | { kind: 'idle' };
 
 export interface PermissionAsk {

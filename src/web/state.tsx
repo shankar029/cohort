@@ -21,6 +21,7 @@ import type {
   Notification,
   PrComment,
   Thread,
+  UsageEntry,
 } from '@shared/index';
 import { api } from './api';
 
@@ -37,6 +38,7 @@ export interface ProjectBundle {
   threads: Thread[];
   notifications: Notification[];
   prComments: PrComment[];
+  usage: UsageEntry[];
   loaded: boolean;
 }
 
@@ -73,6 +75,7 @@ const emptyBundle = (): ProjectBundle => ({
   threads: [],
   notifications: [],
   prComments: [],
+  usage: [],
   loaded: false,
 });
 
@@ -185,6 +188,12 @@ function applyWs(state: State, message: ServerMessage): State {
         return { ...b, prComments: upsert(b.prComments, message.comment) };
       case 'event.appended':
         return { ...b, events: [...b.events, message.event].slice(-1000) };
+      case 'usage.updated': {
+        const key = (u: UsageEntry): string => `${u.workItemId ?? '_none'}::${u.agentId}`;
+        const k = key(message.entry);
+        const rest = b.usage.filter((u) => key(u) !== k);
+        return { ...b, usage: [message.entry, ...rest] };
+      }
       default:
         return b;
     }
@@ -403,6 +412,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           threads: detail.threads,
           notifications: detail.notifications,
           prComments: detail.prComments,
+          usage: detail.usage,
           loaded: true,
         },
       });

@@ -19,6 +19,7 @@ import type {
   RecordedTurnSummary,
   UpdateProjectSettingsInput,
   UpdateWorkItemInput,
+  UsageEntry,
   WorkItem,
 } from '@shared/index';
 
@@ -72,6 +73,7 @@ export const api = {
       threads: Thread[];
       notifications: Notification[];
       prComments: PrComment[];
+      usage: UsageEntry[];
     }>(`/api/projects/${id}`),
   updateProject: (id: string, input: UpdateProjectSettingsInput) =>
     request<{ project: Project }>(`/api/projects/${id}`, {

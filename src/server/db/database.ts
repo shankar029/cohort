@@ -166,6 +166,18 @@ CREATE TABLE IF NOT EXISTS pr_comments (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS work_usage (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT,
+  agent_id TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  time_ms INTEGER NOT NULL DEFAULT 0,
+  turns INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /** Indexes created AFTER migrations so they can reference migrated columns. */
@@ -184,6 +196,9 @@ CREATE INDEX IF NOT EXISTS idx_questions_project ON questions(project_id, create
 CREATE INDEX IF NOT EXISTS idx_notifications_project ON notifications(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_pr_comments_pr ON pr_comments(pr_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_pr_comments_project ON pr_comments(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_work_usage_project ON work_usage(project_id);
+CREATE INDEX IF NOT EXISTS idx_work_usage_item ON work_usage(work_item_id);
+CREATE INDEX IF NOT EXISTS idx_work_usage_agent ON work_usage(project_id, agent_id);
 `;
 
 /** Additive column migrations for databases created by an earlier schema. */

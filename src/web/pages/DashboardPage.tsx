@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import type { Agent, AgentEvent, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, EmptyState, StatusPill, agentAvatar } from '../components/ui';
+import { formatDuration, formatTokens, usageTotals } from '../usage';
 
 // Milestone-worthy activity for the dashboard — excludes noisy tool_call/
 // tool_result/reasoning/status_change chatter (the full stream lives in Activity).
@@ -47,6 +48,7 @@ export function DashboardPage(): React.JSX.Element {
   const working = bundle.agents.filter((a) => a.status === 'working');
   // "Online" = anyone not idle (working, needs input, or blocked).
   const activeAgents = bundle.agents.filter((a) => a.status !== 'idle');
+  const totals = usageTotals(bundle.usage);
 
   const byStatus = (list: WorkItem[]): Record<WorkItemStatus, number> => {
     const acc = { backlog: 0, todo: 0, in_progress: 0, review: 0, done: 0 } as Record<
@@ -75,7 +77,7 @@ export function DashboardPage(): React.JSX.Element {
 
       <div className="space-y-6 p-6">
         {/* KPI cards */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
           <Kpi label="Epics" value={epics.length} to={`/p/${projectId}/board`} />
           <Kpi
             label="Active tasks"
@@ -92,6 +94,16 @@ export function DashboardPage(): React.JSX.Element {
           />
           <Kpi label="Open PRs" value={openPulls.length} to={`/p/${projectId}/git`} />
           <Kpi label="Working now" value={working.length} to={`/p/${projectId}/activity`} />
+          <Kpi
+            label="Time spent"
+            value={formatDuration(totals.timeMs)}
+            to={`/p/${projectId}/activity`}
+          />
+          <Kpi
+            label="Tokens used"
+            value={formatTokens(totals.tokens)}
+            to={`/p/${projectId}/activity`}
+          />
         </div>
 
         {/* Work distribution */}
@@ -229,7 +241,7 @@ function Kpi({
   to,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   accent?: boolean;
   warn?: boolean;
   to: string;

@@ -133,6 +133,23 @@ export interface AgentNote {
   createdAt: string;
 }
 
+/**
+ * Accumulated time + model-token usage an agent has spent, keyed by work item.
+ * `workItemId` is null for effort not tied to a board item (e.g. direct Lead chat).
+ */
+export interface UsageEntry {
+  projectId: string;
+  workItemId: string | null;
+  agentId: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** Wall-clock milliseconds the agent spent working (across turns). */
+  timeMs: number;
+  /** Number of completed agent turns contributing to this entry. */
+  turns: number;
+  updatedAt: string;
+}
+
 /** Types of entries in an agent's activity log. */
 export const AGENT_EVENT_TYPES = [
   'message',

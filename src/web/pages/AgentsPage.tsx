@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { SkillInfo } from '@shared/index';
 import { api, type CatalogAgentDTOShape } from '../api';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner, ModelSelect, StatusPill, agentAvatar } from '../components/ui';
+import { Avatar, Banner, ModelSelect, StatusPill, UsageChip, agentAvatar } from '../components/ui';
+import { usageForAgent } from '../usage';
 
 export function AgentsPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
@@ -49,6 +50,7 @@ export function AgentsPage(): React.JSX.Element {
               description={lead.description}
               model={lead.model}
               status={lead.status}
+              usage={usageForAgent(bundle.usage, lead.id)}
               onClick={() => navigate(`/p/${projectId}/agents/${lead.id}`)}
             />
           </div>
@@ -74,6 +76,7 @@ export function AgentsPage(): React.JSX.Element {
                   description={a.description}
                   model={a.model}
                   status={a.status}
+                  usage={usageForAgent(bundle.usage, a.id)}
                   onClick={() => navigate(`/p/${projectId}/agents/${a.id}`)}
                   onRemove={() => removeAgent(a)}
                 />
@@ -98,6 +101,7 @@ function AgentRow({
   description,
   model,
   status,
+  usage,
   onClick,
   onRemove,
 }: {
@@ -108,6 +112,7 @@ function AgentRow({
   description: string;
   model: string;
   status: import('@shared/index').AgentStatus;
+  usage?: { tokens: number; timeMs: number };
   onClick: () => void;
   onRemove?: () => void;
 }): React.JSX.Element {
@@ -128,6 +133,7 @@ function AgentRow({
         </div>
       </button>
       <span className="rounded bg-surface-2 px-2 py-0.5 text-xs text-slate-400">{model}</span>
+      {usage && <UsageChip tokens={usage.tokens} timeMs={usage.timeMs} />}
       {onRemove && (
         <button
           className="btn-ghost !min-h-0 px-2 py-1 text-slate-400 hover:text-red-400"

@@ -176,6 +176,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       pulls: store.listPRs(id),
       prComments: store.listProjectPrComments(id),
       notifications: store.listNotifications(id),
+      usage: store.listUsage(id),
     };
   });
 

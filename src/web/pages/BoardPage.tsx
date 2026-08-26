@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Agent, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner, Modal, agentAvatar } from '../components/ui';
+import { Avatar, Banner, Modal, UsageChip, agentAvatar } from '../components/ui';
+import { usageForWorkItem } from '../usage';
 import { Markdown } from '../components/Markdown';
 
 /**
@@ -187,6 +188,7 @@ function WorkItemCard({
   const doneChildren = isEpic
     ? bundle.workItems.filter((w) => w.parentId === item.id && w.status === 'done').length
     : 0;
+  const usage = usageForWorkItem(bundle.usage, bundle.workItems, item.id);
 
   return (
     <>
@@ -272,14 +274,17 @@ function WorkItemCard({
           <span className={`text-xs font-medium ${PRIORITY_COLOR[item.priority]}`}>
             ● {item.priority}
           </span>
-          {assignee && (
-            <Avatar
-              emoji={assignee.emoji}
-              color={assignee.color}
-              src={agentAvatar(assignee.catalogId, assignee.kind)}
-              size={22}
-            />
-          )}
+          <div className="flex items-center gap-2">
+            <UsageChip tokens={usage.tokens} timeMs={usage.timeMs} />
+            {assignee && (
+              <Avatar
+                emoji={assignee.emoji}
+                color={assignee.color}
+                src={agentAvatar(assignee.catalogId, assignee.kind)}
+                size={22}
+              />
+            )}
+          </div>
         </div>
         {!isEpic && (
           <>
@@ -325,6 +330,20 @@ function WorkItemDetailModal({
     .map((d) => bundle.workItems.find((w) => w.id === d))
     .filter((w): w is WorkItem => Boolean(w));
   const pr = bundle.pulls.find((p) => p.workItemId === item.id);
+
+  const itemUsage = usageForWorkItem(bundle.usage, bundle.workItems, item.id);
+  const usageIds = new Set<string>([item.id, ...children.map((c) => c.id)]);
+  const usageByAgent = new Map<string, { tokens: number; timeMs: number }>();
+  for (const u of bundle.usage) {
+    if (!u.workItemId || !usageIds.has(u.workItemId)) continue;
+    const cur = usageByAgent.get(u.agentId) ?? { tokens: 0, timeMs: 0 };
+    cur.tokens += u.inputTokens + u.outputTokens;
+    cur.timeMs += u.timeMs;
+    usageByAgent.set(u.agentId, cur);
+  }
+  const usageRows = [...usageByAgent.entries()]
+    .map(([agentId, u]) => ({ agent: bundle.agents.find((a) => a.id === agentId), ...u }))
+    .sort((a, b) => b.tokens - a.tokens);
 
   const set = (patch: Record<string, unknown>): void => {
     if (projectId) void updateWorkItem(projectId, item.id, patch);
@@ -416,6 +435,30 @@ function WorkItemDetailModal({
             onChange={(e) => set({ progress: Number(e.target.value) })}
           />
         </div>
+
+        {(itemUsage.tokens > 0 || itemUsage.timeMs > 0) && (
+          <div data-testid="usage-panel">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="label !mb-0">Time &amp; tokens</span>
+              <UsageChip
+                tokens={itemUsage.tokens}
+                timeMs={itemUsage.timeMs}
+                title={`${itemUsage.turns} turn${itemUsage.turns === 1 ? '' : 's'} · ${itemUsage.inputTokens} in / ${itemUsage.outputTokens} out`}
+              />
+            </div>
+            <ul className="space-y-1 rounded bg-surface-2 p-2">
+              {usageRows.map((r) => (
+                <li
+                  key={r.agent?.id ?? 'unknown'}
+                  className="flex items-center justify-between text-xs text-slate-300"
+                >
+                  <span className="truncate">{r.agent?.displayName ?? 'Unknown agent'}</span>
+                  <UsageChip tokens={r.tokens} timeMs={r.timeMs} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div>
           <span className="label">Description</span>

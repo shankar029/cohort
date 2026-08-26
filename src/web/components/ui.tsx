@@ -1,7 +1,9 @@
 import React from 'react';
+import { Clock, Coins } from 'lucide-react';
 import type { AgentStatus } from '@shared/index';
 import { api } from '../api';
 import { useTheme } from '../theme';
+import { formatDuration, formatTokens } from '../usage';
 
 /** Compact light/dark switch backed by the persisted Catppuccin theme. */
 export function ThemeToggle({ className = '' }: { className?: string }): React.JSX.Element {
@@ -154,6 +156,40 @@ export function Avatar({
         }}
       >
         {emoji}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Compact time + token usage chip. Renders nothing when there's no usage yet, so
+ * it can be dropped onto cards without adding visual noise to fresh items.
+ */
+export function UsageChip({
+  tokens,
+  timeMs,
+  title,
+  className = '',
+}: {
+  tokens: number;
+  timeMs: number;
+  title?: string;
+  className?: string;
+}): React.JSX.Element | null {
+  if (tokens <= 0 && timeMs <= 0) return null;
+  return (
+    <span
+      data-testid="usage-chip"
+      title={title ?? 'Time and model tokens spent'}
+      className={`inline-flex items-center gap-2 text-[0.7rem] tabular-nums text-slate-400 ${className}`}
+    >
+      <span className="inline-flex items-center gap-1">
+        <Clock className="h-3 w-3 opacity-70" aria-hidden="true" />
+        {formatDuration(timeMs)}
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <Coins className="h-3 w-3 opacity-70" aria-hidden="true" />
+        {formatTokens(tokens)}
       </span>
     </span>
   );
