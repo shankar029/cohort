@@ -48,6 +48,10 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
   const working = bundle.agents.filter((a) => a.status === 'working').length;
   const needsInput = bundle.questions.filter((q) => q.status === 'pending').length;
   const unread = bundle.notifications.filter((n) => !n.read).length;
+  const threadsSeen = state.threadsSeenAt[projectId] ?? 0;
+  const unreadThreads = bundle.chat.filter(
+    (m) => m.role === 'agent' && new Date(m.createdAt).getTime() > threadsSeen,
+  ).length;
   const paused = project?.settings.paused === true;
   const [pauseBusy, setPauseBusy] = useState(false);
   const togglePause = async (): Promise<void> => {
@@ -124,6 +128,14 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
                 {item.to === 'board' && needsInput > 0 && (
                   <span className="rounded-full bg-status-input px-1.5 text-xs font-semibold text-black">
                     {needsInput}
+                  </span>
+                )}
+                {item.to === 'chat' && unreadThreads > 0 && (
+                  <span
+                    className="rounded-full bg-accent-500 px-1.5 text-xs font-semibold text-white"
+                    data-testid="unread-threads-badge"
+                  >
+                    {unreadThreads > 99 ? '99+' : unreadThreads}
                   </span>
                 )}
                 {item.to === 'notifications' && unread > 0 && (

@@ -26,7 +26,7 @@ const STATUS_LABELS: Record<WorkItemStatus, string> = {
 
 const STATUS_BAR: Record<WorkItemStatus, string> = {
   backlog: 'bg-slate-500',
-  todo: 'bg-sky-500',
+  todo: 'bg-violet-500',
   in_progress: 'bg-status-working',
   review: 'bg-amber-500',
   done: 'bg-status-done',

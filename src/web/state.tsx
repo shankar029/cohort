@@ -37,6 +37,19 @@ interface State {
   projectsLoaded: boolean;
   bundles: Record<string, ProjectBundle>;
   wsConnected: boolean;
+  /** Per-project epoch-ms the user last viewed the Threads page (for unread badge). */
+  threadsSeenAt: Record<string, number>;
+}
+
+const THREADS_SEEN_KEY = 'ateam:threadsSeenAt';
+
+function loadThreadsSeen(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(THREADS_SEEN_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
 }
 
 const emptyBundle = (): ProjectBundle => ({
@@ -63,7 +76,9 @@ type Action =
   | { type: 'UPSERT_AGENT'; projectId: string; agent: Agent }
   | { type: 'REMOVE_AGENT'; projectId: string; agentId: string }
   | { type: 'WS'; message: ServerMessage }
-  | { type: 'WS_STATUS'; connected: boolean };
+  | { type: 'WS_BATCH'; messages: ServerMessage[] }
+  | { type: 'WS_STATUS'; connected: boolean }
+  | { type: 'MARK_THREADS_SEEN'; projectId: string; at: number };
 
 function upsert<T extends { id: string }>(list: T[], item: T): T[] {
   const idx = list.findIndex((x) => x.id === item.id);
@@ -196,8 +211,19 @@ function reducer(state: State, action: Action): State {
       }));
     case 'WS':
       return applyWs(state, action.message);
+    case 'WS_BATCH':
+      return action.messages.reduce(applyWs, state);
     case 'WS_STATUS':
       return { ...state, wsConnected: action.connected };
+    case 'MARK_THREADS_SEEN': {
+      const seen = { ...state.threadsSeenAt, [action.projectId]: action.at };
+      try {
+        localStorage.setItem(THREADS_SEEN_KEY, JSON.stringify(seen));
+      } catch {
+        /* ignore quota/availability errors */
+      }
+      return { ...state, threadsSeenAt: seen };
+    }
     default:
       return state;
   }
@@ -245,6 +271,7 @@ interface AppContextValue {
   markNotificationRead: (notificationId: string) => Promise<void>;
   markAllNotificationsRead: (projectId: string) => Promise<void>;
   updateProject: (id: string, input: Record<string, unknown>) => Promise<void>;
+  markThreadsSeen: (projectId: string) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -255,15 +282,35 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     projectsLoaded: false,
     bundles: {},
     wsConnected: false,
+    threadsSeenAt: loadThreadsSeen(),
   });
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // WebSocket with auto-reconnect.
+  // WebSocket with auto-reconnect. High-frequency frames (streaming deltas,
+  // activity events) are coalesced and flushed once per animation frame so a busy
+  // team can't swamp React with per-token re-renders (which made nav feel laggy).
   useEffect(() => {
     let socket: WebSocket | null = null;
     let closed = false;
     let retry: ReturnType<typeof setTimeout>;
+    let buffer: ServerMessage[] = [];
+    let raf = 0;
+
+    const flush = (): void => {
+      raf = 0;
+      if (buffer.length === 0) return;
+      const batch = buffer;
+      buffer = [];
+      dispatch({ type: 'WS_BATCH', messages: batch });
+    };
+    const schedule = (): void => {
+      if (raf) return;
+      raf =
+        typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame(flush)
+          : (setTimeout(flush, 16) as unknown as number);
+    };
 
     const connect = (): void => {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -277,7 +324,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
         try {
           const raw = JSON.parse(ev.data as string) as { type?: string };
           if (!raw || typeof raw.type !== 'string' || raw.type === 'hello') return;
-          dispatch({ type: 'WS', message: raw as ServerMessage });
+          buffer.push(raw as ServerMessage);
+          schedule();
         } catch {
           /* ignore malformed frames */
         }
@@ -287,6 +335,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     return () => {
       closed = true;
       clearTimeout(retry);
+      if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
       socket?.close();
     };
   }, []);
@@ -321,6 +370,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           loaded: true,
         },
       });
+      // First time we load this project, treat existing history as already seen so
+      // the Threads badge only counts messages that arrive from here on.
+      if (stateRef.current.threadsSeenAt[projectId] === undefined) {
+        dispatch({ type: 'MARK_THREADS_SEEN', projectId, at: Date.now() });
+      }
     };
 
     return {
@@ -338,6 +392,9 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       updateProject: async (id, input) => {
         await api.updateProject(id, input);
+      },
+      markThreadsSeen: (projectId) => {
+        dispatch({ type: 'MARK_THREADS_SEEN', projectId, at: Date.now() });
       },
       loadAgentTasks: async (projectId, agentId) => {
         const { tasks } = await api.agentTasks(agentId);

@@ -13,8 +13,14 @@ const THREAD_META: Record<Thread['kind'], { icon: string; label: string }> = {
 
 export function ChatPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
-  const { sendChat, answerQuestion } = useApp();
+  const { sendChat, answerQuestion, markThreadsSeen } = useApp();
   const bundle = useBundle(projectId);
+
+  // While the Threads page is open, keep it marked as read so the nav badge stays
+  // cleared as new messages stream in.
+  useEffect(() => {
+    if (projectId) markThreadsSeen(projectId);
+  }, [projectId, bundle.chat.length, markThreadsSeen]);
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [activeThread, setActiveThread] = useState<string | null>(null);

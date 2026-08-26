@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Notification, NotificationType } from '@shared/index';
 import { useApp, useBundle } from '../state';
@@ -23,6 +23,14 @@ export function NotificationsPage(): React.JSX.Element {
   const bundle = useBundle(projectId);
   const notifications = bundle.notifications;
   const unread = notifications.filter((n) => !n.read).length;
+
+  // Visiting this page clears the unread count.
+  useEffect(() => {
+    if (projectId && notifications.some((n) => !n.read)) {
+      void markAllNotificationsRead(projectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, notifications.length]);
 
   const open = (n: Notification): void => {
     if (!n.read) void markNotificationRead(n.id);
