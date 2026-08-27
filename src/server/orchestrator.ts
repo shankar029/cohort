@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { runProjectBuild, runProjectTests } from './qaGate.js';
+import { sanitizeDag } from './dag.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { AcceptanceCriterion, CriterionStatus } from '@shared/index';
@@ -1400,9 +1401,50 @@ class ProjectOrchestrator {
     for (const epic of this.deps.store.listWorkItems(this.projectId)) {
       if (epic.kind !== 'epic' || epic.status === 'done') continue;
       if (this.deps.store.listChildTasks(epic.id).length === 0) continue;
+      this.sanitizeEpicDependencies(epic.id);
       this.recomputeEpicProgress(epic.id);
       this.maybeFinishEpic(epic.id);
     }
+  }
+
+  /**
+   * Repair an epic's task dependency graph in place: drop self-references,
+   * dependencies on ids that don't exist under this epic, and any edge that
+   * closes a cycle. Without this a malformed `dependsOn` (from a future finer
+   * decomposition, a manual edit, or a stale id) would stall the epic forever
+   * because the blocked task's dependency can never reach review/done. Runs every
+   * tick; a no-op when the graph is already clean.
+   */
+  private sanitizeEpicDependencies(epicId: string): void {
+    const tasks = this.deps.store.listChildTasks(epicId);
+    if (tasks.length === 0) return;
+    const { cleaned, drops } = sanitizeDag(
+      tasks.map((t) => ({ id: t.id, dependsOn: t.dependsOn })),
+    );
+    if (drops.length === 0) return;
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const changed = new Set(drops.map((d) => d.id));
+    for (const id of changed) {
+      const next = cleaned.get(id) ?? [];
+      const updated = this.deps.store.updateWorkItem(id, { dependsOn: next });
+      if (updated)
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: updated,
+        });
+    }
+    const summary = drops
+      .map((d) => `${byId.get(d.id)?.title ?? d.id} (${d.reason})`)
+      .slice(0, 6)
+      .join(', ');
+    this.emitEvent(
+      this.lead().id,
+      'system',
+      `Repaired ${drops.length} invalid dependency edge(s): ${summary}`,
+      { drops },
+      epicId,
+    );
   }
 
   /**
@@ -1502,6 +1544,7 @@ class ProjectOrchestrator {
       const depsMet =
         item.dependsOn.length === 0 ||
         item.dependsOn.every((d) => {
+          if (!status.has(d)) return true; // unknown/pruned dep can't block
           const s = status.get(d);
           return s === 'review' || s === 'done';
         });
@@ -1546,6 +1589,7 @@ class ProjectOrchestrator {
       const depsMet =
         item.dependsOn.length === 0 ||
         item.dependsOn.every((d) => {
+          if (!statusById.has(d)) return true; // unknown/pruned dep can't block
           const s = statusById.get(d);
           return s === 'review' || s === 'done';
         });

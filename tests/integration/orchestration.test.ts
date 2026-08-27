@@ -1130,3 +1130,68 @@ describe('epic acceptance criteria are persisted from the PM', () => {
     expect(body.criteria.every((c) => !/^AC:/i.test(c.text))).toBe(true);
   });
 });
+
+describe('epic dependency-graph safety', () => {
+  it('repairs a malformed dependency graph so the epic never stalls', async () => {
+    const prevTick = process.env.ATEAM_LEAD_TICK_MS;
+    process.env.ATEAM_LEAD_TICK_MS = '30';
+    try {
+      const { projectId } = await createProject('DagSafety');
+      await addSpecialist(projectId, 'frontend-engineer');
+      await addSpecialist(projectId, 'backend-engineer');
+
+      // The instant two sibling tasks exist, inject a mutual cycle AND park them
+      // (backlog + unassigned) so the epic cannot finish until the graph is
+      // repaired. Without the sanitize pass both tasks would wait on each other
+      // forever.
+      let injected = false;
+      const unsub = ctx.bus.subscribe((m) => {
+        if (injected) return;
+        if (m.type !== 'workitem.updated' || m.workItem.kind !== 'task' || !m.workItem.parentId)
+          return;
+        const sibs = ctx.store.listChildTasks(m.workItem.parentId);
+        if (sibs.length < 2) return;
+        injected = true;
+        const [a, b] = sibs;
+        ctx.store.updateWorkItem(a!.id, {
+          dependsOn: [b!.id],
+          status: 'backlog',
+          assigneeAgentId: null,
+        });
+        ctx.store.updateWorkItem(b!.id, {
+          dependsOn: [a!.id],
+          status: 'backlog',
+          assigneeAgentId: null,
+        });
+      });
+
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/chat`,
+        payload: { content: 'Please build a profile page.' },
+      });
+
+      // The graph is repaired...
+      const repaired = await ctx.waitFor(
+        (m) =>
+          m.type === 'event.appended' &&
+          /Repaired \d+ invalid dependency edge/.test(m.event.summary),
+        20000,
+      );
+      expect(repaired).toBeTruthy();
+
+      // ...and the epic still reaches done rather than deadlocking.
+      await ctx.waitFor(
+        (m) =>
+          m.type === 'workitem.updated' &&
+          m.workItem.kind === 'epic' &&
+          m.workItem.status === 'done',
+        25000,
+      );
+      unsub();
+    } finally {
+      if (prevTick === undefined) delete process.env.ATEAM_LEAD_TICK_MS;
+      else process.env.ATEAM_LEAD_TICK_MS = prevTick;
+    }
+  });
+});
