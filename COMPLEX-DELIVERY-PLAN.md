@@ -215,6 +215,17 @@ moving planning after dispatch); **discard/revert epic** escape hatch shipped.
    **task idempotency (stable per‑task slug)** + **DAG cycle/dangling‑ref
    validation** land (hard prerequisites: `decomposeEpic` is re‑entrant and keys
    reuse on one‑task‑per‑stream today).
+   - **6a ✅ SHIPPED (`97ddc31`)** — DAG cycle/dangling‑ref safety: `dag.ts`
+     `sanitizeDag` repairs self/dangling/cycle edges deterministically; the
+     orchestrator self‑heals every epic's graph each tick + hardened dep‑met checks
+     so a bad edge can never deadlock an epic. This is the safety foundation.
+   - **6b — EVIDENCE‑GATED (not built).** The actual finer generation (Architect
+     emits a structured task graph → multiple concrete tasks/stream). Deferred per
+     the oracle's "measure first": today's mechanical one‑task‑per‑stream fan‑out
+     rarely yields ≥2 independent siblings, so the parallel machinery (slice 5)
+     has limited work to chew on. Needs (a) instrumentation of realizable
+     per‑epic parallelism, and (b) a stable per‑task slug for title‑keyed
+     idempotency, before the LLM‑shaped generator is worth its regression risk.
 7. Blocking review/security + enforced fix tasks; re‑planning + per‑epic budgets
    (promote earlier once decomposition gets finer — a single stuck slice otherwise
    strands the epic; token spend multiplies).
@@ -236,6 +247,10 @@ budget must land *with* finer decomposition, not after.
 6. **Re‑planning + budgets** (Level 9).
 
 ## What already helps (shipped)
+- **DAG safety** — an epic's task dependency graph self-heals every tick
+  (`sanitizeDag`): self/dangling/cycle edges are dropped so a malformed `dependsOn`
+  can never silently deadlock an epic; dep-met checks treat unknown deps as
+  satisfied.
 - **Parallel intra-epic execution** — independent streams run concurrently in
   isolated per-task clones (`ATEAM_EPIC_CONCURRENCY`, default 3); work integrates
   serially into the epic clone with conflict→fix re-queue; an integrated build gate
