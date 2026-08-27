@@ -185,6 +185,16 @@ CREATE TABLE IF NOT EXISTS epic_designs (
   content TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS acceptance_criteria (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  epic_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /** Indexes created AFTER migrations so they can reference migrated columns. */
@@ -206,6 +216,7 @@ CREATE INDEX IF NOT EXISTS idx_pr_comments_project ON pr_comments(project_id, cr
 CREATE INDEX IF NOT EXISTS idx_work_usage_project ON work_usage(project_id);
 CREATE INDEX IF NOT EXISTS idx_work_usage_item ON work_usage(work_item_id);
 CREATE INDEX IF NOT EXISTS idx_work_usage_agent ON work_usage(project_id, agent_id);
+CREATE INDEX IF NOT EXISTS idx_criteria_epic ON acceptance_criteria(epic_id);
 `;
 
 /** Additive column migrations for databases created by an earlier schema. */

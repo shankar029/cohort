@@ -721,6 +721,7 @@ class ProjectOrchestrator {
       });
     }
     this.deps.store.deleteEpicDesign(epicId);
+    this.deps.store.deleteCriteria(epicId);
     this.deps.store.deleteWorkItem(epicId);
     this.deps.bus.publish({
       type: 'workitem.deleted',
@@ -955,14 +956,39 @@ class ProjectOrchestrator {
     const pm = specs.find((s) => s.name === 'pm');
     if (pm) {
       try {
-        await this.actor(pm).ask(
+        const pmText = await this.actor(pm).ask(
           `Product check for epic "${epic.title}" - the build is already underway.\n` +
             `Request: ${content}\n` +
-            `State the user outcome and 2-3 crisp acceptance criteria in a few sentences. ` +
+            `State the user outcome in one sentence, then list the acceptance criteria. ` +
+            `Format EVERY acceptance criterion on its OWN line, one criterion per line, each ` +
+            `prefixed with "AC:" and written in Given/When/Then form where possible. ` +
             `Do not ask the user questions here and do not write code.`,
           thread.id,
           epic.id,
         );
+        // Persist the criteria as structured records (not just a chat post) so
+        // later gates can map each to a test and block merge until all are met.
+        const texts = parseCriteria(pmText ?? '');
+        if (texts.length) {
+          const criteria = this.deps.store.replaceCriteria({
+            projectId: this.projectId,
+            epicId: epic.id,
+            texts,
+          });
+          this.deps.bus.publish({
+            type: 'criteria.updated',
+            projectId: this.projectId,
+            epicId: epic.id,
+            criteria,
+          });
+          this.emitEvent(
+            pm.id,
+            'system',
+            `Recorded ${texts.length} acceptance criteria for "${epic.title}"`,
+            null,
+            epic.id,
+          );
+        }
       } catch {
         /* annotation is best-effort */
       }
@@ -3240,6 +3266,21 @@ class ProjectOrchestrator {
     await Promise.allSettled([...this.pendingReviews]);
     await this.invalidateSession();
   }
+}
+
+/**
+ * Extract structured acceptance criteria from the PM's free-form reply: every
+ * line prefixed with `AC:` (optionally after a bullet). Bounded in count and
+ * length so a runaway reply can't bloat the store.
+ */
+function parseCriteria(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split('\n')) {
+    const m = /^\s*(?:[-*]\s*)?AC:\s*(.+?)\s*$/i.exec(raw);
+    if (m && m[1]) out.push(m[1].slice(0, 300));
+    if (out.length >= 12) break;
+  }
+  return out;
 }
 
 /** A concise, board-friendly goal phrase from a free-form user request. */

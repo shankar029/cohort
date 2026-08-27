@@ -1096,3 +1096,37 @@ describe('epic design is injected into builder prompts', () => {
     expect(adapter.prompts.some((p) => p.includes('# Epic technical design'))).toBe(true);
   });
 });
+
+describe('epic acceptance criteria are persisted from the PM', () => {
+  it('parses the PM AC: lines into records and exposes them via the API', async () => {
+    const { projectId } = await createProject('Criteria');
+    await addSpecialist(projectId, 'product-manager');
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Build a small dashboard widget.' },
+    });
+
+    // The PM's best-effort turn (step 5b) persists structured criteria and the
+    // server broadcasts them.
+    const msg = (await ctx.waitFor(
+      (m) => m.type === 'criteria.updated' && m.criteria.length > 0,
+      8000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'criteria.updated' }>;
+    const epicId = msg.epicId;
+    expect(msg.criteria.every((c) => c.status === 'open' && c.epicId === epicId)).toBe(true);
+
+    // Persisted and readable via the API.
+    const stored = ctx.store.listCriteria(epicId);
+    expect(stored.length).toBeGreaterThanOrEqual(2);
+
+    const res = await ctx.app.inject({ method: 'GET', url: `/api/workitems/${epicId}/criteria` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { criteria: Array<{ text: string }> };
+    expect(body.criteria.length).toBe(stored.length);
+    // The parsed text is the criterion only (the `AC:` prefix is stripped).
+    expect(body.criteria.every((c) => !/^AC:/i.test(c.text))).toBe(true);
+  });
+});

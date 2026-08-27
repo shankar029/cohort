@@ -8,6 +8,7 @@ import type {
   Project,
   PullRequest,
   PrComment,
+  AcceptanceCriterion,
   Question,
   Notification,
   Thread,
@@ -36,6 +37,12 @@ export type ServerMessage =
   | { type: 'pull_request.updated'; projectId: string; pr: PullRequest }
   | { type: 'pr_comment.updated'; projectId: string; comment: PrComment }
   | { type: 'question.updated'; projectId: string; question: Question }
+  | {
+      type: 'criteria.updated';
+      projectId: string;
+      epicId: string;
+      criteria: AcceptanceCriterion[];
+    }
   | { type: 'usage.updated'; projectId: string; entry: UsageEntry }
   | { type: 'project.updated'; project: Project }
   | { type: 'project.deleted'; projectId: string };

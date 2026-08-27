@@ -317,6 +317,26 @@ export interface PrComment {
   updatedAt: string;
 }
 
+export const CRITERION_STATUSES = ['open', 'met', 'failed'] as const;
+export type CriterionStatus = (typeof CRITERION_STATUSES)[number];
+
+/**
+ * A structured, testable acceptance criterion for an epic, authored by the
+ * Product Manager. Persisted (not just posted to chat) so later gates can map
+ * each criterion to a test and block merge until all are met.
+ */
+export interface AcceptanceCriterion {
+  id: string;
+  projectId: string;
+  /** The epic (work item) this criterion belongs to. */
+  epicId: string;
+  /** The criterion text, ideally in Given/When/Then form. */
+  text: string;
+  status: CriterionStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const QUESTION_STATUSES = ['pending', 'answered'] as const;
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
 

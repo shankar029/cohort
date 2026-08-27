@@ -57,6 +57,19 @@ class FakeAgentSession implements AgentSession {
       return text;
     }
 
+    // Product Manager acceptance-criteria ask: emit deterministic `AC:` lines so
+    // the orchestrator's parse → persist path is exercised offline.
+    if (/one criterion per line/i.test(prompt)) {
+      const text = [
+        `User outcome: the user can accomplish the request end to end.`,
+        `AC: Given the feature is built, when the user uses it, then it behaves as specified.`,
+        `AC: Given invalid input, when the user submits, then a clear error is shown.`,
+      ].join('\n');
+      await this.stream(messageId, text, onEvent);
+      onEvent({ kind: 'idle' });
+      return text;
+    }
+
     // Exercise agent app tools (board + chat) when markers are present.
     const app = this.config.appTools;
     if (app) {

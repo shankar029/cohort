@@ -17,6 +17,7 @@ import type {
   PullRequest,
   PrStatus,
   PrComment,
+  AcceptanceCriterion,
   Question,
   Notification,
   NotificationType,
@@ -806,6 +807,62 @@ export class Store {
 
   deleteEpicDesign(epicId: string): void {
     this.db.prepare(`DELETE FROM epic_designs WHERE epic_id=?`).run(epicId);
+  }
+
+  /* acceptance criteria: the Product Manager's structured, testable criteria for
+     an epic. replaceCriteria is idempotent (decomposeEpic may re-run) - it swaps
+     the full set for an epic in one transaction. */
+  replaceCriteria(p: {
+    projectId: string;
+    epicId: string;
+    texts: string[];
+  }): AcceptanceCriterion[] {
+    const ts = now();
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM acceptance_criteria WHERE epic_id=?`).run(p.epicId);
+      const insert = this.db.prepare(
+        `INSERT INTO acceptance_criteria (id,project_id,epic_id,text,status,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?)`,
+      );
+      for (const text of p.texts) {
+        insert.run(id('ac'), p.projectId, p.epicId, text, 'open', ts, ts);
+      }
+    });
+    tx();
+    return this.listCriteria(p.epicId);
+  }
+
+  listCriteria(epicId: string): AcceptanceCriterion[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM acceptance_criteria WHERE epic_id=? ORDER BY created_at ASC`)
+      .all(epicId) as Array<{
+      id: string;
+      project_id: string;
+      epic_id: string;
+      text: string;
+      status: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      projectId: r.project_id,
+      epicId: r.epic_id,
+      text: r.text,
+      status: r.status as AcceptanceCriterion['status'],
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  setCriterionStatus(criterionId: string, status: AcceptanceCriterion['status']): void {
+    this.db
+      .prepare(`UPDATE acceptance_criteria SET status=?, updated_at=? WHERE id=?`)
+      .run(status, now(), criterionId);
+  }
+
+  deleteCriteria(epicId: string): void {
+    this.db.prepare(`DELETE FROM acceptance_criteria WHERE epic_id=?`).run(epicId);
   }
 
   /* events */

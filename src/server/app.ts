@@ -299,6 +299,11 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     return { prComments: store.listProjectPrComments(id) };
   });
 
+  app.get('/api/workitems/:workItemId/criteria', async (req) => {
+    const { workItemId } = req.params as { workItemId: string };
+    return { criteria: store.listCriteria(workItemId) };
+  });
+
   app.get('/api/projects/:id/git', async (req) => {
     const { id } = req.params as { id: string };
     requireProject(id);

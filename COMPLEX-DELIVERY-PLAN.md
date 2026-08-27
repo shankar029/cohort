@@ -199,7 +199,10 @@ moving planning after dispatch); **discard/revert epic** escape hatch shipped.
    blocked from `→ review` (restart‑once → park+ask, mirroring the QA gate).
    Enforced only for the LAST builder so a partially‑built epic can't false‑block.
    Script‑less projects are a graceful no‑op. **SHIPPED.**
-3. **Persist structured requirements** (PM criteria as linked records).
+3. ✅ **Persist structured requirements** — the PM emits `AC:` acceptance-criterion
+   lines (Given/When/Then), parsed into `acceptance_criteria` records linked to the
+   epic, broadcast via `criteria.updated`, and readable at
+   `GET /api/workitems/:epicId/criteria`. **SHIPPED.**
 4. **Criteria↔test traceability + final acceptance gate before merge** (unblocked
    by 3).
 5. **Parallel intra‑epic** (per‑task branch → merge‑back + conflict handling) —
@@ -229,6 +232,10 @@ budget must land *with* finer decomposition, not after.
 6. **Re‑planning + budgets** (Level 9).
 
 ## What already helps (shipped)
+- **Structured acceptance criteria** — the PM's `AC:` lines are parsed into
+  `acceptance_criteria` records per epic (idempotent replace) + a `criteria.updated`
+  broadcast + `GET /api/workitems/:epicId/criteria`. Foundation for the
+  criteria↔test traceability + final acceptance gate.
 - **Per‑task build gate** — the repo's build/typecheck runs in the epic clone after
   each build task (last‑builder‑only to avoid partial‑epic false‑blocks); a red
   build can't reach review. `buildCommand` project setting + auto‑detect.
