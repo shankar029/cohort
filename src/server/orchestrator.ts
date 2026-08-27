@@ -196,6 +196,8 @@ class ProjectOrchestrator {
   private groupDepth = 0;
   /** Per-epic isolated git worktree (branch + path), so epics don't collide. */
   private readonly epicWorktrees = new Map<string, { branch: string; path: string }>();
+  /** Per-task isolated clone (branch + path), forked off the epic clone. */
+  private readonly taskWorktrees = new Map<string, { branch: string; path: string }>();
   /** PR/review state per epic for the iterate-to-quality loop. */
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
@@ -699,6 +701,8 @@ class ProjectOrchestrator {
     } catch {
       /* best-effort cleanup */
     }
+    this.deps.git.removeEpicTaskWorktrees(this.projectId, epicId);
+    for (const child of children) this.taskWorktrees.delete(child.id);
     this.epicWorktrees.delete(epicId);
     this.epicPr.delete(epicId);
     this.epicReviewIter.delete(epicId);
@@ -2053,8 +2057,35 @@ class ProjectOrchestrator {
     const thread = this.threadForWorkItem(item);
 
     // Run in the epic's isolated worktree when this task belongs to an epic;
-    // otherwise the task runs directly in the project checkout.
-    const worktree = item.parentId ? this.epicWorktrees.get(item.parentId) : undefined;
+    // otherwise the task runs directly in the project checkout. Each epic task
+    // gets its OWN clone, forked off the epic branch's current tip (so it sees
+    // already-integrated dependency work) and committing on its own task branch;
+    // its work is integrated back into the epic clone when the task completes.
+    const epicWt = item.parentId ? this.epicWorktrees.get(item.parentId) : undefined;
+    let worktree = epicWt;
+    if (epicWt && item.parentId) {
+      try {
+        const tw = await this.deps.git.createTaskWorktree(
+          epicWt.path,
+          this.projectId,
+          item.parentId,
+          item.id,
+        );
+        this.taskWorktrees.set(item.id, tw);
+        worktree = tw;
+      } catch (err) {
+        // Fall back to the shared epic clone (pre-5a behavior) so a clone hiccup
+        // never strands the task.
+        this.emitEvent(
+          agent.id,
+          'git',
+          `Task clone failed, using the epic clone: ${err instanceof Error ? err.message : String(err)}`,
+          null,
+          item.id,
+        );
+        worktree = epicWt;
+      }
+    }
     const cwd = worktree?.path;
     const runDir = worktree?.path ?? this.project().repoDir;
 
@@ -2232,24 +2263,13 @@ class ProjectOrchestrator {
       return;
     }
 
-    // Per-task BUILD gate: a build task that leaves the code non-compiling must
-    // NOT advance to review. Runs the repo's build/typecheck check (if any) in
-    // the epic clone; a script-less project is a graceful no-op. To avoid
-    // false-blocking a partially-built epic (e.g. the frontend compiled before the
-    // backend module it imports exists), only ENFORCE when this is the LAST
-    // builder still working - earlier builders defer to the integrating one, so
-    // the gate effectively verifies the integrated result before QA/review.
+    // Per-task BUILD gate: the task's own isolated clone must compile. Each task
+    // builds in ITS OWN clone (forked off the epic branch tip, so it sees
+    // already-integrated dependency work), making this an honest owner-attributed
+    // check with no partial-epic false-block risk - the integrated build runs
+    // separately at epic finish. A script-less project is a graceful no-op.
     if (gate && produced && worktree && item.parentId) {
-      const buildersPending = this.deps.store
-        .listChildTasks(item.parentId)
-        .some(
-          (s) =>
-            s.id !== item.id &&
-            !/^(qa|reviewer|security)$/.test(s.stream ?? '') &&
-            s.status !== 'review' &&
-            s.status !== 'done',
-        );
-      if (!buildersPending) {
+      {
         const build = await runProjectBuild(
           runDir,
           this.project().settings.buildCommand,
@@ -2427,6 +2447,51 @@ class ProjectOrchestrator {
           item.id,
         );
       }
+    }
+
+    // Integrate this task's branch into the epic clone so the epic branch is the
+    // single integrated result the epic-level gates run against. Serial in 5a
+    // (siblings don't run concurrently yet, so this is effectively a fast-forward).
+    if (epicWt && worktree && worktree !== epicWt && item.parentId && completion?.hash) {
+      try {
+        const r = await this.deps.git.integrateTaskBranch(
+          epicWt.path,
+          epicWt.branch,
+          worktree.path,
+          worktree.branch,
+        );
+        this.emitEvent(
+          agent.id,
+          'git',
+          r.ok
+            ? `Integrated ${worktree.branch} into ${epicWt.branch}`
+            : `Integration ${r.conflict ? 'conflict' : 'failed'} on ${worktree.branch}: ${r.detail}`,
+          null,
+          item.id,
+        );
+        if (!r.ok)
+          this.notify(
+            'system',
+            `Integration ${r.conflict ? 'conflict' : 'failed'}: ${item.title}`,
+            r.detail.slice(0, 200),
+            'git',
+            item.id,
+            agent.id,
+          );
+      } catch (err) {
+        this.emitEvent(
+          agent.id,
+          'git',
+          `Integration error on ${worktree.branch}: ${err instanceof Error ? err.message : String(err)}`,
+          null,
+          item.id,
+        );
+      }
+      // The task clone has served its purpose - reclaim it.
+      this.taskWorktrees.delete(item.id);
+      await this.deps.git
+        .removeWorktree(this.project().repoDir, worktree.path)
+        .catch(() => undefined);
     }
 
     // Every sub-task in the checklist is now complete.

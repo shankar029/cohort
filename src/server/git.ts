@@ -85,8 +85,24 @@ export class GitService {
     return `ateam/epic-${epicId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24)}`;
   }
 
+  /**
+   * Sanitized task branch name. Deliberately a SIBLING of the epic branch (not
+   * nested under it) - git refs can't have both `ateam/epic-X` and
+   * `ateam/epic-X/t-Y` (a ref can't be both a file and a directory).
+   */
+  private taskBranchFor(taskId: string): string {
+    return `ateam/task-${taskId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24)}`;
+  }
+
   private worktreePath(projectId: string, epicId: string): string {
     return path.join(this.worktreeRoot, projectId, epicId);
+  }
+
+  /** Per-task clones live in a sibling dir so they never pollute the epic clone. */
+  private taskWorktreePath(projectId: string, epicId: string, taskId: string): string {
+    const safeEpic = epicId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
+    const safeTask = taskId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
+    return path.join(this.worktreeRoot, projectId, `.tasks-${safeEpic}`, safeTask);
   }
 
   /**
@@ -143,6 +159,75 @@ export class GitService {
     if (!c.ok) return { committed: false, hash: null };
     const hash = (await this.run(['rev-parse', 'HEAD'], worktreePath)).stdout.trim();
     return { committed: true, hash };
+  }
+
+  /**
+   * Create an isolated LOCAL CLONE for ONE task, forked off the epic clone's
+   * current epic-branch HEAD onto its own task branch. Cloning the epic clone
+   * (not repoDir) means the task starts from the integrated epic-branch tip, so
+   * a dependent task sees its dependencies' already-integrated work.
+   */
+  async createTaskWorktree(
+    epicClonePath: string,
+    projectId: string,
+    epicId: string,
+    taskId: string,
+  ): Promise<{ branch: string; path: string }> {
+    const branch = this.taskBranchFor(taskId);
+    const dir = this.taskWorktreePath(projectId, epicId, taskId);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    const cloned = await this.run(
+      ['clone', '--no-hardlinks', '--quiet', epicClonePath, dir],
+      path.dirname(dir),
+    );
+    if (!cloned.ok) throw new Error(`git clone (task) failed: ${cloned.stderr.trim()}`);
+    // The clone checked out the epic branch (epicClonePath's HEAD); fork the task branch off it.
+    const co = await this.run(['checkout', '-b', branch], dir);
+    if (!co.ok) {
+      const existing = await this.run(['checkout', branch], dir);
+      if (!existing.ok) throw new Error(`git checkout task branch failed: ${co.stderr.trim()}`);
+    }
+    return { branch, path: dir };
+  }
+
+  /**
+   * Integrate a completed task branch into the epic branch, inside the epic
+   * clone. Fetches the task branch from the task clone and merges it (--no-ff).
+   * On conflict it aborts cleanly, leaving the epic branch untouched, and
+   * reports `conflict:true` so the caller can route a fix. Serial-only: callers
+   * must not integrate two task branches into the same epic clone concurrently.
+   */
+  async integrateTaskBranch(
+    epicClonePath: string,
+    epicBranch: string,
+    taskClonePath: string,
+    taskBranch: string,
+  ): Promise<{ ok: boolean; conflict: boolean; detail: string }> {
+    const absEpic = path.resolve(epicClonePath);
+    if (!absEpic.startsWith(this.worktreeRoot + path.sep) && absEpic !== this.worktreeRoot)
+      return { ok: false, conflict: false, detail: 'epic clone outside worktree root' };
+    await this.run(['checkout', epicBranch], epicClonePath);
+    const fetched = await this.run(
+      ['fetch', taskClonePath, `+${taskBranch}:${taskBranch}`],
+      epicClonePath,
+    );
+    if (!fetched.ok)
+      return { ok: false, conflict: false, detail: `fetch failed: ${fetched.stderr.trim()}` };
+    const merged = await this.run(
+      ['merge', '--no-ff', '-m', `ateam: integrate ${taskBranch}`, taskBranch],
+      epicClonePath,
+    );
+    if (!merged.ok) {
+      const conflict = /conflict/i.test(merged.stdout + merged.stderr);
+      await this.run(['merge', '--abort'], epicClonePath);
+      return {
+        ok: false,
+        conflict,
+        detail: (merged.stderr || merged.stdout).trim() || 'merge failed',
+      };
+    }
+    return { ok: true, conflict: false, detail: `integrated ${taskBranch}` };
   }
 
   /**
@@ -298,6 +383,17 @@ export class GitService {
     const abs = path.resolve(worktreePath);
     if (!abs.startsWith(this.worktreeRoot + path.sep)) return;
     if (fs.existsSync(abs)) fs.rmSync(abs, { recursive: true, force: true });
+  }
+
+  /** Remove all per-task clones for an epic (best-effort). */
+  removeEpicTaskWorktrees(projectId: string, epicId: string): void {
+    const safeEpic = epicId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
+    const dir = path.join(this.worktreeRoot, projectId, `.tasks-${safeEpic}`);
+    try {
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* a task clone may be briefly locked on Windows; cleanup is best-effort */
+    }
   }
 
   /** Remove all worktrees created for a project (best-effort cleanup). */

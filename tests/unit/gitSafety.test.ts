@@ -96,3 +96,71 @@ describe('git safety (incident regression)', () => {
     expect(res.hash).toMatch(/^[0-9a-f]{7,}$/);
   });
 });
+
+describe('per-task worktrees + integration (slice 5a)', () => {
+  async function setupEpicClone(): Promise<{
+    svc: GitService;
+    epic: { branch: string; path: string };
+    projectId: string;
+    epicId: string;
+    repoDir: string;
+  }> {
+    const repoDir = tmp('ateam-repo-');
+    git(['init'], repoDir);
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# base\n');
+    git(['add', '-A'], repoDir);
+    git(['commit', '-m', 'base'], repoDir);
+
+    const worktreeRoot = tmp('ateam-wt5a-');
+    const svc = new GitService(worktreeRoot);
+    const projectId = 'prj';
+    const epicId = 'epicA';
+    const epic = await svc.createEpicWorktree(repoDir, projectId, epicId);
+    return { svc, epic, projectId, epicId, repoDir };
+  }
+
+  it('forks a task clone off the epic branch and integrates it back', async () => {
+    const { svc, epic, projectId, epicId } = await setupEpicClone();
+    const task = await svc.createTaskWorktree(epic.path, projectId, epicId, 'task1');
+    expect(task.branch).toBe('ateam/task-task1');
+    expect(fs.existsSync(path.join(task.path, '.git'))).toBe(true);
+    // The task clone is a SIBLING dir, never nested inside the epic clone.
+    expect(task.path.startsWith(epic.path + path.sep)).toBe(false);
+
+    fs.writeFileSync(path.join(task.path, 'feature.txt'), 'hello\n');
+    const c = await svc.commitWork(task.path, 'task(frontend): add feature');
+    expect(c.committed).toBe(true);
+
+    const r = await svc.integrateTaskBranch(epic.path, epic.branch, task.path, task.branch);
+    expect(r.ok).toBe(true);
+    // The feature file + the task commit are now on the epic branch.
+    expect(fs.existsSync(path.join(epic.path, 'feature.txt'))).toBe(true);
+    const log = git(['log', epic.branch, '--oneline'], epic.path);
+    expect(log).toMatch(/task\(frontend\): add feature/);
+    expect(log).toMatch(/integrate ateam\/task-task1/);
+  });
+
+  it('reports a conflict (and leaves the epic branch clean) when two tasks edit the same file', async () => {
+    const { svc, epic, projectId, epicId } = await setupEpicClone();
+    // Task A edits README on its branch, integrates cleanly.
+    const a = await svc.createTaskWorktree(epic.path, projectId, epicId, 'taskA');
+    fs.writeFileSync(path.join(a.path, 'README.md'), '# from A\n');
+    await svc.commitWork(a.path, 'task(a): edit readme');
+    expect((await svc.integrateTaskBranch(epic.path, epic.branch, a.path, a.branch)).ok).toBe(true);
+
+    // Task B forked from the ORIGINAL base (before A integrated) and edits the
+    // same file differently -> conflict on integration.
+    const b = await svc.createTaskWorktree(epic.path, projectId, epicId, 'taskB');
+    // b was cloned AFTER A integrated, so re-create the divergence manually:
+    git(['checkout', '-b', 'ateam/task-taskB2', `${epic.branch}~1`], b.path);
+    fs.writeFileSync(path.join(b.path, 'README.md'), '# from B\n');
+    await svc.commitWork(b.path, 'task(b): edit readme');
+    const headBefore = git(['rev-parse', epic.branch], epic.path);
+    const r = await svc.integrateTaskBranch(epic.path, epic.branch, b.path, 'ateam/task-taskB2');
+    expect(r.ok).toBe(false);
+    expect(r.conflict).toBe(true);
+    // Epic branch is untouched (merge aborted), not left half-applied.
+    expect(git(['rev-parse', epic.branch], epic.path)).toBe(headBefore);
+    expect(git(['status', '--porcelain'], epic.path)).toBe('');
+  });
+});

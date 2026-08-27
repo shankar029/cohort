@@ -74,16 +74,19 @@ describe('git clone isolation per epic (Phase 3)', () => {
     const branches = git(['branch', '--format=%(refname:short)'], cloneDir).split('\n');
     expect(branches).toContain(branch);
 
-    // The builder task commits real work on the epic branch (a real commit).
+    // The builder task commits on its own task branch, then its work is
+    // integrated back into the epic branch. Wait for the integration event so we
+    // assert against the epic branch only after the merge lands.
     await ctx.waitFor(
       (m) =>
         m.type === 'event.appended' &&
         m.event.type === 'git' &&
-        m.event.summary.startsWith('Committed'),
-      8000,
+        m.event.summary.startsWith('Integrated'),
+      10000,
     );
     const log = git(['log', branch, '--oneline'], cloneDir);
     expect(log).toMatch(/task\(frontend\)/);
+    expect(log).toMatch(/integrate ateam\/task-/);
   });
 
   it('two parallel epics get separate branches + isolated clones', async () => {
