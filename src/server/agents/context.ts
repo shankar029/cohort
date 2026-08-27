@@ -147,6 +147,37 @@ export function buildSystemPrompt({
     .join('\n');
 
   const isLead = self.kind === 'lead';
+  const tools = self.tools; // null => full tool access (e.g. the Lead)
+  // Capability-based so custom agents get the right bar too: an agent that can run
+  // shell is a true code builder; one that can only write is a spec/doc author.
+  const canRunCode = !isLead && (tools === null || tools.includes('bash'));
+  const canWrite = !isLead && (tools === null || tools.some((t) => t === 'write' || t === 'edit'));
+  const deliveryBlock = canRunCode
+    ? `\n\n# Delivery standard (MANDATORY for every build task)\n` +
+      `Your task is ONE slice of a larger epic; deliver it to a principal-engineer bar:\n` +
+      `- **Study first.** Read the relevant existing code, tests, and conventions before changing ` +
+      `anything. Reuse the project's patterns, structure, and design tokens - never reinvent what ` +
+      `already exists.\n` +
+      `- **Integrate, don't collide.** Honor the interfaces, types, and contracts other streams ` +
+      `depend on, and build on what sibling tasks already landed. Keep your changes cohesive and ` +
+      `scoped to your task; don't duplicate or break others' work.\n` +
+      `- **Finish it - no stubs.** Ship a COMPLETE, working implementation: no TODOs, placeholders, ` +
+      `commented-out code, or mock/hard-coded values standing in for real logic. If the task is ` +
+      `large, decompose it yourself and keep going until every part actually works end to end.\n` +
+      `- **Prove it works.** Add unit AND integration tests for the behavior you changed. Discover ` +
+      `the project's real build/lint/test commands (package.json scripts, Makefile, CI config, or ` +
+      `the repo instructions) and RUN them; leave the build green (typecheck, lint, tests) before ` +
+      `handing off. Never claim "done" on a red or unverified build - if you can't get it green, ` +
+      `report the exact failure instead.\n` +
+      `- **Report with evidence.** In your completion note, cite the exact files you changed and ` +
+      `the commands you ran with their pass/fail output.`
+    : canWrite
+      ? `\n\n# Delivery standard\n` +
+        `Produce COMPLETE, accurate deliverables the team can act on directly: cover every relevant ` +
+        `state, flow, and edge case, ground them in the ACTUAL codebase (read before you write), and ` +
+        `keep them consistent with the code and with what sibling streams produced. No placeholders ` +
+        `or half-specified sections.`
+      : '';
 
   const repoInstructions = discoverRepoInstructions(cwd);
   const instructionsBlock = repoInstructions.length
@@ -203,12 +234,14 @@ ${
   to the right specialist, who works in an isolated per-epic checkout. Your job is planning,
   assignment, coordination, review, and merge.
 - Drive quality relentlessly: nothing is “done” until it meets the bar (correct, tested, reviewed,
-  matching project conventions). Send work back for iteration until it does, and keep the board and
-  the user honestly up to date. You are the single throat to choke for this project's success.`
+  matching project conventions). Before merging, confirm the epic works end-to-end against its
+  acceptance criteria — not just that each task is individually green. Send work back for iteration
+  until it does, and keep the board and the user honestly up to date. You are the single throat to
+  choke for this project's success.`
     : `- Do your specialist work to a principal-engineer standard: correct, tested, secure, and
   matching the project's existing conventions. Report progress succinctly.`
 }
-${instructionsBlock}
+${instructionsBlock}${deliveryBlock}
 
 # Your role
 ${self.prompt}`;

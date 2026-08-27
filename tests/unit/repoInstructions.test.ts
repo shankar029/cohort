@@ -94,3 +94,37 @@ describe('buildSystemPrompt honors repo instructions', () => {
     expect(prompt).not.toContain('Repository instructions (MANDATORY');
   });
 });
+
+describe('buildSystemPrompt delivery standard (capability-scoped)', () => {
+  it('gives a code builder (has bash) the full “no stubs, run the build green” standard', () => {
+    const self = agent({ tools: ['view', 'grep', 'glob', 'edit', 'write', 'bash'] });
+    const prompt = buildSystemPrompt({ project: project(), self, team: [self] });
+    expect(prompt).toContain('Delivery standard (MANDATORY for every build task)');
+    expect(prompt).toContain('no stubs');
+    expect(prompt).toContain('leave the build green');
+  });
+
+  it('gives a spec/doc author (write only, no shell) the lighter deliverable standard', () => {
+    const self = agent({
+      catalogId: 'ux-designer',
+      name: 'ux',
+      displayName: 'UX Designer',
+      tools: ['view', 'grep', 'glob', 'write'],
+    });
+    const prompt = buildSystemPrompt({ project: project(), self, team: [self] });
+    expect(prompt).toContain('# Delivery standard');
+    expect(prompt).not.toContain('MANDATORY for every build task');
+    expect(prompt).toContain('No placeholders');
+  });
+
+  it('gives a read-only advisor no delivery block', () => {
+    const self = agent({
+      catalogId: 'code-reviewer',
+      name: 'reviewer',
+      displayName: 'Code Reviewer',
+      tools: ['view', 'grep', 'glob'],
+    });
+    const prompt = buildSystemPrompt({ project: project(), self, team: [self] });
+    expect(prompt).not.toContain('# Delivery standard');
+  });
+});
