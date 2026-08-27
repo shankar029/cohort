@@ -838,12 +838,14 @@ describe('usage tracking', () => {
     );
     expect(evt.type === 'usage.updated' && evt.entry.timeMs).toBeGreaterThanOrEqual(0);
 
-    // Give the epic a moment to fan out to the specialist, then assert the ledger
-    // has non-zero tokens and time recorded.
+    // Give the epic a moment to fan out to the specialist, then wait until at
+    // least one turn has COMPLETED (wall-clock time is recorded in runTurn's
+    // finally, after the turn ends) before asserting the ledger.
     await ctx.waitFor(
       (m) => m.type === 'workitem.updated' && m.workItem.parentId === epicId,
       15000,
     );
+    await ctx.waitFor((m) => m.type === 'usage.updated' && m.entry.timeMs > 0, 15000);
     const ledger = ctx.store.listUsage(projectId);
     expect(ledger.length).toBeGreaterThan(0);
     const totalTokens = ledger.reduce((s, u) => s + u.inputTokens + u.outputTokens, 0);
@@ -978,5 +980,54 @@ describe('user-started Team Lead threads', () => {
     const main = ctx.store.ensureMainThread(projectId);
     expect(ctx.store.listThreadMessages(main.id).length).toBe(0);
     expect(ctx.store.getThread(thread.id)?.topic).toMatch(/analytics dashboards/i);
+  });
+});
+
+describe('epic decomposition delegates to specialists', () => {
+  it('assigns stream tasks to specialists (not the Lead) even when the request is a pasted spec, and titles it sensibly', async () => {
+    const { projectId, leadId } = await createProject('Delegation');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+
+    // A pasted requirement whose first lines are markdown section headers.
+    const spec = [
+      '## 1. Summary / goal',
+      '',
+      'Build a settings page so users can change their profile and preferences.',
+      '',
+      '## 2. Scope',
+      '- profile form',
+    ].join('\n');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: spec },
+    });
+
+    // The decomposition creates child tasks assigned to specialists.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.kind === 'task' &&
+        !!m.workItem.parentId &&
+        !!m.workItem.assigneeAgentId &&
+        m.workItem.assigneeAgentId !== leadId,
+      8000,
+    );
+
+    const items = ctx.store.listWorkItems(projectId);
+    const epic = items.find((i) => i.kind === 'epic')!;
+    // Title is a real goal, not the bare section header.
+    expect(epic.title.toLowerCase()).not.toMatch(/^summary/);
+    expect(epic.title.toLowerCase()).not.toContain('summary / goal');
+    expect(epic.title.toLowerCase()).toContain('settings page');
+
+    // Children exist and are owned by specialists, not the Lead.
+    const kids = items.filter((i) => i.parentId === epic.id && i.kind === 'task');
+    expect(kids.length).toBeGreaterThan(0);
+    const builderKids = kids.filter((k) => k.stream === 'frontend' || k.stream === 'backend');
+    expect(builderKids.length).toBeGreaterThan(0);
+    expect(builderKids.every((k) => k.assigneeAgentId && k.assigneeAgentId !== leadId)).toBe(true);
   });
 });

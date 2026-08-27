@@ -664,48 +664,12 @@ class ProjectOrchestrator {
       );
     }
 
-    // 2. Consult the Product Manager for outcome + acceptance criteria (if present).
-    const pm = specs.find((s) => s.name === 'pm');
-    if (pm) {
-      await this.actor(pm).ask(
-        `Product check for epic "${epic.title}".\nRequest: ${content}\n` +
-          `State the user outcome and 2-3 crisp acceptance criteria in a few sentences.`,
-        thread.id,
-        epic.id,
-      );
-    }
-
-    // 2b. The Architect designs the epic before the team builds it: approach,
-    //     components, risks, and a stream-tagged breakdown. Recorded as the
-    //     epic's living plan and posted to the team.
-    const architect = specs.find((s) => s.name === 'architect');
-    if (architect) {
-      await this.actor(architect).ask(
-        `Design epic "${epic.title}" before the team builds it.\nRequest: ${content}\n` +
-          `Produce a concise technical design: approach and key decisions, the components/` +
-          `interfaces, risks and mitigations, and a dependency-ordered breakdown into small ` +
-          `stream-tagged tasks. Record it with update_plan and post a short design summary for ` +
-          `the team. Ground it in the existing codebase and conventions.`,
-        thread.id,
-        epic.id,
-      );
-      this.notify(
-        'plan',
-        `Architecture ready: ${epic.title}`,
-        `${architect.displayName} designed the epic; the Team Lead is assigning the work.`,
-        'chat',
-        epic.id,
-        architect.id,
-      );
-    }
-
-    // 3. Lead frames the plan for the team.
-    await this.actor(lead).ask(
-      `You own epic "${epic.title}". Break it into parallel tasks by stream for the team, ` +
-        `note dependencies and the quality bar, and keep it concise.`,
-      thread.id,
-      epic.id,
-    );
+    // NOTE: we DISPATCH the stream tasks first (step 4 below), THEN consult
+    // PM / Architect / Lead as best-effort annotations (step 5b). Those are LLM
+    // turns that can ask the user a question and block indefinitely; gating
+    // delegation behind them once stranded an epic with zero assigned tasks while
+    // the Lead tried to build everything itself. Dispatch must never depend on a
+    // planning turn completing.
 
     // 4. Decompose into stream-tagged task cards. Core builders run in parallel;
     //    docs/devops wait on the core build; verifiers (QA/review/security) wait on
@@ -835,6 +799,55 @@ class ProjectOrchestrator {
       epic.id,
       lead.id,
     );
+
+    // 5b. Best-effort planning annotations, AFTER the work is already assigned and
+    //     running. They enrich the epic thread with acceptance criteria and a
+    //     design, but can NEVER block or prevent delegation: each is guarded so a
+    //     slow turn, an error, or a parked question leaves the build unaffected.
+    const pm = specs.find((s) => s.name === 'pm');
+    if (pm) {
+      try {
+        await this.actor(pm).ask(
+          `Product check for epic "${epic.title}" - the build is already underway.\n` +
+            `Request: ${content}\n` +
+            `State the user outcome and 2-3 crisp acceptance criteria in a few sentences. ` +
+            `Do not ask the user questions here and do not write code.`,
+          thread.id,
+          epic.id,
+        );
+      } catch {
+        /* annotation is best-effort */
+      }
+    }
+    const architect = specs.find((s) => s.name === 'architect');
+    if (architect) {
+      try {
+        await this.actor(architect).ask(
+          `Design notes for epic "${epic.title}" - the team is already building.\n` +
+            `Request: ${content}\n` +
+            `Give a concise technical design the builders can follow: approach and key ` +
+            `decisions, components/interfaces, and risks. Record it with update_plan and post a ` +
+            `short summary. Ground it in the existing codebase. Do not create tasks, do not ask ` +
+            `the user questions, and do not write code yourself.`,
+          thread.id,
+          epic.id,
+        );
+      } catch {
+        /* annotation is best-effort */
+      }
+    }
+    try {
+      await this.actor(lead).ask(
+        `The tasks for epic "${epic.title}" are already created, assigned, and running - one per ` +
+          `stream. Post a brief framing note for the team: the goal, how the streams fit ` +
+          `together, dependencies, and the quality bar. Do NOT create tasks, do NOT implement ` +
+          `anything yourself, and do NOT ask the user questions here - just coordinate.`,
+        thread.id,
+        epic.id,
+      );
+    } catch {
+      /* annotation is best-effort */
+    }
   }
 
   /* ------------------------------------------------------- group chats */
@@ -2966,12 +2979,35 @@ class ProjectOrchestrator {
 
 /** A concise, board-friendly goal phrase from a free-form user request. */
 function shortGoal(content: string): string {
-  const first = content.split('\n').find((l) => l.trim().length > 0) ?? content;
-  const cleaned = first
-    .replace(/^\s*(please|can you|could you|hey|hi)[,\s]+/i, '')
-    .replace(/[.?!]+\s*$/, '')
-    .trim();
-  return (cleaned.length > 70 ? `${cleaned.slice(0, 67)}...` : cleaned) || 'the requested work';
+  // Prefer the first line that actually describes the work. When a whole spec is
+  // pasted, the first line is often a heading like "# Epic 2" or a section title
+  // like "1. Summary / goal" - strip markdown lead-ins and skip bare section
+  // headers so the epic/task titles read like real goals.
+  const sectionHeader =
+    /^(summary|goals?|overview|requirements?|scope|objective|context|background|description)\b/i;
+  const lines = content
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  let pick = '';
+  for (const raw of lines) {
+    const cleaned = raw
+      .replace(/^#{1,6}\s*/, '') // markdown heading
+      .replace(/^>\s*/, '') // blockquote
+      .replace(/^[-*+]\s+/, '') // bullet
+      .replace(/^\d+[.)]\s*/, '') // numbered list
+      .replace(/^epic\s*\d*\s*[\u2014:-]\s*/i, '') // "Epic 2 - " / "Epic:" prefix
+      .replace(/^\s*(please|can you|could you|hey|hi)[,\s]+/i, '')
+      .replace(/[.?!]+\s*$/, '')
+      .replace(/[*_`#]/g, '')
+      .trim();
+    if (!cleaned) continue;
+    if (sectionHeader.test(cleaned) && cleaned.length < 40) continue; // section header, keep looking
+    pick = cleaned;
+    break;
+  }
+  if (!pick) pick = (lines[0] ?? content).replace(/^#{1,6}\s*/, '').trim();
+  return (pick.length > 70 ? `${pick.slice(0, 67)}...` : pick) || 'the requested work';
 }
 
 /** Epic title from a request - capitalized short goal. */
