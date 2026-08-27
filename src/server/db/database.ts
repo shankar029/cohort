@@ -178,6 +178,13 @@ CREATE TABLE IF NOT EXISTS work_usage (
   turns INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS epic_designs (
+  epic_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /** Indexes created AFTER migrations so they can reference migrated columns. */

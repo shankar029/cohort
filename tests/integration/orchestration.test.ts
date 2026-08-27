@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createTestApp, rmDir, type TestApp } from '../helpers/testApp.js';
+import { FakeCopilotAdapter } from '../../src/server/agents/fakeAdapter.js';
+import type { AgentSession, AgentSessionConfig } from '../../src/server/agents/adapter.js';
 import type { WorkItem, Question, AgentTask } from '../../src/shared/index.js';
 
 let ctx: TestApp;
@@ -1029,5 +1031,68 @@ describe('epic decomposition delegates to specialists', () => {
     const builderKids = kids.filter((k) => k.stream === 'frontend' || k.stream === 'backend');
     expect(builderKids.length).toBeGreaterThan(0);
     expect(builderKids.every((k) => k.assigneeAgentId && k.assigneeAgentId !== leadId)).toBe(true);
+  });
+});
+
+/** A fake adapter that records every prompt sent to any agent session, so a test
+ *  can assert what a builder actually received. Keeps name='fake' so gating is
+ *  unchanged. */
+class RecordingAdapter extends FakeCopilotAdapter {
+  readonly prompts: string[] = [];
+  override async createAgentSession(config: AgentSessionConfig): Promise<AgentSession> {
+    const session = await super.createAgentSession(config);
+    const original = session.ask.bind(session);
+    session.ask = async (prompt: string, messageId: string): Promise<string> => {
+      this.prompts.push(prompt);
+      return original(prompt, messageId);
+    };
+    return session;
+  }
+}
+
+describe('epic design is injected into builder prompts', () => {
+  it('persists the Architect design and feeds it into a builder run prompt', async () => {
+    const adapter = new RecordingAdapter();
+    await ctx.close();
+    ctx = createTestApp([], adapter);
+
+    const { projectId } = await createProject('DesignInjection');
+    await addSpecialist(projectId, 'architect');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Build a small dashboard widget with a REST endpoint.' },
+    });
+
+    // Wait for decomposition to create specialist tasks.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.kind === 'task' &&
+        !!m.workItem.parentId &&
+        !!m.workItem.assigneeAgentId,
+      8000,
+    );
+    const epic = ctx.store.listWorkItems(projectId).find((i) => i.kind === 'epic')!;
+
+    // The Architect's best-effort design turn (step 5b) persists a design row.
+    const deadline = Date.now() + 8000;
+    while (!ctx.store.getEpicDesign(epic.id) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(ctx.store.getEpicDesign(epic.id).length).toBeGreaterThan(0);
+
+    // Once the design exists, at least one builder's run prompt must carry it.
+    const injected = Date.now() + 8000;
+    while (
+      !adapter.prompts.some((p) => p.includes('# Epic technical design')) &&
+      Date.now() < injected
+    ) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(adapter.prompts.some((p) => p.includes('# Epic technical design'))).toBe(true);
   });
 });

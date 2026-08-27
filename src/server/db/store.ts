@@ -786,6 +786,28 @@ export class Store {
     return row?.content ?? '';
   }
 
+  /* epic design: the Architect's technical design for an epic, persisted so it can
+     be injected into every builder's run prompt (one row per epic, upserted). */
+  setEpicDesign(p: { projectId: string; epicId: string; content: string }): void {
+    const ts = now();
+    this.db
+      .prepare(
+        `INSERT INTO epic_designs (epic_id,project_id,content,updated_at) VALUES (?,?,?,?)
+         ON CONFLICT(epic_id) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at`,
+      )
+      .run(p.epicId, p.projectId, p.content, ts);
+  }
+
+  getEpicDesign(epicId: string): string {
+    const row = this.db.prepare(`SELECT content FROM epic_designs WHERE epic_id=?`).get(epicId) as
+      { content: string } | undefined;
+    return row?.content ?? '';
+  }
+
+  deleteEpicDesign(epicId: string): void {
+    this.db.prepare(`DELETE FROM epic_designs WHERE epic_id=?`).run(epicId);
+  }
+
   /* events */
   appendEvent(e: {
     projectId: string;

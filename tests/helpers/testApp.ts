@@ -7,6 +7,7 @@ import { GitService } from '../../src/server/git.js';
 import { SessionRecorder } from '../../src/server/sessionRecorder.js';
 import { buildApp } from '../../src/server/app.js';
 import { FakeCopilotAdapter } from '../../src/server/agents/fakeAdapter.js';
+import type { CopilotAdapter } from '../../src/server/agents/adapter.js';
 import type { ServerMessage } from '../../src/shared/index.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -27,11 +28,11 @@ export interface TestApp {
   close: () => Promise<void>;
 }
 
-export function createTestApp(homeRoots: string[] = []): TestApp {
+export function createTestApp(homeRoots: string[] = [], adapterOverride?: CopilotAdapter): TestApp {
   const db = openDatabase(':memory:');
   const store = new Store(db);
   const bus = new Bus();
-  const adapter = new FakeCopilotAdapter();
+  const adapter = adapterOverride ?? new FakeCopilotAdapter();
   const scheduler = new SchedulerService();
   const worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-wt-'));
   const git = new GitService(worktreeRoot);

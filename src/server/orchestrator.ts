@@ -720,6 +720,7 @@ class ProjectOrchestrator {
         workItemId: c.id,
       });
     }
+    this.deps.store.deleteEpicDesign(epicId);
     this.deps.store.deleteWorkItem(epicId);
     this.deps.bus.publish({
       type: 'workitem.deleted',
@@ -969,16 +970,28 @@ class ProjectOrchestrator {
     const architect = specs.find((s) => s.name === 'architect');
     if (architect) {
       try {
-        await this.actor(architect).ask(
+        const design = await this.actor(architect).ask(
           `Design notes for epic "${epic.title}" - the team is already building.\n` +
             `Request: ${content}\n` +
-            `Give a concise technical design the builders can follow: approach and key ` +
-            `decisions, components/interfaces, and risks. Record it with update_plan and post a ` +
-            `short summary. Ground it in the existing codebase. Do not create tasks, do not ask ` +
-            `the user questions, and do not write code yourself.`,
+            `Give a concise technical design the builders will follow: approach and key ` +
+            `decisions, the components/modules involved, and - critically - the SHARED INTERFACES ` +
+            `and CONTRACTS between streams (API shapes, data models, shared types, function ` +
+            `signatures) so frontend/backend/data agree. Note key risks. Record it with ` +
+            `update_plan and post a short summary. Ground it in the existing codebase. Do not ` +
+            `create tasks, do not ask the user questions, and do not write code yourself.`,
           thread.id,
           epic.id,
         );
+        // Persist the design so every builder's run prompt can carry it (the
+        // builders never saw the design before - it lived only in the thread).
+        const trimmed = (design ?? '').trim();
+        if (trimmed) {
+          this.deps.store.setEpicDesign({
+            projectId: this.projectId,
+            epicId: epic.id,
+            content: trimmed.slice(0, 6000),
+          });
+        }
       } catch {
         /* annotation is best-effort */
       }
@@ -2032,10 +2045,19 @@ class ProjectOrchestrator {
           `build, keep overall coverage at or above 80%, and leave the build green (typecheck, ` +
           `lint, tests).\n`
         : '';
+    // The Architect's technical design for this epic (shared interfaces/contracts),
+    // injected so every builder implements against the SAME plan instead of
+    // guessing. Empty until the design turn lands; the first task may run without
+    // it (unchanged from prior behavior), later siblings pick it up.
+    const design = item.parentId ? this.deps.store.getEpicDesign(item.parentId) : '';
+    const designClause = design
+      ? `\n# Epic technical design (follow it - honor these shared interfaces/contracts)\n${design}\n\n`
+      : '';
     const basePrompt =
       `The Team Lead assigned you this task. Work through the checklist you defined and report ` +
       `progress to the team.\n\n` +
       `Task: ${item.title}\nDetails: ${item.description || '(none)'}\n` +
+      designClause +
       `Your sub-task checklist (complete every item):\n${checklist}\n` +
       testingClause +
       (worktree
