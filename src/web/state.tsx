@@ -258,7 +258,8 @@ interface AppContextValue {
   ensureBundle: (projectId: string) => Promise<void>;
   loadAgentTasks: (projectId: string, agentId: string) => Promise<void>;
   loadAgentNotes: (projectId: string, agentId: string) => Promise<void>;
-  sendChat: (projectId: string, content: string) => Promise<void>;
+  sendChat: (projectId: string, content: string, threadId?: string) => Promise<void>;
+  createThread: (projectId: string, topic?: string) => Promise<Thread>;
   createWorkItem: (
     projectId: string,
     input: {
@@ -462,8 +463,12 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           },
         });
       },
-      sendChat: async (projectId, content) => {
-        await api.sendChat(projectId, content);
+      sendChat: async (projectId, content, threadId) => {
+        await api.sendChat(projectId, content, threadId);
+      },
+      createThread: async (projectId, topic) => {
+        const { thread } = await api.createThread(projectId, topic);
+        return thread;
       },
       createWorkItem: async (projectId, input) => {
         await api.createWorkItem(projectId, input as never);

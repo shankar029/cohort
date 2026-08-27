@@ -941,3 +941,42 @@ describe('Team Lead robustness (self-healing manager)', () => {
     }
   });
 });
+
+describe('user-started Team Lead threads', () => {
+  it('creates a new conversation and routes chat to it (not main), auto-titling from the first message', async () => {
+    const { projectId } = await createProject('Threads');
+
+    const created = await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/threads`,
+      payload: {},
+    });
+    expect(created.statusCode).toBe(201);
+    const thread = (created.json() as { thread: { id: string; kind: string; topic: string } })
+      .thread;
+    expect(thread.kind).toBe('dm');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Lets talk about analytics dashboards', threadId: thread.id },
+    });
+
+    // The Lead replies in the NEW thread, not the main channel.
+    const reply = (await ctx.waitFor(
+      (m) =>
+        m.type === 'chat.message' && m.message.threadId === thread.id && m.message.role !== 'user',
+      8000,
+    )) as { type: 'chat.message'; message: { threadId: string } };
+    expect(reply.message.threadId).toBe(thread.id);
+
+    // The user message landed in the new thread and it was auto-titled.
+    const msgs = ctx.store.listThreadMessages(thread.id);
+    expect(msgs.some((m) => m.role === 'user' && /analytics dashboards/.test(m.content))).toBe(
+      true,
+    );
+    const main = ctx.store.ensureMainThread(projectId);
+    expect(ctx.store.listThreadMessages(main.id).length).toBe(0);
+    expect(ctx.store.getThread(thread.id)?.topic).toMatch(/analytics dashboards/i);
+  });
+});

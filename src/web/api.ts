@@ -146,10 +146,15 @@ export const api = {
     request<{ messages: ChatMessage[] }>(`/api/projects/${projectId}/chat`),
   threadMessages: (threadId: string) =>
     request<{ messages: ChatMessage[] }>(`/api/threads/${threadId}/messages`),
-  sendChat: (projectId: string, content: string) =>
+  sendChat: (projectId: string, content: string, threadId?: string) =>
     request<{ accepted: boolean }>(`/api/projects/${projectId}/chat`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, threadId }),
+    }),
+  createThread: (projectId: string, topic?: string) =>
+    request<{ thread: Thread }>(`/api/projects/${projectId}/threads`, {
+      method: 'POST',
+      body: JSON.stringify({ topic }),
     }),
 
   events: (projectId: string) =>

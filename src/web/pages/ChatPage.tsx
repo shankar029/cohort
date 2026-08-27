@@ -8,12 +8,12 @@ import { Markdown } from '../components/Markdown';
 const THREAD_META: Record<Thread['kind'], { icon: string; label: string }> = {
   main: { icon: '💬', label: 'Team Lead' },
   group: { icon: '🗣️', label: 'Discussion' },
-  dm: { icon: '✉️', label: 'Direct' },
+  dm: { icon: '💬', label: 'Conversation' },
 };
 
 export function ChatPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
-  const { sendChat, answerQuestion, markThreadsSeen, loadThreadMessages } = useApp();
+  const { sendChat, answerQuestion, createThread, markThreadsSeen, loadThreadMessages } = useApp();
   const bundle = useBundle(projectId);
   const loadedThreads = useRef<Set<string>>(new Set());
 
@@ -55,12 +55,21 @@ export function ChatPage(): React.JSX.Element {
     [bundle.threads],
   );
 
+  // User↔Lead side conversations (kept alongside the main channel at the top).
+  const conversations = useMemo(
+    () =>
+      bundle.threads
+        .filter((t) => t.kind === 'dm')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    [bundle.threads],
+  );
+
   // Discussions grouped by epic, plus a 'General' bucket for unlinked threads.
   const grouped = useMemo(() => {
     const epics = new Map<string, { id: string; title: string; threads: Thread[] }>();
     const general: Thread[] = [];
     const rest = bundle.threads
-      .filter((t) => t.kind !== 'main')
+      .filter((t) => t.kind === 'group')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     for (const t of rest) {
       const e = epicOf(t);
@@ -97,6 +106,10 @@ export function ChatPage(): React.JSX.Element {
   }, [bundle.chat, selectedId]);
 
   const onMain = !selected || selected.kind === 'main';
+  // Whether the user can post here: the main channel or a user↔Lead conversation.
+  // Epic `group` threads are team discussions and stay read-only for the user.
+  const isConversation = !selected || selected.kind === 'main' || selected.kind === 'dm';
+  const sendTargetId = isConversation ? selectedId : null;
 
   const scrollToBottom = React.useCallback((behavior: ScrollBehavior = 'smooth'): void => {
     const el = scrollRef.current;
@@ -138,13 +151,25 @@ export function ChatPage(): React.JSX.Element {
   const send = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     const content = input.trim();
-    if (!content || !projectId) return;
+    if (!content || !projectId || !isConversation) return;
     setInput('');
     setError(null);
     try {
-      await sendChat(projectId, content);
+      await sendChat(projectId, content, sendTargetId ?? undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send');
+    }
+  };
+
+  const onNewThread = async (): Promise<void> => {
+    if (!projectId) return;
+    setError(null);
+    try {
+      const thread = await createThread(projectId);
+      setActiveThread(thread.id);
+      setInput('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start a conversation');
     }
   };
 
@@ -162,8 +187,17 @@ export function ChatPage(): React.JSX.Element {
     <div className="flex h-full">
       {/* Threads rail */}
       <aside className="hidden w-60 shrink-0 flex-col border-r border-surface-border bg-surface-1/40 md:flex">
-        <div className="border-b border-surface-border px-4 py-3">
+        <div className="flex items-center justify-between border-b border-surface-border px-4 py-3">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Threads</h2>
+          <button
+            type="button"
+            onClick={() => void onNewThread()}
+            title="Start a new conversation with the Team Lead"
+            data-testid="new-thread"
+            className="rounded-md border border-surface-border px-2 py-1 text-[0.7rem] font-medium text-slate-300 transition-colors hover:bg-surface-2 hover:text-slate-100"
+          >
+            + New
+          </button>
         </div>
         <div className="flex-1 space-y-1 overflow-auto p-2" data-testid="thread-list">
           {!hasThreads && (
@@ -177,6 +211,15 @@ export function ChatPage(): React.JSX.Element {
               onClick={() => setActiveThread(mainThread.id)}
             />
           )}
+          {conversations.map((t) => (
+            <ThreadButton
+              key={t.id}
+              thread={t}
+              active={t.id === selectedId}
+              count={bundle.chat.filter((m) => m.threadId === t.id).length}
+              onClick={() => setActiveThread(t.id)}
+            />
+          ))}
           {grouped.epics.map((g) => {
             const isCollapsed = collapsed.has(g.id);
             return (
@@ -235,8 +278,8 @@ export function ChatPage(): React.JSX.Element {
             {selected && selected.kind !== 'main' ? selected.topic || 'Discussion' : 'Team Lead'}
           </h1>
           <p className="text-sm text-slate-500">
-            {onMain
-              ? 'Talk to your Team Lead here. Each epic gets its own thread on the left where its delivery discussion happens.'
+            {isConversation
+              ? 'Talk to your Team Lead here. Use “+ New” for a fresh conversation per initiative; each epic gets its own thread on the left where its delivery discussion happens.'
               : 'A team discussion — watch specialists brainstorm and align.'}
           </p>
         </header>
@@ -355,30 +398,38 @@ export function ChatPage(): React.JSX.Element {
               <Banner kind="error">{error}</Banner>
             </div>
           )}
-          <div className="flex gap-2">
-            <textarea
-              className="input min-h-[2.75rem] flex-1 resize-none"
-              placeholder="Ask the Team Lead to build something…"
-              data-testid="chat-input"
-              rows={1}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) void send(e);
-              }}
-            />
-            <button
-              type="submit"
-              className="btn-primary"
-              data-testid="chat-send"
-              disabled={!input.trim()}
-            >
-              Send
-            </button>
-          </div>
-          <p className="mt-2 text-[0.7rem] text-slate-600">
-            You always talk to the Team Lead. Enter to send · Shift+Enter for a new line.
-          </p>
+          {isConversation ? (
+            <>
+              <div className="flex gap-2">
+                <textarea
+                  className="input min-h-[2.75rem] flex-1 resize-none"
+                  placeholder="Ask the Team Lead to build something…"
+                  data-testid="chat-input"
+                  rows={1}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) void send(e);
+                  }}
+                />
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  data-testid="chat-send"
+                  disabled={!input.trim()}
+                >
+                  Send
+                </button>
+              </div>
+              <p className="mt-2 text-[0.7rem] text-slate-600">
+                You always talk to the Team Lead. Enter to send · Shift+Enter for a new line.
+              </p>
+            </>
+          ) : (
+            <p className="py-2 text-center text-sm text-slate-500">
+              This is a team discussion. Switch to a Team Lead conversation to chat.
+            </p>
+          )}
         </form>
       </div>
     </div>

@@ -13,6 +13,7 @@ import {
   createProjectSchema,
   createWorkItemSchema,
   sendChatSchema,
+  createThreadSchema,
   updateAgentSchema,
   updateProjectSettingsSchema,
   updateWorkItemSchema,
@@ -501,10 +502,19 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     // Fire-and-forget: streaming happens over the WebSocket.
     void orchestrators
       .get(id)
-      .chat(input.content)
+      .chat(input.content, input.threadId)
       .catch(() => undefined);
     reply.status(202);
     return { accepted: true };
+  });
+
+  app.post('/api/projects/:id/threads', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    const input = createThreadSchema.parse(req.body ?? {});
+    const thread = orchestrators.get(id).createLeadThread(input.topic);
+    reply.status(201);
+    return { thread };
   });
 
   /* ------------------------------------------------------------ questions */

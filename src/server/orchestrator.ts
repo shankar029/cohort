@@ -287,6 +287,23 @@ class ProjectOrchestrator {
     return t;
   }
 
+  /**
+   * Start a fresh user↔Lead conversation (a `dm` thread) so the user can kick off
+   * a new epic without piling onto the single main channel. Auto-titled from the
+   * first message the user sends (see `chat`).
+   */
+  createLeadThread(topic?: string): Thread {
+    const thread = this.deps.store.createThread({
+      projectId: this.projectId,
+      kind: 'dm',
+      topic: topic?.trim() || 'New conversation',
+      participantAgentIds: [this.lead().id],
+      includesUser: true,
+    });
+    this.deps.bus.publish({ type: 'thread.updated', projectId: this.projectId, thread });
+    return thread;
+  }
+
   private readonly epicThreadCache = new Map<string, string>();
 
   /**
@@ -474,11 +491,32 @@ class ProjectOrchestrator {
 
   /* --------------------------------------------------------- user chat */
 
-  chat(content: string): Promise<void> {
-    const main = this.ensureMainThread();
+  chat(content: string, threadId?: string): Promise<void> {
+    // Route to the requested conversation when it's a valid user-facing thread
+    // (the main channel or a user↔Lead `dm`); otherwise fall back to main.
+    const requested = threadId ? this.deps.store.getThread(threadId) : undefined;
+    const target =
+      requested &&
+      requested.projectId === this.projectId &&
+      (requested.kind === 'main' || requested.kind === 'dm')
+        ? requested
+        : this.ensureMainThread();
+
+    // A brand-new conversation takes its title from the user's first message.
+    if (target.kind === 'dm' && target.topic === 'New conversation') {
+      const title = content.trim().replace(/\s+/g, ' ').slice(0, 60);
+      const renamed = this.deps.store.renameThread(target.id, title || 'New conversation');
+      if (renamed)
+        this.deps.bus.publish({
+          type: 'thread.updated',
+          projectId: this.projectId,
+          thread: renamed,
+        });
+    }
+
     const userMsg = this.deps.store.appendChat({
       projectId: this.projectId,
-      threadId: main.id,
+      threadId: target.id,
       role: 'user',
       authorAgentId: null,
       content,
@@ -490,14 +528,14 @@ class ProjectOrchestrator {
       const roster = this.specialists()
         .map((s) => `- \`${s.name}\` (${s.displayName}): ${s.description}`)
         .join('\n');
-      const history = this.recentHistory(main.id);
+      const history = this.recentHistory(target.id);
       const prompt =
         `The user says:\n"""\n${content}\n"""\n\n` +
         `Team available:\n${roster || '(no specialists yet)'}\n\n` +
         `Conversation so far:\n${history}\n\n` +
         `Respond to the user. If this needs hands-on work, say briefly how you'll approach it as an epic. ` +
         `If it would benefit from a team discussion, note that you'll convene one.`;
-      await this.actor(lead).ask(prompt, main.id, null);
+      await this.actor(lead).ask(prompt, target.id, null);
 
       // Route the request. A build/change request becomes an epic the Lead decomposes;
       // a pure discussion request convenes a brainstorm. While paused the Lead still

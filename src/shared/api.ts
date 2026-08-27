@@ -73,6 +73,12 @@ export type UpdateWorkItemInput = z.infer<typeof updateWorkItemSchema>;
 
 export const sendChatSchema = z.object({
   content: z.string().trim().min(1, 'Message is required').max(8000),
+  /** Target conversation; defaults to the main Team Lead channel when omitted. */
+  threadId: z.string().min(1).optional(),
+});
+
+export const createThreadSchema = z.object({
+  topic: z.string().trim().max(120).optional(),
 });
 export type SendChatInput = z.infer<typeof sendChatSchema>;
 

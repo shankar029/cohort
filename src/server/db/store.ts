@@ -898,6 +898,13 @@ export class Store {
     return this.getThread(threadId);
   }
 
+  renameThread(threadId: string, topic: string): Thread | undefined {
+    this.db
+      .prepare(`UPDATE threads SET topic=?, updated_at=? WHERE id=?`)
+      .run(topic, now(), threadId);
+    return this.getThread(threadId);
+  }
+
   /* chat / thread messages */
   appendChat(m: {
     projectId: string;

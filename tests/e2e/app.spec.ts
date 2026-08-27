@@ -62,6 +62,24 @@ test('end-to-end: build a team, assign work, watch autonomous pickup, tasks and 
   await expect(page.getByTestId('activity-log')).toContainText('Frontend Engineer');
 });
 
+test('threads: user can start a new Team Lead conversation', async ({ page }) => {
+  await createProject(page, 'E2E New Thread');
+  await page.getByRole('link', { name: 'Threads' }).click();
+
+  // Start a fresh conversation and send into it.
+  await page.getByTestId('new-thread').click();
+  await page.getByTestId('chat-input').fill('Lets plan a metrics dashboard.');
+  await page.getByTestId('chat-send').click();
+
+  // The user's message and the Lead's reply appear in this conversation, and a
+  // new thread row (auto-titled from the message) shows in the rail.
+  await expect(page.getByTestId('user-message').last()).toContainText('metrics dashboard');
+  await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
+  await expect(
+    page.getByTestId('thread-item').filter({ hasText: 'metrics dashboard' }),
+  ).toBeVisible({ timeout: 20000 });
+});
+
 test('chat: a build request becomes an epic and a specialist contributes', async ({ page }) => {
   await createProject(page, 'E2E Chat');
   await addSpecialist(page, 'frontend-engineer');
