@@ -198,6 +198,14 @@ class ProjectOrchestrator {
   private readonly epicWorktrees = new Map<string, { branch: string; path: string }>();
   /** Per-task isolated clone (branch + path), forked off the epic clone. */
   private readonly taskWorktrees = new Map<string, { branch: string; path: string }>();
+  /** Max child tasks of one epic allowed to run concurrently (independent streams). */
+  private readonly epicConcurrency = Math.max(1, Number(process.env.ATEAM_EPIC_CONCURRENCY ?? 3));
+  /** Serializes integrations into each epic clone (merges must never overlap). */
+  private readonly epicIntegrateChain = new Map<string, Promise<unknown>>();
+  /** Per-task integration-conflict counter, so a persistent conflict escalates. */
+  private readonly taskConflicts = new Map<string, number>();
+  /** Per-epic integrated-build failure rounds, capped so it escalates. */
+  private readonly epicBuildIter = new Map<string, number>();
   /** PR/review state per epic for the iterate-to-quality loop. */
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
@@ -210,6 +218,7 @@ class ProjectOrchestrator {
   private readonly streamBuffers = new Map<string, string>();
   private static readonly MAX_REVIEW_ITER = 3;
   private static readonly MAX_ACCEPT_ITER = 3;
+  private static readonly MAX_BUILD_ITER = 3;
 
   /** Work items with an in-flight runWorkItem, so the manager never double-starts one. */
   private readonly running = new Set<string>();
@@ -707,6 +716,8 @@ class ProjectOrchestrator {
     this.epicPr.delete(epicId);
     this.epicReviewIter.delete(epicId);
     this.epicAcceptIter.delete(epicId);
+    this.epicBuildIter.delete(epicId);
+    this.epicIntegrateChain.delete(epicId);
     this.epicReviewing.delete(epicId);
 
     // 4. Delete board rows: PRs, threads, child tasks, then the epic itself.
@@ -1545,11 +1556,11 @@ class ProjectOrchestrator {
       // in-progress task once its agent has actually gone idle.
       if (agent.status === 'needs_input' || agent.status === 'blocked') continue;
       if (item.status === 'in_progress' && agent.status !== 'idle') continue;
-      // Serialize tasks WITHIN an epic: all child tasks of an epic share one
-      // worktree, so running siblings concurrently makes them clobber each
-      // other's files and cross-attribute commits. Different epics still run in
-      // parallel. A deferred task is retried on the next manager pass.
-      if (item.parentId && this.epicBusy(item.parentId)) continue;
+      // Run independent sibling tasks CONCURRENTLY (each in its own isolated task
+      // clone), up to a per-epic cap. Dependency ordering is still enforced by the
+      // dependsOn DAG above; integration back into the epic clone is serialized
+      // separately. Different epics also run in parallel.
+      if (item.parentId && this.epicRunning(item.parentId) >= this.epicConcurrency) continue;
       void this.runWorkItem(item.id).catch(() => undefined);
     }
   }
@@ -1558,12 +1569,32 @@ class ProjectOrchestrator {
    * Whether any currently-running work item is a child of `parentId`. Used to
    * serialize sibling tasks that share an epic's single worktree.
    */
-  private epicBusy(parentId: string): boolean {
+  /** How many of an epic's child tasks are running right now. */
+  private epicRunning(parentId: string): number {
+    let n = 0;
     for (const id of this.running) {
       const it = this.deps.store.getWorkItem(id);
-      if (it?.parentId === parentId) return true;
+      if (it?.parentId === parentId) n++;
     }
-    return false;
+    return n;
+  }
+
+  /**
+   * Run `fn` after any pending integration for this epic, so merges into the
+   * epic clone never overlap even while sibling tasks execute concurrently.
+   */
+  private integrateSerially<T>(epicId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.epicIntegrateChain.get(epicId) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    // Keep the chain alive but swallow errors so one failure can't poison it.
+    this.epicIntegrateChain.set(
+      epicId,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return next;
   }
 
   /** Specialists eligible to build (excludes the design/product advisory roles). */
@@ -2031,9 +2062,9 @@ class ProjectOrchestrator {
     // One in-flight run per item. A stalled 'in_progress' item (no active run) is
     // allowed through so the manager can resume it after a crash/restart.
     if (this.running.has(workItemId)) return;
-    // Never run two children of the same epic at once — they share a worktree.
-    // Deferred here; the manager loop re-drives it once the epic is free.
-    if (item.parentId && this.epicBusy(item.parentId)) return;
+    // Cap concurrent siblings per epic; each runs in its own isolated task clone.
+    // Deferred here; the manager loop re-drives once a slot frees.
+    if (item.parentId && this.epicRunning(item.parentId) >= this.epicConcurrency) return;
     this.running.add(workItemId);
     this.lastBoardActivityAt = Date.now();
     try {
@@ -2450,29 +2481,33 @@ class ProjectOrchestrator {
     }
 
     // Integrate this task's branch into the epic clone so the epic branch is the
-    // single integrated result the epic-level gates run against. Serial in 5a
-    // (siblings don't run concurrently yet, so this is effectively a fast-forward).
+    // single integrated result the epic-level gates run against. Integrations are
+    // SERIALIZED per epic (two merges into one clone must never overlap) even
+    // though sibling tasks now run concurrently. On a conflict the merge aborts
+    // cleanly and the task is re-queued to redo its work on top of the integrated
+    // tree (capped, then escalated) - the epic branch is never left half-merged.
     if (epicWt && worktree && worktree !== epicWt && item.parentId && completion?.hash) {
+      const parentId = item.parentId;
+      const taskWt = worktree;
+      let conflict = false;
       try {
-        const r = await this.deps.git.integrateTaskBranch(
-          epicWt.path,
-          epicWt.branch,
-          worktree.path,
-          worktree.branch,
+        const r = await this.integrateSerially(parentId, () =>
+          this.deps.git.integrateTaskBranch(epicWt.path, epicWt.branch, taskWt.path, taskWt.branch),
         );
         this.emitEvent(
           agent.id,
           'git',
           r.ok
-            ? `Integrated ${worktree.branch} into ${epicWt.branch}`
-            : `Integration ${r.conflict ? 'conflict' : 'failed'} on ${worktree.branch}: ${r.detail}`,
+            ? `Integrated ${taskWt.branch} into ${epicWt.branch}`
+            : `Integration ${r.conflict ? 'conflict' : 'failed'} on ${taskWt.branch}: ${r.detail}`,
           null,
           item.id,
         );
-        if (!r.ok)
+        conflict = !r.ok && r.conflict;
+        if (!r.ok && !r.conflict)
           this.notify(
             'system',
-            `Integration ${r.conflict ? 'conflict' : 'failed'}: ${item.title}`,
+            `Integration failed: ${item.title}`,
             r.detail.slice(0, 200),
             'git',
             item.id,
@@ -2482,7 +2517,7 @@ class ProjectOrchestrator {
         this.emitEvent(
           agent.id,
           'git',
-          `Integration error on ${worktree.branch}: ${err instanceof Error ? err.message : String(err)}`,
+          `Integration error on ${taskWt.branch}: ${err instanceof Error ? err.message : String(err)}`,
           null,
           item.id,
         );
@@ -2490,8 +2525,50 @@ class ProjectOrchestrator {
       // The task clone has served its purpose - reclaim it.
       this.taskWorktrees.delete(item.id);
       await this.deps.git
-        .removeWorktree(this.project().repoDir, worktree.path)
+        .removeWorktree(this.project().repoDir, taskWt.path)
         .catch(() => undefined);
+
+      if (conflict) {
+        // Re-queue so the agent redoes the work in a fresh clone forked off the
+        // now-integrated epic tip (where the conflicting sibling already landed).
+        const n = (this.taskConflicts.get(item.id) ?? 0) + 1;
+        this.taskConflicts.set(item.id, n);
+        this.setSubtaskStatus(subtasks, 'todo');
+        if (n >= 2) {
+          this.setStatus(agent.id, 'needs_input');
+          this.awaitingInput.add(item.id);
+          this.notify(
+            'question',
+            `Integration conflict: ${item.title}`,
+            `${agent.displayName}'s work keeps conflicting with a sibling on merge.`,
+            'board',
+            item.id,
+            agent.id,
+          );
+          void this.raiseQuestion(
+            agent.id,
+            `"${item.title}" conflicts with a sibling task's changes on integration, even after a ` +
+              `retry. How should we proceed?`,
+            ['Retry', 'Skip this task'],
+          ).then((ans) => {
+            this.awaitingInput.delete(item.id);
+            this.setStatus(agent.id, 'idle');
+            this.taskConflicts.delete(item.id);
+            if (ans.toLowerCase().startsWith('skip')) {
+              this.moveItem(item.id, 'done');
+              this.maybeFinishEpic(parentId);
+            } else {
+              this.moveItem(item.id, 'todo');
+              this.pokeLead();
+            }
+          });
+        } else {
+          this.moveItem(item.id, 'todo');
+          this.pokeLead();
+        }
+        return;
+      }
+      this.taskConflicts.delete(item.id);
     }
 
     // Every sub-task in the checklist is now complete.
@@ -2886,6 +2963,30 @@ class ProjectOrchestrator {
     wt: { branch: string; path: string } | undefined,
     diff: string,
   ): Promise<void> {
+    // Integrated build gate: the fully-integrated epic clone must compile before
+    // we judge acceptance or merge. Concurrent siblings can each build in
+    // isolation yet break once merged together - this is the catch. A script-less
+    // project is a graceful no-op.
+    if (wt && !this.forcedAccept.has(epic.id)) {
+      const built = await runProjectBuild(
+        wt.path,
+        this.project().settings.buildCommand,
+        Number(process.env.ATEAM_QA_TEST_TIMEOUT_MS ?? 240_000),
+      );
+      if (built.ran && !built.passed) {
+        await this.handleIntegratedBuildFailure(epic, built, lead);
+        return;
+      }
+      if (built.ran)
+        this.emitEvent(
+          lead.id,
+          'system',
+          `Integrated build passed: \`${built.command}\``,
+          null,
+          epic.id,
+        );
+    }
+
     const criteria = this.deps.store.listCriteria(epic.id);
     if (criteria.length > 0 && !this.forcedAccept.has(epic.id)) {
       const gate = await this.evaluateAcceptance(epic, criteria, wt, diff);
@@ -2896,7 +2997,73 @@ class ProjectOrchestrator {
     }
     this.forcedAccept.delete(epic.id);
     this.epicAcceptIter.delete(epic.id);
+    this.epicBuildIter.delete(epic.id);
     await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+  }
+
+  /**
+   * The integrated epic clone failed to build. Route a high-priority fix task
+   * (capped); after MAX_BUILD_ITER rounds, park the epic and ask the user to
+   * merge anyway or keep working.
+   */
+  private async handleIntegratedBuildFailure(
+    epic: WorkItem,
+    built: { command: string; output: string },
+    lead: Agent,
+  ): Promise<void> {
+    const iter = (this.epicBuildIter.get(epic.id) ?? 0) + 1;
+    this.epicBuildIter.set(epic.id, iter);
+    const tail = built.output.split('\n').slice(-25).join('\n').slice(-2000);
+    this.emitEvent(
+      lead.id,
+      'system',
+      `Integrated build FAILED: \`${built.command}\` - blocking merge`,
+      tail ? { output: tail } : null,
+      epic.id,
+    );
+
+    if (iter >= ProjectOrchestrator.MAX_BUILD_ITER) {
+      this.awaitingInput.add(epic.id);
+      this.notify(
+        'question',
+        `Integrated build blocked: ${epic.title}`,
+        `The integrated build (\`${built.command}\`) still fails after ${iter} rounds.`,
+        'board',
+        epic.id,
+        lead.id,
+      );
+      void this.raiseQuestion(
+        lead.id,
+        `Epic "${epic.title}" still fails its integrated build (\`${built.command}\`) after ${iter} ` +
+          `rounds. Merge anyway, or keep working on it?`,
+        ['Keep working', 'Merge anyway'],
+      ).then((ans) => {
+        this.awaitingInput.delete(epic.id);
+        if (ans.toLowerCase().startsWith('merge')) {
+          this.forcedAccept.add(epic.id);
+          this.epicBuildIter.delete(epic.id);
+        } else {
+          this.epicBuildIter.set(epic.id, 0);
+          this.createFixTask(
+            epic,
+            `fix: integrated build failing (${built.command})`,
+            `The integrated epic build \`${built.command}\` is failing. Diagnose and fix so it ` +
+              `passes:\n\n${tail}`,
+            lead,
+          );
+        }
+        this.pokeLead();
+      });
+      return;
+    }
+
+    this.createFixTask(
+      epic,
+      `fix: integrated build failing (${built.command})`,
+      `The integrated epic build \`${built.command}\` is failing. Diagnose and fix so it passes:\n\n${tail}`,
+      lead,
+    );
+    this.pokeLead();
   }
 
   /**
@@ -3005,32 +3172,35 @@ class ProjectOrchestrator {
 
   /** Open a high-priority fix task for the unmet criteria and assign it. */
   private createAcceptanceFix(epic: WorkItem, unmet: AcceptanceCriterion[], lead: Agent): void {
+    const body = unmet.map((c) => `- ${c.text}`).join('\n');
+    this.createFixTask(
+      epic,
+      `fix: unmet acceptance criteria (${unmet.length})`,
+      `These acceptance criteria are not yet met for "${epic.title}". Implement and verify them so ` +
+        `each holds:\n\n${body}`,
+      lead,
+    );
+  }
+
+  /** Open a high-priority fix task under an epic and assign it to a builder. */
+  private createFixTask(epic: WorkItem, title: string, description: string, lead: Agent): void {
     const target = this.pickAgentForItem(
       { stream: null } as WorkItem,
       this.assignableSpecialists(),
     );
-    const body = unmet.map((c) => `- ${c.text}`).join('\n');
     const fix = this.deps.store.createWorkItem({
       projectId: this.projectId,
       kind: 'task',
       parentId: epic.id,
-      title: `fix: unmet acceptance criteria (${unmet.length})`,
-      description:
-        `These acceptance criteria are not yet met for "${epic.title}". Implement and verify ` +
-        `them so each holds:\n\n${body}`,
+      title,
+      description,
       status: 'todo',
       priority: 'high',
       assigneeAgentId: target?.id ?? null,
       stream: target?.name ?? null,
     });
     this.deps.bus.publish({ type: 'workitem.updated', projectId: this.projectId, workItem: fix });
-    this.emitEvent(
-      lead.id,
-      'system',
-      `Opened a fix for ${unmet.length} unmet acceptance criteria`,
-      null,
-      fix.id,
-    );
+    this.emitEvent(lead.id, 'system', `Opened fix "${fix.title}"`, null, fix.id);
     if (target) void this.onItemAssigned(fix.id).catch(() => undefined);
     else this.pokeLead();
   }

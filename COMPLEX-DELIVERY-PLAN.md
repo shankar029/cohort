@@ -236,6 +236,10 @@ budget must land *with* finer decomposition, not after.
 6. **Re‑planning + budgets** (Level 9).
 
 ## What already helps (shipped)
+- **Parallel intra-epic execution** — independent streams run concurrently in
+  isolated per-task clones (`ATEAM_EPIC_CONCURRENCY`, default 3); work integrates
+  serially into the epic clone with conflict→fix re-queue; an integrated build gate
+  guards the merge.
 - **Structured acceptance criteria** — the PM's `AC:` lines are parsed into
   `acceptance_criteria` records per epic (idempotent replace) + a `criteria.updated`
   broadcast + `GET /api/workitems/:epicId/criteria`. Foundation for the

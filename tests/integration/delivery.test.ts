@@ -175,9 +175,9 @@ describe('delivery correctness (worktree/cwd, empty-build gate, sequencing, GC)'
   });
 });
 
-describe('same-epic tasks do not run concurrently (file-overwrite regression)', () => {
-  it('serializes sibling tasks so they never share the worktree at once', async () => {
-    const projectId = await createProject('Serialize');
+describe('independent sibling tasks run concurrently (per-task clones)', () => {
+  it('runs siblings in parallel and still integrates + completes the epic cleanly', async () => {
+    const projectId = await createProject('Concurrent');
     // Several builder streams so decomposition yields parallel-eligible siblings.
     await addSpecialist(projectId, 'frontend-engineer');
     await addSpecialist(projectId, 'backend-engineer');
@@ -209,14 +209,14 @@ describe('same-epic tasks do not run concurrently (file-overwrite regression)', 
     await ctx.waitFor(
       (m) =>
         m.type === 'workitem.updated' && m.workItem.kind === 'epic' && m.workItem.status === 'done',
-      20000,
+      25000,
     );
     unsub();
 
-    // The epic must have decomposed into multiple sibling tasks (otherwise the
-    // test proves nothing), yet at no point did two run at the same time.
+    // Independent siblings now run at the SAME time (was serialized pre-5b), and
+    // the epic still integrates every task branch and merges to done.
     expect(everRan.size).toBeGreaterThanOrEqual(2);
-    expect(maxConcurrent).toBe(1);
+    expect(maxConcurrent).toBeGreaterThanOrEqual(2);
   });
 });
 

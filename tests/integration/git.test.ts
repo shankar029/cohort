@@ -269,6 +269,32 @@ describe('per-task build gate', () => {
       25000,
     );
   });
+
+  it('runs an integrated build in the epic clone before merging', async () => {
+    const projectId = await createProject('Integrated Build');
+    fs.writeFileSync(
+      path.join(repoDir, 'package.json'),
+      JSON.stringify({ name: 'x', scripts: { build: 'exit 0' } }),
+    );
+    // Two independent builders so their branches must be integrated before the
+    // epic-level build runs.
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Build a small widget.' },
+    });
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'event.appended' &&
+        m.event.type === 'system' &&
+        /Integrated build passed/.test(m.event.summary),
+      30000,
+    );
+  });
 });
 
 describe('final acceptance gate before merge', () => {
