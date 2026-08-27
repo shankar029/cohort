@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { Plus } from 'lucide-react';
 import type { Thread } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, Banner, EmptyState, agentAvatar } from '../components/ui';
@@ -187,16 +188,19 @@ export function ChatPage(): React.JSX.Element {
     <div className="flex h-full">
       {/* Threads rail */}
       <aside className="hidden w-60 shrink-0 flex-col border-r border-surface-border bg-surface-1/40 md:flex">
-        <div className="flex items-center justify-between border-b border-surface-border px-4 py-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Threads</h2>
+        <div className="space-y-2 border-b border-surface-border px-3 py-3">
+          <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Threads
+          </h2>
           <button
             type="button"
             onClick={() => void onNewThread()}
             title="Start a new conversation with the Team Lead"
             data-testid="new-thread"
-            className="rounded-md border border-surface-border px-2 py-1 text-[0.7rem] font-medium text-slate-300 transition-colors hover:bg-surface-2 hover:text-slate-100"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-semibold text-white shadow-card transition-colors hover:bg-accent-500 active:scale-[0.98]"
           >
-            + New
+            <Plus className="h-4 w-4" strokeWidth={2.5} />
+            New conversation
           </button>
         </div>
         <div className="flex-1 space-y-1 overflow-auto p-2" data-testid="thread-list">
