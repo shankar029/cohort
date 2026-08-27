@@ -7,6 +7,33 @@ import { usageForWorkItem } from '../usage';
 import { Markdown } from '../components/Markdown';
 
 /**
+ * Deleting an epic is destructive: it removes all child tasks, stops the team,
+ * and throws away the epic's isolated work (and, if it was already merged, can
+ * revert the changes). Confirm first; plain tasks delete immediately.
+ */
+async function confirmAndDelete(
+  item: WorkItem,
+  del: (id: string, revert?: boolean) => Promise<void>,
+): Promise<void> {
+  if (item.kind !== 'epic') {
+    await del(item.id);
+    return;
+  }
+  const merged = item.status === 'done';
+  const base = merged
+    ? `Discard epic “${item.title}”?\n\nThis deletes the epic and all its tasks and stops the team. This epic was already merged.`
+    : `Discard epic “${item.title}”?\n\nThis deletes the epic and all its tasks, stops the team, and throws away the epic’s isolated work. Your repo is not affected.`;
+  if (!window.confirm(base)) return;
+  let revert = false;
+  if (merged) {
+    revert = window.confirm(
+      `Also REVERT the merged changes from your repo?\n\nOK = add a revert commit undoing the epic.\nCancel = keep the merged code, just remove the board items.`,
+    );
+  }
+  await del(item.id, revert);
+}
+
+/**
  * Options for an assignee <select>: Unassigned, the Team Lead (who delegates the
  * item to the best-fit specialist), then the specialists themselves.
  */
@@ -225,8 +252,8 @@ function WorkItemCard({
           </button>
           <button
             className="text-xs text-slate-600 hover:text-red-400"
-            aria-label="Delete work item"
-            onClick={() => void deleteWorkItem(item.id)}
+            aria-label={isEpic ? 'Discard epic' : 'Delete work item'}
+            onClick={() => void confirmAndDelete(item, deleteWorkItem)}
           >
             ✕
           </button>
@@ -532,11 +559,10 @@ function WorkItemDetailModal({
             type="button"
             className="btn-danger"
             onClick={() => {
-              void deleteWorkItem(item.id);
-              onClose();
+              void confirmAndDelete(item, deleteWorkItem).then(onClose);
             }}
           >
-            Delete
+            {item.kind === 'epic' ? 'Discard epic' : 'Delete'}
           </button>
           <button type="button" className="btn-ghost" onClick={onClose}>
             Close

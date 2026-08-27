@@ -135,8 +135,8 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
-  deleteWorkItem: (workItemId: string) =>
-    request<void>(`/api/workitems/${workItemId}`, { method: 'DELETE' }),
+  deleteWorkItem: (workItemId: string, revert?: boolean) =>
+    request<void>(`/api/workitems/${workItemId}${revert ? '?revert=1' : ''}`, { method: 'DELETE' }),
   pauseProject: (projectId: string) =>
     request<{ project: Project }>(`/api/projects/${projectId}/pause`, { method: 'POST' }),
   resumeProject: (projectId: string) =>

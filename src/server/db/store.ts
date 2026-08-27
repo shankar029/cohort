@@ -1030,6 +1030,18 @@ export class Store {
       .map((r) => toPr(r as PrRow));
   }
 
+  /** Delete a pull request (used when discarding an epic). */
+  deletePR(prId: string): void {
+    this.db.prepare(`DELETE FROM pr_comments WHERE pr_id=?`).run(prId);
+    this.db.prepare(`DELETE FROM pull_requests WHERE id=?`).run(prId);
+  }
+
+  /** Delete a thread and its messages (used when discarding an epic). */
+  deleteThread(threadId: string): void {
+    this.db.prepare(`DELETE FROM chat_messages WHERE thread_id=?`).run(threadId);
+    this.db.prepare(`DELETE FROM threads WHERE id=?`).run(threadId);
+  }
+
   getPR(prId: string): PullRequest | undefined {
     const r = this.db.prepare(`SELECT * FROM pull_requests WHERE id=?`).get(prId) as
       PrRow | undefined;

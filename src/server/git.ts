@@ -305,4 +305,43 @@ export class GitService {
     const dir = path.join(this.worktreeRoot, projectId);
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
   }
+
+  /**
+   * Find the merge commit that landed an epic branch, identified by the
+   * deterministic message `mergeEpic` writes (`ateam: merge <branch>`). Returns
+   * the newest matching commit hash, or null if the branch was never merged.
+   */
+  async findEpicMergeCommit(repoDir: string, branch: string): Promise<string | null> {
+    if (!branch) return null;
+    const r = await this.run(
+      ['log', '--all', '--format=%H', '--max-count=1', `--grep=^ateam: merge ${branch}$`],
+      repoDir,
+    );
+    const hash = r.stdout.trim().split('\n')[0]?.trim();
+    return r.ok && hash ? hash : null;
+  }
+
+  /**
+   * Revert a merge commit on the current base branch, undoing everything the epic
+   * landed. Reversible (it is itself a commit) and local-only. Aborts cleanly on
+   * conflict rather than leaving a half-applied revert.
+   */
+  async revertMerge(repoDir: string, commit: string): Promise<{ ok: boolean; detail: string }> {
+    const dirty = await this.run(['status', '--porcelain'], repoDir);
+    if (dirty.stdout.trim().length > 0) {
+      return { ok: false, detail: 'working tree has uncommitted changes; revert skipped' };
+    }
+    const r = await this.run(['revert', '--no-edit', '-m', '1', commit], repoDir);
+    if (!r.ok) {
+      await this.run(['revert', '--abort'], repoDir);
+      return { ok: false, detail: r.stderr.trim() || 'revert failed' };
+    }
+    return { ok: true, detail: `reverted merge ${commit.slice(0, 8)}` };
+  }
+
+  /** Delete a local branch (best-effort). Used when discarding an epic. */
+  async deleteBranch(repoDir: string, branch: string): Promise<void> {
+    if (!branch) return;
+    await this.run(['branch', '-D', branch], repoDir);
+  }
 }

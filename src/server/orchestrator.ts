@@ -209,6 +209,8 @@ class ProjectOrchestrator {
   private readonly running = new Set<string>();
   /** Work items parked awaiting a human/Lead decision, so the manager won't re-drive them. */
   private readonly awaitingInput = new Set<string>();
+  /** Epics the user discarded — guards in-flight turns from resurrecting them. */
+  private readonly discardedEpics = new Set<string>();
 
   /** Team Lead proactive manager loop. */
   private readonly leadTickMs = Number(process.env.ATEAM_LEAD_TICK_MS ?? 15000);
@@ -597,6 +599,151 @@ class ProjectOrchestrator {
 
     await this.decomposeEpic(epic, content);
     return epic;
+  }
+
+  /**
+   * Escape hatch: abort a runaway epic. Deletes its board items, stops its
+   * agents, throws away its isolated clone, and - if the epic was already merged
+   * - reverts the merge from the real repo. Otherwise the user's repo is
+   * untouched (all epic work lives in a throwaway clone until merge).
+   */
+  async discardEpic(
+    epicId: string,
+    opts: { revert?: boolean } = {},
+  ): Promise<{
+    deletedTasks: number;
+    removedWorktree: boolean;
+    merged: boolean;
+    reverted: boolean;
+    detail: string;
+  }> {
+    const epic = this.deps.store.getWorkItem(epicId);
+    if (!epic || epic.kind !== 'epic' || epic.projectId !== this.projectId) {
+      throw new Error('Epic not found');
+    }
+    const lead = this.lead();
+    const repoDir = this.project().repoDir;
+    const children = this.deps.store.listChildTasks(epicId);
+
+    // 1. Fence the epic so any in-flight turn bails instead of resurrecting it.
+    this.discardedEpics.add(epicId);
+    for (const c of children) {
+      this.running.delete(c.id);
+      this.awaitingInput.delete(c.id);
+      this.armed.delete(c.id);
+    }
+    this.running.delete(epicId);
+    this.awaitingInput.delete(epicId);
+
+    // 2. Reset the agents that were working this epic, and clear any parked
+    //    questions they raised so nothing stays stuck on `needs_input`.
+    const involved = new Set<string>([lead.id]);
+    for (const c of children) if (c.assigneeAgentId) involved.add(c.assigneeAgentId);
+    for (const [agentId, rc] of this.reviewContext) {
+      if (rc.epicId === epicId) {
+        involved.add(agentId);
+        this.reviewContext.delete(agentId);
+      }
+    }
+    for (const agentId of involved) this.setStatus(agentId, 'idle');
+    for (const q of this.deps.store.listQuestions(this.projectId)) {
+      if (q.status === 'pending' && q.agentId && involved.has(q.agentId)) {
+        this.answer(q.id, '(epic discarded)');
+      }
+    }
+
+    // 3. Git: revert a merged epic (if asked), then throw away the isolated clone
+    //    + leftover branch. Nothing merged => the real repo is already pristine.
+    const merged =
+      epic.status === 'done' ||
+      this.deps.store
+        .listPRs(this.projectId)
+        .some((pr) => pr.workItemId === epicId && pr.status === 'merged');
+    let reverted = false;
+    let detail = '';
+    if (merged && opts.revert && epic.branch) {
+      try {
+        const commit = await this.deps.git.findEpicMergeCommit(repoDir, epic.branch);
+        if (commit) {
+          const r = await this.deps.git.revertMerge(repoDir, commit);
+          reverted = r.ok;
+          detail = r.detail;
+          this.emitEvent(
+            lead.id,
+            'git',
+            r.ok ? `Reverted epic merge: ${r.detail}` : `Revert failed: ${r.detail}`,
+            null,
+            epicId,
+          );
+        } else {
+          detail = 'merge commit not found; nothing reverted';
+        }
+      } catch (err) {
+        detail = err instanceof Error ? err.message : String(err);
+      }
+    }
+    const wt = this.epicWorktrees.get(epicId);
+    let removedWorktree = false;
+    try {
+      if (wt) {
+        await this.deps.git.removeWorktree(repoDir, wt.path);
+        removedWorktree = true;
+      }
+      await this.deps.git.deleteBranch(repoDir, epic.branch ?? '');
+    } catch {
+      /* best-effort cleanup */
+    }
+    this.epicWorktrees.delete(epicId);
+    this.epicPr.delete(epicId);
+    this.epicReviewIter.delete(epicId);
+    this.epicReviewing.delete(epicId);
+
+    // 4. Delete board rows: PRs, threads, child tasks, then the epic itself.
+    for (const pr of this.deps.store.listPRs(this.projectId)) {
+      if (pr.workItemId === epicId) this.deps.store.deletePR(pr.id);
+    }
+    for (const t of this.deps.store.listThreads(this.projectId)) {
+      if (t.workItemId === epicId) {
+        this.deps.store.deleteThread(t.id);
+        this.deps.bus.publish({
+          type: 'thread.updated',
+          projectId: this.projectId,
+          thread: { ...t, status: 'closed' },
+        });
+      }
+    }
+    for (const c of children) {
+      this.deps.store.deleteWorkItem(c.id);
+      this.deps.bus.publish({
+        type: 'workitem.deleted',
+        projectId: this.projectId,
+        workItemId: c.id,
+      });
+    }
+    this.deps.store.deleteWorkItem(epicId);
+    this.deps.bus.publish({
+      type: 'workitem.deleted',
+      projectId: this.projectId,
+      workItemId: epicId,
+    });
+
+    // 5. Report to the user.
+    const summary =
+      `🧹 Discarded epic "${epic.title}".\n\n` +
+      `Removed ${children.length} task(s) and stopped the team.` +
+      (merged
+        ? reverted
+          ? ' Reverted the merged changes from the repo.'
+          : opts.revert
+            ? ` Could not revert automatically (${detail}).`
+            : ' The already-merged changes were left in place.'
+        : ' Nothing was merged, so your repo is unchanged.');
+    this.postMessage(this.ensureMainThread().id, lead, summary);
+    this.notify('system', `Epic discarded: ${epic.title}`, summary, 'board', null, lead.id);
+    this.emitEvent(lead.id, 'system', `Discarded epic "${epic.title}"`, { merged, reverted }, null);
+    this.discardedEpics.delete(epicId);
+
+    return { deletedTasks: children.length, removedWorktree, merged, reverted, detail };
   }
 
   /**
@@ -1957,6 +2104,18 @@ class ProjectOrchestrator {
         null,
         item.id,
       );
+    }
+
+    // The user discarded this epic while the turn was in flight: bail cleanly
+    // without committing, moving, or resurrecting any deleted board item.
+    if (
+      (item.parentId && this.discardedEpics.has(item.parentId)) ||
+      !this.deps.store.getWorkItem(item.id)
+    ) {
+      this.running.delete(item.id);
+      this.awaitingInput.delete(item.id);
+      this.setStatus(agent.id, 'idle');
+      return;
     }
 
     // Empty build after the retry budget. Before bothering the user, the Lead

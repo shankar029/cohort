@@ -119,3 +119,96 @@ describe('git clone isolation per epic (Phase 3)', () => {
     }
   });
 });
+
+describe('discard / revert an epic (escape hatch)', () => {
+  it('discards a not-yet-merged epic: children + epic gone, clone removed, repo untouched', async () => {
+    const projectId = await createProject('Discard One');
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a settings page.' },
+    });
+
+    const epicMsg = (await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.kind === 'epic' &&
+        !!m.workItem.branch &&
+        m.workItem.branch.startsWith('ateam/epic-'),
+      8000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    const epicId = epicMsg.workItem.id;
+    // Wait until it has fanned out to at least one child task.
+    await ctx.waitFor((m) => m.type === 'workitem.updated' && m.workItem.parentId === epicId, 8000);
+
+    const baseHead = git(['rev-parse', 'HEAD']);
+    const cloneDir = path.join(ctx.worktreeRoot, projectId, epicId);
+    expect(fs.existsSync(cloneDir)).toBe(true);
+
+    // Discard via the same endpoint the UI uses.
+    const del = await ctx.app.inject({ method: 'DELETE', url: `/api/workitems/${epicId}` });
+    expect(del.statusCode).toBe(200);
+
+    // Board is clean: epic + all its children are gone.
+    const items = ctx.store.listWorkItems(projectId);
+    expect(items.find((i) => i.id === epicId)).toBeUndefined();
+    expect(items.filter((i) => i.parentId === epicId)).toHaveLength(0);
+    // The isolated clone was reclaimed.
+    expect(fs.existsSync(cloneDir)).toBe(false);
+    // The user's real repo is untouched (nothing was merged).
+    expect(git(['rev-parse', 'HEAD'])).toBe(baseHead);
+    // In-flight turns drain, then no agent is left working/needs_input on this epic.
+    const settled = () =>
+      !ctx.store
+        .listAgents(projectId)
+        .some((a) => a.status === 'working' || a.status === 'needs_input');
+    const deadline = Date.now() + 8000;
+    while (!settled() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(settled()).toBe(true);
+  });
+
+  it('reverts a merged epic: base branch gets a revert commit undoing the epic files', async () => {
+    const projectId = await createProject('Discard Merged');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    // Drive the epic to a merge.
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 15000);
+    const epicMsg = (await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.kind === 'epic' && m.workItem.status === 'done',
+      15000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'workitem.updated' }>;
+    const epicId = epicMsg.workItem.id;
+
+    // The merge landed real deliverables on the base branch.
+    const treeBefore = git(['ls-tree', '-r', '--name-only', 'HEAD']).split('\n');
+    expect(treeBefore.some((f) => f.startsWith('deliverables/'))).toBe(true);
+    const headBefore = git(['rev-parse', 'HEAD']);
+
+    // Discard WITH revert.
+    const del = await ctx.app.inject({
+      method: 'DELETE',
+      url: `/api/workitems/${epicId}?revert=1`,
+    });
+    expect(del.statusCode).toBe(200);
+    expect((del.json() as { discarded: { reverted: boolean } }).discarded.reverted).toBe(true);
+
+    // A new revert commit sits on top of the merge, and the deliverables are gone.
+    expect(git(['rev-parse', 'HEAD'])).not.toBe(headBefore);
+    const treeAfter = git(['ls-tree', '-r', '--name-only', 'HEAD']).split('\n');
+    expect(treeAfter.some((f) => f.startsWith('deliverables/'))).toBe(false);
+    // Board rows are gone too.
+    expect(ctx.store.listWorkItems(projectId).find((i) => i.id === epicId)).toBeUndefined();
+  });
+});

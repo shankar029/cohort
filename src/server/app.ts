@@ -483,6 +483,15 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { workItemId } = req.params as { workItemId: string };
     const existing = store.getWorkItem(workItemId);
     if (!existing) throw new HttpError(404, 'Work item not found');
+    // Epics own child tasks, an isolated clone, a PR and threads - cascade through
+    // the orchestrator so nothing is orphaned. Tasks are a simple row delete.
+    if (existing.kind === 'epic') {
+      const revert = (req.query as { revert?: string }).revert === '1';
+      const result = await orchestrators
+        .get(existing.projectId)
+        .discardEpic(workItemId, { revert });
+      return { discarded: result };
+    }
     store.deleteWorkItem(workItemId);
     bus.publish({ type: 'workitem.deleted', projectId: existing.projectId, workItemId });
     reply.status(204);

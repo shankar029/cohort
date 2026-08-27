@@ -277,7 +277,7 @@ interface AppContextValue {
     workItemId: string,
     input: Record<string, unknown>,
   ) => Promise<void>;
-  deleteWorkItem: (workItemId: string) => Promise<void>;
+  deleteWorkItem: (workItemId: string, revert?: boolean) => Promise<void>;
   createAgent: (projectId: string, input: Record<string, unknown>) => Promise<void>;
   updateAgent: (
     projectId: string,
@@ -476,8 +476,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       updateWorkItem: async (_projectId, workItemId, input) => {
         await api.updateWorkItem(workItemId, input as never);
       },
-      deleteWorkItem: async (workItemId) => {
-        await api.deleteWorkItem(workItemId);
+      deleteWorkItem: async (workItemId, revert) => {
+        await api.deleteWorkItem(workItemId, revert);
       },
       createAgent: async (projectId, input) => {
         const { agent } = await api.createAgent(projectId, input as never);
