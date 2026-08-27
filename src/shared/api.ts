@@ -21,6 +21,7 @@ export const updateProjectSettingsSchema = z.object({
   extraSkillRoots: z.array(z.string().trim()).optional(),
   recordSessions: z.boolean().optional(),
   testCommand: z.string().trim().max(200).optional(),
+  buildCommand: z.string().trim().max(200).optional(),
   name: z.string().trim().min(1).max(80).optional(),
 });
 export type UpdateProjectSettingsInput = z.infer<typeof updateProjectSettingsSchema>;

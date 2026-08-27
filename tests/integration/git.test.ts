@@ -212,3 +212,58 @@ describe('discard / revert an epic (escape hatch)', () => {
     expect(ctx.store.listWorkItems(projectId).find((i) => i.id === epicId)).toBeUndefined();
   });
 });
+
+describe('per-task build gate', () => {
+  it('blocks a build task whose code no longer compiles (build script fails)', async () => {
+    const projectId = await createProject('Build Gate Fail');
+    // A failing build script in the repo -> cloned into the epic worktree, so the
+    // per-task gate detects `npm run build` and it exits non-zero.
+    fs.writeFileSync(
+      path.join(repoDir, 'package.json'),
+      JSON.stringify({ name: 'x', scripts: { build: 'exit 1' } }),
+    );
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Build a small widget.' },
+    });
+
+    // The sole builder produces a change, but the build fails -> after a restart
+    // it is parked and the user is asked how to proceed.
+    const q = (await ctx.waitFor(
+      (m) => m.type === 'question.updated' && /build is failing/i.test(m.question.question),
+      25000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'question.updated' }>;
+    expect(q.question.question).toMatch(/build is failing/i);
+
+    // The task never slipped through to review/done on a red build.
+    const task = ctx.store.listWorkItems(projectId).find((i) => i.stream === 'frontend')!;
+    expect(task.status).not.toBe('review');
+    expect(task.status).not.toBe('done');
+  });
+
+  it('lets a build task through when the build passes', async () => {
+    const projectId = await createProject('Build Gate Pass');
+    fs.writeFileSync(
+      path.join(repoDir, 'package.json'),
+      JSON.stringify({ name: 'x', scripts: { build: 'exit 0' } }),
+    );
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Build a small widget.' },
+    });
+
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'event.appended' &&
+        m.event.type === 'system' &&
+        /Build gate: .*passed/.test(m.event.summary),
+      25000,
+    );
+  });
+});

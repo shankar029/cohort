@@ -14,6 +14,7 @@ export function SettingsPage(): React.JSX.Element {
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('auto-workspace');
   const [extraRoots, setExtraRoots] = useState('');
   const [testCommand, setTestCommand] = useState('');
+  const [buildCommand, setBuildCommand] = useState('');
   const [recordSessions, setRecordSessions] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +25,7 @@ export function SettingsPage(): React.JSX.Element {
       setApprovalMode(project.settings.approvalMode);
       setExtraRoots(project.settings.extraSkillRoots.join(', '));
       setTestCommand(project.settings.testCommand ?? '');
+      setBuildCommand(project.settings.buildCommand ?? '');
       setRecordSessions(project.settings.recordSessions === true);
     }
     // Initialize the form only when switching projects — not on every background
@@ -45,6 +47,7 @@ export function SettingsPage(): React.JSX.Element {
           .map((s) => s.trim())
           .filter(Boolean),
         testCommand: testCommand.trim() || undefined,
+        buildCommand: buildCommand.trim() || undefined,
         recordSessions,
       });
       setSaved(true);
@@ -146,6 +149,27 @@ export function SettingsPage(): React.JSX.Element {
             passes. Leave blank to auto-detect from <span className="font-mono">package.json</span>{' '}
             (<span className="font-mono">test:e2e</span> → <span className="font-mono">e2e</span> →{' '}
             <span className="font-mono">test</span>).
+          </p>
+        </div>
+
+        <div>
+          <label className="label" htmlFor="s-buildcmd">
+            Build check command
+          </label>
+          <input
+            id="s-buildcmd"
+            className="input font-mono text-xs"
+            data-testid="build-command"
+            value={buildCommand}
+            onChange={(e) => setBuildCommand(e.target.value)}
+            placeholder="npm run build  ·  tsc --noEmit  ·  cargo check"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Run after each build task — a task can't advance to review if the code no longer
+            compiles. Leave blank to auto-detect from{' '}
+            <span className="font-mono">package.json</span> (
+            <span className="font-mono">typecheck</span> → <span className="font-mono">build</span>{' '}
+            → <span className="font-mono">compile</span>).
           </p>
         </div>
 

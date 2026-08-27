@@ -52,6 +52,25 @@ function killTree(child: import('node:child_process').ChildProcess): void {
 export function resolveTestCommand(dir: string, override?: string): string | null {
   const ov = override?.trim();
   if (ov) return ov;
+  return resolveScript(dir, ['test:e2e', 'e2e', 'test']);
+}
+
+/**
+ * Resolve the STATIC build/compile check used for the per-task verification gate
+ * (does the code the agent just wrote still compile?). An explicit `override`
+ * (project `buildCommand`) always wins; otherwise the best build-ish npm script in
+ * `dir`'s package.json is used (`typecheck` > `build` > `compile`). Prefers
+ * `typecheck` because it is pure and side-effect-free. Returns null when nothing
+ * is runnable (e.g. a script-less vanilla project), which makes the gate a no-op.
+ */
+export function resolveBuildCommand(dir: string, override?: string): string | null {
+  const ov = override?.trim();
+  if (ov) return ov;
+  return resolveScript(dir, ['typecheck', 'type-check', 'build', 'compile']);
+}
+
+/** Pick the first present, non-placeholder npm script from `names`. */
+function resolveScript(dir: string, names: string[]): string | null {
   try {
     const pkgPath = path.join(dir, 'package.json');
     if (!fs.existsSync(pkgPath)) return null;
@@ -59,7 +78,7 @@ export function resolveTestCommand(dir: string, override?: string): string | nul
       scripts?: Record<string, string>;
     };
     const scripts = pkg.scripts ?? {};
-    for (const name of ['test:e2e', 'e2e', 'test']) {
+    for (const name of names) {
       const body = scripts[name];
       if (typeof body === 'string' && body.trim() && !/no test specified/i.test(body)) {
         return `npm run ${name} --silent`;
@@ -87,7 +106,27 @@ export function runProjectTests(
   override?: string,
   timeoutMs = 240_000,
 ): Promise<TestRunResult> {
-  const command = resolveTestCommand(dir, override);
+  return runResolved(resolveTestCommand(dir, override), dir, timeoutMs);
+}
+
+/**
+ * Run the project's static build/compile check in `dir` (see resolveBuildCommand).
+ * Same isolation + timeout guarantees as runProjectTests; `ran: false` means
+ * there was no build script to run (graceful no-op).
+ */
+export function runProjectBuild(
+  dir: string,
+  override?: string,
+  timeoutMs = 240_000,
+): Promise<TestRunResult> {
+  return runResolved(resolveBuildCommand(dir, override), dir, timeoutMs);
+}
+
+function runResolved(
+  command: string | null,
+  dir: string,
+  timeoutMs: number,
+): Promise<TestRunResult> {
   if (!command) return Promise.resolve({ ran: false, passed: false, command: '', output: '' });
   return new Promise((resolve) => {
     let out = '';

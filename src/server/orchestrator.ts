@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { runProjectTests } from './qaGate.js';
+import { runProjectBuild, runProjectTests } from './qaGate.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { GitFileChange } from '@shared/index';
@@ -2197,6 +2197,90 @@ class ProjectOrchestrator {
         }
       });
       return;
+    }
+
+    // Per-task BUILD gate: a build task that leaves the code non-compiling must
+    // NOT advance to review. Runs the repo's build/typecheck check (if any) in
+    // the epic clone; a script-less project is a graceful no-op. To avoid
+    // false-blocking a partially-built epic (e.g. the frontend compiled before the
+    // backend module it imports exists), only ENFORCE when this is the LAST
+    // builder still working - earlier builders defer to the integrating one, so
+    // the gate effectively verifies the integrated result before QA/review.
+    if (gate && produced && worktree && item.parentId) {
+      const buildersPending = this.deps.store
+        .listChildTasks(item.parentId)
+        .some(
+          (s) =>
+            s.id !== item.id &&
+            !/^(qa|reviewer|security)$/.test(s.stream ?? '') &&
+            s.status !== 'review' &&
+            s.status !== 'done',
+        );
+      if (!buildersPending) {
+        const build = await runProjectBuild(
+          runDir,
+          this.project().settings.buildCommand,
+          Number(process.env.ATEAM_QA_TEST_TIMEOUT_MS ?? 240_000),
+        );
+        if (build.ran && !build.passed) {
+          const tail = build.output.split('\n').slice(-25).join('\n').slice(-2000);
+          this.emitEvent(
+            agent.id,
+            'system',
+            `Build gate FAILED: \`${build.command}\` did not pass - blocking review`,
+            tail ? { output: tail } : null,
+            item.id,
+          );
+          this.troubleSignal(agent.id);
+          // First failure: restart the session once and re-drive so the agent can
+          // fix the break. Still red after that -> park and ask the user.
+          if (!this.restartedOnce.has(agent.id)) {
+            this.restartedOnce.add(agent.id);
+            await this.restartAgentSession(
+              agent.id,
+              `build failing on "${item.title}" (${build.command})`,
+            );
+            return;
+          }
+          this.setStatus(agent.id, 'needs_input');
+          this.awaitingInput.add(item.id);
+          this.notify(
+            'question',
+            `Build blocked: ${item.title}`,
+            `${agent.displayName} cannot pass the build - \`${build.command}\` is failing.`,
+            'board',
+            item.id,
+            agent.id,
+          );
+          void this.raiseQuestion(
+            agent.id,
+            `The build is failing on "${item.title}": \`${build.command}\` did not pass even after a ` +
+              `session restart. How should we proceed?`,
+            ['Retry', 'Skip this task'],
+          ).then((ans) => {
+            this.awaitingInput.delete(item.id);
+            this.setStatus(agent.id, 'idle');
+            if (ans.toLowerCase().startsWith('skip')) {
+              this.clearTrouble(agent.id);
+              this.moveItem(item.id, 'done');
+              this.maybeFinishEpic(item.parentId);
+            } else {
+              this.restartedOnce.delete(agent.id);
+              this.moveItem(item.id, 'todo');
+              this.pokeLead();
+            }
+          });
+          return;
+        }
+        if (build.ran)
+          this.emitEvent(
+            agent.id,
+            'system',
+            `Build gate: \`${build.command}\` passed`,
+            null,
+            item.id,
+          );
+      }
     }
 
     // QA sign-off is EVIDENCE-ENFORCED: a QA task cannot advance to review on a

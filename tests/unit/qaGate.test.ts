@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveTestCommand, runProjectTests } from '../../src/server/qaGate.js';
+import {
+  resolveTestCommand,
+  runProjectTests,
+  resolveBuildCommand,
+} from '../../src/server/qaGate.js';
 
 let dir: string;
 
@@ -49,6 +53,28 @@ describe('resolveTestCommand', () => {
   it('tolerates an invalid package.json', () => {
     fs.writeFileSync(path.join(dir, 'package.json'), '{ not json');
     expect(resolveTestCommand(dir)).toBeNull();
+  });
+});
+
+describe('resolveBuildCommand', () => {
+  it('prefers an explicit override', () => {
+    writePkg({ build: 'vite build' });
+    expect(resolveBuildCommand(dir, 'tsc --noEmit')).toBe('tsc --noEmit');
+  });
+
+  it('detects scripts in priority order typecheck > build > compile', () => {
+    writePkg({ compile: 'tsc', build: 'vite build', typecheck: 'tsc --noEmit' });
+    expect(resolveBuildCommand(dir)).toBe('npm run typecheck --silent');
+    writePkg({ compile: 'tsc', build: 'vite build' });
+    expect(resolveBuildCommand(dir)).toBe('npm run build --silent');
+    writePkg({ compile: 'tsc' });
+    expect(resolveBuildCommand(dir)).toBe('npm run compile --silent');
+  });
+
+  it('returns null when there is no build script (graceful no-op)', () => {
+    writePkg({ test: 'vitest' });
+    expect(resolveBuildCommand(dir)).toBeNull();
+    expect(resolveBuildCommand(dir)).toBeNull();
   });
 });
 

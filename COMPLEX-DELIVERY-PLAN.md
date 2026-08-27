@@ -193,9 +193,12 @@ moving planning after dispatch); **discard/revert epic** escape hatch shipped.
 1. ✅ **Design/interface injection** — persist the Architect's design per epic and
    inject it into every builder's run prompt. *Invariant‑safe (enrich‑after, read
    at `basePrompt`), fake‑testable.* **SHIPPED** (this slice).
-2. **Per‑task mechanical verification gate** — run typecheck/lint/scoped tests after
-   each build task; block `→ review` on red. Mechanical, reuses `qaGate.ts`,
-   depends on nothing. *(next)*
+2. ✅ **Per‑task mechanical verification gate** — runs the repo's build/typecheck
+   check (`typecheck` > `build` > `compile`, or a `buildCommand` override) in the
+   epic clone after a build task; a task that leaves the code non‑compiling is
+   blocked from `→ review` (restart‑once → park+ask, mirroring the QA gate).
+   Enforced only for the LAST builder so a partially‑built epic can't false‑block.
+   Script‑less projects are a graceful no‑op. **SHIPPED.**
 3. **Persist structured requirements** (PM criteria as linked records).
 4. **Criteria↔test traceability + final acceptance gate before merge** (unblocked
    by 3).
@@ -226,6 +229,9 @@ budget must land *with* finer decomposition, not after.
 6. **Re‑planning + budgets** (Level 9).
 
 ## What already helps (shipped)
+- **Per‑task build gate** — the repo's build/typecheck runs in the epic clone after
+  each build task (last‑builder‑only to avoid partial‑epic false‑blocks); a red
+  build can't reach review. `buildCommand` project setting + auto‑detect.
 - **Design/interface injection** — Architect design persisted per epic
   (`epic_designs` table) and injected into every builder's run prompt — the first
   vertical slice of the linchpin.

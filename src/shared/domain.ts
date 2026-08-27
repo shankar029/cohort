@@ -39,6 +39,12 @@ export interface ProjectSettings {
    * package.json. QA cannot sign off unless this command actually passes.
    */
   testCommand?: string;
+  /**
+   * Command used for the per-task build gate (does the code still compile?).
+   * When set it overrides auto-detection (`typecheck` > `build` > `compile`).
+   * A build task cannot advance to review if this command fails.
+   */
+  buildCommand?: string;
 }
 
 export interface Project {

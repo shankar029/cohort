@@ -194,6 +194,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
         paused: project.settings.paused,
         recordSessions: input.recordSessions ?? project.settings.recordSessions,
         testCommand: input.testCommand ?? project.settings.testCommand,
+        buildCommand: input.buildCommand ?? project.settings.buildCommand,
       },
     });
     if (updated) {
