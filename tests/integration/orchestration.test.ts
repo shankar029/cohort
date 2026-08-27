@@ -852,3 +852,92 @@ describe('usage tracking', () => {
     expect(totalTime).toBeGreaterThan(0);
   });
 });
+
+describe('Team Lead robustness (self-healing manager)', () => {
+  it('closes an epic whose children all landed but was left in_progress — from the periodic tick alone', async () => {
+    const prevTick = process.env.ATEAM_LEAD_TICK_MS;
+    process.env.ATEAM_LEAD_TICK_MS = '20';
+    try {
+      const { projectId } = await createProject('SelfHeal');
+      await addSpecialist(projectId, 'frontend-engineer');
+      await addSpecialist(projectId, 'qa-engineer');
+
+      // Fabricate a stuck state directly in the store: an epic still in_progress
+      // whose child tasks are all done, WITHOUT ever firing the task-completion
+      // event that normally triggers closure. Only the periodic manager sweep can
+      // rescue this.
+      const epic = ctx.store.createWorkItem({
+        projectId,
+        kind: 'epic',
+        title: 'Stuck Epic',
+        description: 'All work done but never closed.',
+        status: 'in_progress',
+        priority: 'medium',
+        assigneeAgentId: null,
+      });
+      for (const t of ['a', 'b']) {
+        ctx.store.createWorkItem({
+          projectId,
+          kind: 'task',
+          parentId: epic.id,
+          title: `task ${t}`,
+          description: 'done',
+          status: 'done',
+          priority: 'medium',
+          assigneeAgentId: null,
+        });
+      }
+
+      // Arm the project's manager loop (project creation alone doesn't construct
+      // the orchestrator). A read-only git snapshot is enough to spin it up.
+      await ctx.app.inject({ method: 'GET', url: `/api/projects/${projectId}/git` });
+
+      // The manager sweep drives it to closure without any user poke.
+      await ctx.waitFor(
+        (m) =>
+          m.type === 'workitem.updated' &&
+          m.workItem.id === epic.id &&
+          m.workItem.status === 'done',
+        8000,
+      );
+      expect(ctx.store.getWorkItem(epic.id)?.status).toBe('done');
+    } finally {
+      if (prevTick === undefined) delete process.env.ATEAM_LEAD_TICK_MS;
+      else process.env.ATEAM_LEAD_TICK_MS = prevTick;
+    }
+  });
+
+  it('proactively flags a stalled project that has work but no specialists to do it', async () => {
+    const prevTick = process.env.ATEAM_LEAD_TICK_MS;
+    const prevStall = process.env.ATEAM_STALL_MS;
+    process.env.ATEAM_LEAD_TICK_MS = '20';
+    process.env.ATEAM_STALL_MS = '1';
+    try {
+      const { projectId } = await createProject('Stalled');
+      // No specialists added — the Lead cannot self-heal. Creating the task via the
+      // API arms the manager loop (and pokes the Lead) for an unassigned todo item.
+      await ctx.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/workitems`,
+        payload: { title: 'Orphan task', description: 'Nobody to build this.', status: 'todo' },
+      });
+
+      const msg = (await ctx.waitFor(
+        (m) => m.type === 'chat.message' && /stalled work/i.test(m.message.content),
+        8000,
+      )) as { type: 'chat.message'; message: { content: string } };
+      expect(msg.message.content).toMatch(/no specialists/i);
+
+      // And the user is notified so they don't have to discover it themselves.
+      await ctx.waitFor(
+        (m) => m.type === 'notification.created' && /blocked/i.test(m.notification.title),
+        8000,
+      );
+    } finally {
+      if (prevTick === undefined) delete process.env.ATEAM_LEAD_TICK_MS;
+      else process.env.ATEAM_LEAD_TICK_MS = prevTick;
+      if (prevStall === undefined) delete process.env.ATEAM_STALL_MS;
+      else process.env.ATEAM_STALL_MS = prevStall;
+    }
+  });
+});

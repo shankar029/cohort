@@ -229,6 +229,14 @@ class ProjectOrchestrator {
   private readonly statusHeartbeatMs = Number(process.env.ATEAM_STATUS_HEARTBEAT_MS ?? 90000);
   private lastStatusAt = 0;
   private lastStatusSig = '';
+  /**
+   * Board-activity watchdog: the epoch-ms the board last moved (a status change,
+   * assignment, or run start). Lets the manager distinguish "legitimately waiting"
+   * from "stalled" so it can proactively re-drive / escalate instead of going quiet.
+   */
+  private lastBoardActivityAt = Date.now();
+  private lastStallSig = '';
+  private readonly stallMs = Number(process.env.ATEAM_STALL_MS ?? 120000);
   /** reviewerAgentId -> the PR they are actively reviewing (for add_review_comment). */
   private readonly reviewContext = new Map<string, { epicId: string; prId: string }>();
   /** Cached brownfield signal (repo already has substantial source). */
@@ -1116,7 +1124,91 @@ class ProjectOrchestrator {
     if (this.disposed || this.paused) return;
     this.assignUnassignedWork();
     this.driveAssignedWork();
+    this.driveEpicsToClosure();
     this.superviseAgents();
+    this.watchForStall();
+  }
+
+  /**
+   * Self-healing closure driver: keep every open epic's progress honest and, when
+   * all of its children have landed (review/done), (re)drive it toward
+   * review → merge → done. Epic closure is normally triggered by the
+   * task-completion event, but re-checking it on every manager tick means a missed
+   * or out-of-order signal can never leave a finished epic stuck open. Both calls
+   * are idempotent and guarded, so this is safe to run every tick.
+   */
+  private driveEpicsToClosure(): void {
+    for (const epic of this.deps.store.listWorkItems(this.projectId)) {
+      if (epic.kind !== 'epic' || epic.status === 'done') continue;
+      if (this.deps.store.listChildTasks(epic.id).length === 0) continue;
+      this.recomputeEpicProgress(epic.id);
+      this.maybeFinishEpic(epic.id);
+    }
+  }
+
+  /**
+   * Proactive stall watchdog. When there is open work but nothing is running, no
+   * agent is working, and the user isn't being waited on (no pending question),
+   * and the board hasn't moved for `stallMs`, the Lead surfaces a concise diagnosis
+   * instead of going silent — and escalates to the user only when it genuinely
+   * cannot self-heal (e.g. there are no specialists to do the work). Deduped by
+   * signature so an unchanged stall stays quiet.
+   */
+  private watchForStall(): void {
+    if (this.disposed || this.paused) return;
+    const items = this.deps.store.listWorkItems(this.projectId);
+    const openEpics = items.filter((i) => i.kind === 'epic' && i.status !== 'done');
+    const openTasks = items.filter(
+      (i) => i.kind === 'task' && (i.status === 'todo' || i.status === 'in_progress'),
+    );
+    if (openEpics.length === 0 && openTasks.length === 0) {
+      this.lastStallSig = '';
+      return;
+    }
+    // Actively moving? Not stalled — refresh the activity clock.
+    if (this.running.size > 0 || this.specialists().some((a) => a.status === 'working')) {
+      this.lastBoardActivityAt = Date.now();
+      return;
+    }
+    // Legitimately parked waiting on a human decision is not a stall.
+    const awaitingUser = this.deps.store
+      .listQuestions(this.projectId)
+      .some((q) => q.status === 'pending');
+    if (awaitingUser) {
+      this.lastBoardActivityAt = Date.now();
+      return;
+    }
+    if (Date.now() - this.lastBoardActivityAt < this.stallMs) return;
+
+    // Stalled. Diagnose so the user isn't left guessing whether the team is alive.
+    const specs = this.assignableSpecialists();
+    const leadId = this.lead().id;
+    const unpicked = openTasks.filter((t) => !t.assigneeAgentId || t.assigneeAgentId === leadId);
+    let diagnosis: string;
+    let stuck = false;
+    if (specs.length === 0 && openTasks.length > 0) {
+      diagnosis =
+        `${openTasks.length} task(s) are ready to build, but there are no specialists on the ` +
+        `team to do them. Add specialists from the Agents page and I'll get them moving.`;
+      stuck = true;
+    } else if (unpicked.length > 0) {
+      diagnosis = `${unpicked.length} task(s) haven't been picked up yet — re-driving them now.`;
+    } else {
+      diagnosis = `${openTasks.length} assigned task(s) aren't progressing — re-kicking them now.`;
+    }
+    const sig = `${stuck}:${specs.length}:${openTasks.length}:${openEpics.length}`;
+    if (sig === this.lastStallSig) return;
+    this.lastStallSig = sig;
+    this.postMessage(
+      this.ensureMainThread().id,
+      this.lead(),
+      `⚠️ **Unblocking stalled work** — ${diagnosis}`,
+    );
+    if (stuck) {
+      this.notify('system', 'Team is blocked', diagnosis, 'agents', null, leadId);
+    }
+    // Reset the clock so we re-evaluate after another full stall window.
+    this.lastBoardActivityAt = Date.now();
   }
 
   /** True when the user has paused the team: no new agent-driven work starts. */
@@ -1159,6 +1251,7 @@ class ProjectOrchestrator {
       if (!agent) continue;
       const updated = this.deps.store.updateWorkItem(item.id, { assigneeAgentId: agent.id });
       if (!updated) continue;
+      this.lastBoardActivityAt = Date.now();
       this.deps.bus.publish({
         type: 'workitem.updated',
         projectId: this.projectId,
@@ -1694,6 +1787,7 @@ class ProjectOrchestrator {
     // Deferred here; the manager loop re-drives it once the epic is free.
     if (item.parentId && this.epicBusy(item.parentId)) return;
     this.running.add(workItemId);
+    this.lastBoardActivityAt = Date.now();
     try {
       await this.runWorkItemInner(item.id, agent);
     } finally {
@@ -2578,12 +2672,14 @@ class ProjectOrchestrator {
 
   private moveItem(workItemId: string, status: WorkItem['status']): void {
     const updated = this.deps.store.updateWorkItem(workItemId, { status });
-    if (updated)
+    if (updated) {
+      this.lastBoardActivityAt = Date.now();
       this.deps.bus.publish({
         type: 'workitem.updated',
         projectId: this.projectId,
         workItem: updated,
       });
+    }
   }
 
   /** Update a work item's completion %, roll it up to its epic, and notify milestones. */
