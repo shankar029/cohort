@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { runProjectBuild, runProjectTests } from './qaGate.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
+import type { AcceptanceCriterion, CriterionStatus } from '@shared/index';
 import type { GitFileChange } from '@shared/index';
 import type { GitCommit } from '@shared/index';
 import type { Store } from './db/store.js';
@@ -198,12 +199,15 @@ class ProjectOrchestrator {
   /** PR/review state per epic for the iterate-to-quality loop. */
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
+  /** Per-epic acceptance-evaluation rounds, capped so an unmet criterion escalates. */
+  private readonly epicAcceptIter = new Map<string, number>();
   private readonly epicReviewing = new Set<string>();
   /** In-flight background reviews, awaited on dispose so nothing touches a closed DB. */
   private readonly pendingReviews = new Set<Promise<unknown>>();
   /** Per-message accumulated streamed text, so deltas survive a re-sync. */
   private readonly streamBuffers = new Map<string, string>();
   private static readonly MAX_REVIEW_ITER = 3;
+  private static readonly MAX_ACCEPT_ITER = 3;
 
   /** Work items with an in-flight runWorkItem, so the manager never double-starts one. */
   private readonly running = new Set<string>();
@@ -211,6 +215,8 @@ class ProjectOrchestrator {
   private readonly awaitingInput = new Set<string>();
   /** Epics the user discarded — guards in-flight turns from resurrecting them. */
   private readonly discardedEpics = new Set<string>();
+  /** Epics the user chose to merge despite unmet acceptance criteria. */
+  private readonly forcedAccept = new Set<string>();
 
   /** Team Lead proactive manager loop. */
   private readonly leadTickMs = Number(process.env.ATEAM_LEAD_TICK_MS ?? 15000);
@@ -696,6 +702,7 @@ class ProjectOrchestrator {
     this.epicWorktrees.delete(epicId);
     this.epicPr.delete(epicId);
     this.epicReviewIter.delete(epicId);
+    this.epicAcceptIter.delete(epicId);
     this.epicReviewing.delete(epicId);
 
     // 4. Delete board rows: PRs, threads, child tasks, then the epic itself.
@@ -2523,6 +2530,15 @@ class ProjectOrchestrator {
       for (const f of files.slice(0, 20)) lines.push(this.fileLine(f));
       if (files.length > 20) lines.push(`- ...and ${files.length - 20} more`);
     }
+    const criteria = this.deps.store.listCriteria(epic.id);
+    if (criteria.length > 0) {
+      const met = criteria.filter((c) => c.status === 'met').length;
+      lines.push(`**Acceptance:** ${met}/${criteria.length} criteria met`);
+      for (const c of criteria) {
+        const mark = c.status === 'met' ? '✅' : c.status === 'failed' ? '❌' : '•';
+        lines.push(`- ${mark} ${c.text}`);
+      }
+    }
     this.postMessage(thread.id, lead, lines.join('\n'));
   }
 
@@ -2577,6 +2593,9 @@ class ProjectOrchestrator {
     const epic = this.deps.store.getWorkItem(parentId);
     if (!epic || epic.kind !== 'epic' || epic.status === 'done') return;
     if (this.epicReviewing.has(parentId)) return;
+    // Parked awaiting the user's acceptance decision - don't re-trigger review
+    // (which would re-run the gate and spam the same question every tick).
+    if (this.awaitingInput.has(parentId)) return;
     const children = this.deps.store.listChildTasks(parentId);
     if (children.length === 0) return;
     if (!children.every((c) => c.status === 'review' || c.status === 'done')) return;
@@ -2657,9 +2676,10 @@ class ProjectOrchestrator {
         pr: withReviewer,
       });
 
-    // No independent reviewer available → Lead self-approves and merges.
+    // No independent reviewer available → Lead self-approves, subject to the
+    // acceptance gate.
     if (reviewer.id === lead.id) {
-      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+      await this.finalizeEpic(epic, prId, lead, repoDir, branch, wt, diff);
       return;
     }
 
@@ -2681,9 +2701,9 @@ class ProjectOrchestrator {
 
     const open = this.deps.store.listPrComments(prId).filter((c) => c.status === 'open');
 
-    // Clean bill of health: the Team Lead (sole approver) merges.
+    // Clean bill of health from review → subject to the acceptance gate, merge.
     if (open.length === 0) {
-      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+      await this.finalizeEpic(epic, prId, lead, repoDir, branch, wt, diff);
       return;
     }
 
@@ -2721,7 +2741,7 @@ class ProjectOrchestrator {
         null,
         epic.id,
       );
-      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+      await this.finalizeEpic(epic, prId, lead, repoDir, branch, wt, diff);
       return;
     }
 
@@ -2783,6 +2803,171 @@ class ProjectOrchestrator {
     for (const c of this.deps.store.commentsForWorkItem(workItemId)) {
       if (c.status === 'open') this.resolveComment(c.id);
     }
+  }
+
+  /**
+   * The single merge decision point. Evaluate the epic's acceptance criteria
+   * against the delivered work; merge only when every criterion is met. Unmet
+   * criteria are routed back as fix work (capped, then escalated to the user)
+   * instead of being silently merged. Epics with no recorded criteria (e.g. a
+   * greenfield request without a PM) merge as before.
+   */
+  private async finalizeEpic(
+    epic: WorkItem,
+    prId: string,
+    lead: Agent,
+    repoDir: string,
+    branch: string,
+    wt: { branch: string; path: string } | undefined,
+    diff: string,
+  ): Promise<void> {
+    const criteria = this.deps.store.listCriteria(epic.id);
+    if (criteria.length > 0 && !this.forcedAccept.has(epic.id)) {
+      const gate = await this.evaluateAcceptance(epic, criteria, wt, diff);
+      if (!gate.ok) {
+        await this.handleUnmetCriteria(epic, gate.unmet, lead);
+        return;
+      }
+    }
+    this.forcedAccept.delete(epic.id);
+    this.epicAcceptIter.delete(epic.id);
+    await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+  }
+
+  /**
+   * Ask a judge (QA specialist > reviewer > Lead) to rule on each acceptance
+   * criterion against the diff, persist the verdicts, and return whether the
+   * epic passes. An explicit FAILED is the only thing that gates; an
+   * unmentioned criterion or an infrastructure error is treated as pass so a
+   * flaky judge turn can't deadlock delivery.
+   */
+  private async evaluateAcceptance(
+    epic: WorkItem,
+    criteria: AcceptanceCriterion[],
+    wt: { branch: string; path: string } | undefined,
+    diff: string,
+  ): Promise<{ ok: true } | { ok: false; unmet: AcceptanceCriterion[] }> {
+    const judge = this.findAgentByStream('qa') ?? this.findReviewer(this.lead());
+    const thread = this.threadForWorkItem(epic);
+    const numbered = criteria.map((c, i) => `${i + 1}. ${c.text}`).join('\n');
+    const prompt =
+      `Judge each acceptance criterion for epic "${epic.title}" against the delivered work.\n\n` +
+      `Acceptance criteria:\n${numbered}\n\n` +
+      `Diff (may be truncated):\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
+      `Reply with ONE line per criterion in the exact form "AC<n>: MET" or ` +
+      `"AC<n>: FAILED - <short reason>". Judge whether the code actually satisfies ` +
+      `the criterion, not whether it was intended. Do not write code here.`;
+    let verdictText = '';
+    try {
+      verdictText = (await this.actor(judge).ask(prompt, thread.id, epic.id, wt?.path)) ?? '';
+    } catch {
+      return { ok: true };
+    }
+    const verdicts = parseVerdicts(verdictText, criteria.length);
+    const unmet: AcceptanceCriterion[] = [];
+    criteria.forEach((c, i) => {
+      const met = verdicts.get(i + 1);
+      const status: CriterionStatus = met === false ? 'failed' : 'met';
+      this.deps.store.setCriterionStatus(c.id, status);
+      if (status === 'failed') unmet.push({ ...c, status });
+    });
+    const refreshed = this.deps.store.listCriteria(epic.id);
+    this.deps.bus.publish({
+      type: 'criteria.updated',
+      projectId: this.projectId,
+      epicId: epic.id,
+      criteria: refreshed,
+    });
+    this.emitEvent(
+      judge.id,
+      'system',
+      unmet.length === 0
+        ? `Acceptance check passed: ${criteria.length}/${criteria.length} criteria met`
+        : `Acceptance check: ${criteria.length - unmet.length}/${criteria.length} met, ${unmet.length} unmet`,
+      unmet.length ? { unmet: unmet.map((c) => c.text) } : null,
+      epic.id,
+    );
+    return unmet.length === 0 ? { ok: true } : { ok: false, unmet };
+  }
+
+  /**
+   * Route unmet acceptance criteria back as a high-priority fix task. After
+   * MAX_ACCEPT_ITER rounds, stop looping and ask the user to merge anyway or
+   * keep working (parking the epic so review doesn't re-trigger meanwhile).
+   */
+  private async handleUnmetCriteria(
+    epic: WorkItem,
+    unmet: AcceptanceCriterion[],
+    lead: Agent,
+  ): Promise<void> {
+    const iter = (this.epicAcceptIter.get(epic.id) ?? 0) + 1;
+    this.epicAcceptIter.set(epic.id, iter);
+    const list = unmet.map((c) => `- ${c.text}`).join('\n');
+
+    if (iter >= ProjectOrchestrator.MAX_ACCEPT_ITER) {
+      this.awaitingInput.add(epic.id);
+      this.notify(
+        'question',
+        `Acceptance blocked: ${epic.title}`,
+        `${unmet.length} acceptance criteria are still unmet after ${iter} rounds.`,
+        'board',
+        epic.id,
+        lead.id,
+      );
+      void this.raiseQuestion(
+        lead.id,
+        `Epic "${epic.title}" still has ${unmet.length} unmet acceptance criteria after ${iter} rounds:\n` +
+          `${list}\n\nMerge anyway, or keep working on them?`,
+        ['Keep working', 'Merge anyway'],
+      ).then((ans) => {
+        this.awaitingInput.delete(epic.id);
+        if (ans.toLowerCase().startsWith('merge')) {
+          // Force the merge; leave the criteria marked failed for the record.
+          this.forcedAccept.add(epic.id);
+          this.epicAcceptIter.delete(epic.id);
+        } else {
+          this.epicAcceptIter.set(epic.id, 0);
+          this.createAcceptanceFix(epic, unmet, lead);
+        }
+        this.pokeLead();
+      });
+      return;
+    }
+
+    this.createAcceptanceFix(epic, unmet, lead);
+    this.pokeLead();
+  }
+
+  /** Open a high-priority fix task for the unmet criteria and assign it. */
+  private createAcceptanceFix(epic: WorkItem, unmet: AcceptanceCriterion[], lead: Agent): void {
+    const target = this.pickAgentForItem(
+      { stream: null } as WorkItem,
+      this.assignableSpecialists(),
+    );
+    const body = unmet.map((c) => `- ${c.text}`).join('\n');
+    const fix = this.deps.store.createWorkItem({
+      projectId: this.projectId,
+      kind: 'task',
+      parentId: epic.id,
+      title: `fix: unmet acceptance criteria (${unmet.length})`,
+      description:
+        `These acceptance criteria are not yet met for "${epic.title}". Implement and verify ` +
+        `them so each holds:\n\n${body}`,
+      status: 'todo',
+      priority: 'high',
+      assigneeAgentId: target?.id ?? null,
+      stream: target?.name ?? null,
+    });
+    this.deps.bus.publish({ type: 'workitem.updated', projectId: this.projectId, workItem: fix });
+    this.emitEvent(
+      lead.id,
+      'system',
+      `Opened a fix for ${unmet.length} unmet acceptance criteria`,
+      null,
+      fix.id,
+    );
+    if (target) void this.onItemAssigned(fix.id).catch(() => undefined);
+    else this.pokeLead();
   }
 
   private async approveAndMerge(
@@ -3279,6 +3464,22 @@ function parseCriteria(text: string): string[] {
     const m = /^\s*(?:[-*]\s*)?AC:\s*(.+?)\s*$/i.exec(raw);
     if (m && m[1]) out.push(m[1].slice(0, 300));
     if (out.length >= 12) break;
+  }
+  return out;
+}
+
+/**
+ * Parse a judge's acceptance verdict block: lines like `AC1: MET` or
+ * `AC2: FAILED - reason`. Returns a map of 1-based criterion index -> met.
+ * Out-of-range indices are ignored.
+ */
+function parseVerdicts(text: string, count: number): Map<number, boolean> {
+  const out = new Map<number, boolean>();
+  for (const raw of text.split('\n')) {
+    const m = /^\s*AC\s*(\d+)\s*[:-]\s*(MET|FAILED)\b/i.exec(raw);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (n >= 1 && n <= count) out.set(n, /^met$/i.test(m[2]!));
   }
   return out;
 }

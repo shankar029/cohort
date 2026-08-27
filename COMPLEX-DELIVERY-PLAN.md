@@ -203,8 +203,12 @@ moving planning after dispatch); **discard/revert epic** escape hatch shipped.
    lines (Given/When/Then), parsed into `acceptance_criteria` records linked to the
    epic, broadcast via `criteria.updated`, and readable at
    `GET /api/workitems/:epicId/criteria`. **SHIPPED.**
-4. **Criteria↔test traceability + final acceptance gate before merge** (unblocked
-   by 3).
+4. ✅ **Criteria↔verdict traceability + final acceptance gate before merge** — a
+   judge (QA > reviewer > Lead) rules `AC<n>: MET|FAILED` on each persisted
+   criterion against the diff; statuses persist + broadcast; unmet ones become a
+   high-priority fix task (capped 3 rounds, then the user is asked merge-anyway /
+   keep-working); an epic with recorded criteria cannot merge until all are met;
+   statuses show in the completion report. **SHIPPED.**
 5. **Parallel intra‑epic** (per‑task branch → merge‑back + conflict handling) —
    this is what makes finer decomposition pay off, so it precedes granularity.
 6. **Multiple tasks per stream / structured plan** — only after (5), and only once

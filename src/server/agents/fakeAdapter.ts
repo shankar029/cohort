@@ -57,13 +57,32 @@ class FakeAgentSession implements AgentSession {
       return text;
     }
 
+    // Acceptance judge: rule on each numbered criterion. A criterion whose text
+    // contains FAILME is judged FAILED, everything else MET - deterministic so
+    // the acceptance gate (pass + block paths) is testable offline.
+    if (/judge each acceptance criterion/i.test(prompt)) {
+      const verdicts: string[] = [];
+      for (const raw of prompt.split('\n')) {
+        const m = /^\s*(\d+)\.\s*(.+)$/.exec(raw);
+        if (m)
+          verdicts.push(`AC${m[1]}: ${/FAILME/.test(m[2]!) ? 'FAILED - not implemented' : 'MET'}`);
+      }
+      const text = verdicts.join('\n') || 'AC1: MET';
+      await this.stream(messageId, text, onEvent);
+      onEvent({ kind: 'idle' });
+      return text;
+    }
+
     // Product Manager acceptance-criteria ask: emit deterministic `AC:` lines so
     // the orchestrator's parse → persist path is exercised offline.
     if (/one criterion per line/i.test(prompt)) {
+      const failing = /ACFAIL/.test(prompt);
       const text = [
         `User outcome: the user can accomplish the request end to end.`,
         `AC: Given the feature is built, when the user uses it, then it behaves as specified.`,
-        `AC: Given invalid input, when the user submits, then a clear error is shown.`,
+        failing
+          ? `AC: Given the special path, when triggered, then it works FAILME.`
+          : `AC: Given invalid input, when the user submits, then a clear error is shown.`,
       ].join('\n');
       await this.stream(messageId, text, onEvent);
       onEvent({ kind: 'idle' });

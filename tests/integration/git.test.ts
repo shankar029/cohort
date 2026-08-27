@@ -267,3 +267,53 @@ describe('per-task build gate', () => {
     );
   });
 });
+
+describe('final acceptance gate before merge', () => {
+  it('merges when every acceptance criterion is met', async () => {
+    const projectId = await createProject('Accept Pass');
+    await addSpecialist(projectId, 'product-manager');
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Build a small widget.' },
+    });
+
+    const merged = (await ctx.waitFor(
+      (m) => m.type === 'pull_request.updated' && m.pr.status === 'merged',
+      30000,
+    )) as Extract<
+      import('../../src/shared/index.js').ServerMessage,
+      { type: 'pull_request.updated' }
+    >;
+    const epicId = merged.pr.workItemId!;
+    const criteria = ctx.store.listCriteria(epicId);
+    expect(criteria.length).toBeGreaterThan(0);
+    expect(criteria.every((c) => c.status === 'met')).toBe(true);
+  });
+
+  it('blocks the merge when an acceptance criterion is not met', async () => {
+    const projectId = await createProject('Accept Block');
+    await addSpecialist(projectId, 'product-manager');
+    await addSpecialist(projectId, 'frontend-engineer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      // The sentinel makes the PM emit one criterion the judge will FAIL.
+      payload: { content: 'Build a small widget [[ACFAIL]].' },
+    });
+
+    // The acceptance check marks a criterion failed.
+    const failed = (await ctx.waitFor(
+      (m) => m.type === 'criteria.updated' && m.criteria.some((c) => c.status === 'failed'),
+      30000,
+    )) as Extract<import('../../src/shared/index.js').ServerMessage, { type: 'criteria.updated' }>;
+    const epicId = failed.epicId;
+
+    // The epic did not merge or close on the unmet criterion.
+    expect(ctx.store.listPRs(projectId).some((p) => p.status === 'merged')).toBe(false);
+    expect(ctx.store.getWorkItem(epicId)?.status).not.toBe('done');
+  });
+});
