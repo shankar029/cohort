@@ -367,6 +367,12 @@ export class RealCopilotAdapter implements CopilotAdapter {
       workingDirectory: config.workingDirectory,
       streaming: true,
       tools: [taskTool, waitTool, pollTool, ...appTools],
+      // The Copilot runtime ships built-in tools an agent can reach for on its own.
+      // The `sql` session-store tool (a sandbox todos/history DB) is NOT our board:
+      // an agent that grabs it hand-builds a phantom task list disconnected from
+      // ateam and can rat-hole on FK errors. The board is materialized in code, so
+      // no agent ever needs raw SQL — exclude it. (Bare name matches any source.)
+      excludedTools: ['sql'],
       skillDirectories: config.skillDirectories,
       systemMessage: { content: config.persona },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

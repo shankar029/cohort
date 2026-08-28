@@ -569,7 +569,14 @@ class ProjectOrchestrator {
         `Conversation so far:\n${history}\n\n` +
         `Respond to the user. If this needs hands-on work, say briefly how you'll approach it as an epic. ` +
         `If it would benefit from a team discussion, note that you'll convene one.`;
-      await this.actor(lead).ask(prompt, target.id, null);
+      // Fire the Lead's conversational acknowledgement, but NEVER gate dispatch on
+      // it. The board is materialized in code (planEpic → decomposeEpic), so a chat
+      // reply that rat-holes — e.g. looping on a stray built-in tool — must not block
+      // or skip the real decomposition. The mailbox still serializes the Lead's
+      // turns, and the reply streams to the user over WS as it lands.
+      void this.actor(lead)
+        .ask(prompt, target.id, null)
+        .catch(() => undefined);
 
       // Route the request. A build/change request becomes an epic the Lead decomposes;
       // a pure discussion request convenes a brainstorm. While paused the Lead still

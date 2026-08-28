@@ -1195,3 +1195,66 @@ describe('epic dependency-graph safety', () => {
     }
   });
 });
+
+describe('dispatch resilience', () => {
+  it('materializes the board even when the Lead chat reply rat-holes (Fix A/B)', async () => {
+    // An adapter whose Lead conversational-reply turn never returns within the
+    // test window — simulating a reply that loops on a stray built-in tool (the
+    // real-SDK `sql`/session-store failure we observed). Dispatch must not wait
+    // on it: the board is materialized in code, not by the chat turn.
+    class HangingLeadReplyAdapter extends FakeCopilotAdapter {
+      override async createAgentSession(config: AgentSessionConfig): Promise<AgentSession> {
+        const session = await super.createAgentSession(config);
+        if (config.role !== 'lead') return session;
+        const orig = session.ask.bind(session);
+        session.ask = async (prompt: string, messageId: string): Promise<string> => {
+          if (/Respond to the user/.test(prompt)) {
+            await new Promise<void>((r) => {
+              const t = setTimeout(r, 30_000);
+              (t as { unref?: () => void }).unref?.();
+            });
+            return '';
+          }
+          return orig(prompt, messageId);
+        };
+        return session;
+      }
+    }
+
+    const app2 = createTestApp([], new HangingLeadReplyAdapter());
+    try {
+      const res = await app2.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: { name: 'Hang', repoDir },
+      });
+      const projectId = (res.json() as { project: { id: string } }).project.id;
+      for (const catalogId of ['backend-engineer', 'qa-engineer']) {
+        await app2.app.inject({
+          method: 'POST',
+          url: `/api/projects/${projectId}/agents`,
+          payload: { catalogId },
+        });
+      }
+
+      // Build-intent message: the Lead's reply hangs, but a real task card must
+      // still land on the board (code-driven decompose).
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/chat`,
+        payload: { content: 'Build a small URL shortener service' },
+      });
+
+      const msg = await app2.waitFor(
+        (m) =>
+          m.type === 'workitem.updated' &&
+          m.workItem.kind === 'task' &&
+          m.workItem.projectId === projectId,
+        8000,
+      );
+      expect(msg.type).toBe('workitem.updated');
+    } finally {
+      await app2.close();
+    }
+  });
+});
