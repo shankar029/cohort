@@ -226,6 +226,21 @@ moving planning after dispatch); **discard/revert epic** escape hatch shipped.
      has limited work to chew on. Needs (a) instrumentation of realizable
      per‑epic parallelism, and (b) a stable per‑task slug for title‑keyed
      idempotency, before the LLM‑shaped generator is worth its regression risk.
+     - **Instrumentation ✅ SHIPPED (`5cadd85`)** — `epic_metrics` records
+       `independentBuilders` (parallelism ceiling), `maxConcurrent` (observed
+       peak), `integrationConflicts`, `durationMs` per epic; read via
+       `GET /api/projects/:id/metrics`.
+     - **Decision rule for building 6b** (read the aggregate after real epics):
+       - If `independentBuilders` stays ~1 while epics are large/slow → **build
+         6b** (a single fat stream is the bottleneck; splitting it unlocks
+         parallelism).
+       - If `maxConcurrent` already ≈ `independentBuilders` and both are ≥3 → the
+         parallel machinery is already saturated; 6b buys little, tune
+         `ATEAM_EPIC_CONCURRENCY` instead.
+       - If `integrationConflicts` is frequently >0 → finer splitting will worsen
+         merge churn; harden conflict→fix routing before 6b.
+     - Real numbers require the live Copilot SDK on real projects (fake mode is
+       deterministic one‑task‑per‑stream). Let it collect over normal usage.
 7. Blocking review/security + enforced fix tasks; re‑planning + per‑epic budgets
    (promote earlier once decomposition gets finer — a single stuck slice otherwise
    strands the epic; token spend multiplies).
