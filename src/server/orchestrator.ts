@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { runProjectBuild, runProjectTests } from './qaGate.js';
 import { sanitizeDag } from './dag.js';
+import { scopeStreams } from './streamScope.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { AcceptanceCriterion, CriterionStatus } from '@shared/index';
@@ -874,10 +875,22 @@ class ProjectOrchestrator {
     const allBuilders = specs.filter(
       (s) => s.name !== 'pm' && s.name !== 'architect' && !verifiers.includes(s),
     );
+    // Scope the builder set DOWN to what the request actually needs. This drops
+    // read-only roles (researcher) that can't deliver code, and UI streams
+    // (ux/frontend) for headless/API/library requests. Pure + deterministic so it
+    // never blocks dispatch; conservative so it never strands a needed discipline.
+    const scope = scopeStreams(
+      content,
+      allBuilders.map((s) => s.name),
+    );
+    for (const d of scope.drops) {
+      this.emitEvent(lead.id, 'system', `Scoped out [${d.stream}]: ${d.reason}`, null, epic.id);
+    }
+    const keptBuilders = allBuilders.filter((s) => scope.keep.includes(s.name));
     // docs/devops depend on the code the other builders produce.
     const postStreams = new Set(['docs', 'devops']);
-    const coreBuilders = allBuilders.filter((s) => !postStreams.has(s.name));
-    const postBuilders = allBuilders.filter((s) => postStreams.has(s.name));
+    const coreBuilders = keptBuilders.filter((s) => !postStreams.has(s.name));
+    const postBuilders = keptBuilders.filter((s) => postStreams.has(s.name));
     const goal = shortGoal(content);
 
     // Tasks already on the board for this epic (e.g. created by the Lead/PM/
@@ -968,7 +981,7 @@ class ProjectOrchestrator {
       const coreTaskIds = coreBuilders.map((s) => makeTask(s, {}));
       const postTaskIds = postBuilders.map((s) => makeTask(s, { dependsOn: coreTaskIds }));
       builderTaskIds = [...coreTaskIds, ...postTaskIds];
-      builders = allBuilders;
+      builders = keptBuilders;
     }
     for (const v of verifiers) makeTask(v, { verify: true, dependsOn: builderTaskIds });
 

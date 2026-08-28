@@ -1258,3 +1258,46 @@ describe('dispatch resilience', () => {
     }
   });
 });
+
+describe('stream scoping (I1/I6)', () => {
+  it('does not spawn ux/frontend/researcher tasks for a headless API request', async () => {
+    const { projectId } = await createProject();
+    for (const catalogId of [
+      'backend-engineer',
+      'frontend-engineer',
+      'ux-designer',
+      'researcher',
+      'qa-engineer',
+    ]) {
+      await addSpecialist(projectId, catalogId);
+    }
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: {
+        content:
+          'Build an in-memory URL shortener using only Node built-in http, no external ' +
+          'dependencies. Expose POST /shorten and GET /:code. Headless API only, no UI.',
+      },
+    });
+
+    // Wait for the backend task to land, then let the fan-out settle.
+    await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        m.workItem.kind === 'task' &&
+        m.workItem.stream === 'backend',
+      8000,
+    );
+    await new Promise((r) => setTimeout(r, 400));
+
+    const epic = ctx.store.listWorkItems(projectId).find((w) => w.kind === 'epic');
+    expect(epic).toBeTruthy();
+    const streams = new Set(ctx.store.listChildTasks(epic!.id).map((t) => t.stream ?? ''));
+    expect(streams.has('backend')).toBe(true);
+    expect(streams.has('ux')).toBe(false);
+    expect(streams.has('frontend')).toBe(false);
+    expect(streams.has('researcher')).toBe(false);
+  });
+});
