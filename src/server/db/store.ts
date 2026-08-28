@@ -18,6 +18,7 @@ import type {
   PrStatus,
   PrComment,
   AcceptanceCriterion,
+  EpicMetrics,
   Question,
   Notification,
   NotificationType,
@@ -197,6 +198,18 @@ interface AgentEventRow {
   type: string;
   summary: string;
   detail: string | null;
+  created_at: string;
+}
+
+interface EpicMetricsRow {
+  epic_id: string;
+  project_id: string;
+  task_count: number;
+  builder_count: number;
+  independent_builders: number;
+  max_concurrent: number;
+  integration_conflicts: number;
+  duration_ms: number;
   created_at: string;
 }
 const toEvent = (r: AgentEventRow): AgentEvent => ({
@@ -807,6 +820,65 @@ export class Store {
 
   deleteEpicDesign(epicId: string): void {
     this.db.prepare(`DELETE FROM epic_designs WHERE epic_id=?`).run(epicId);
+  }
+
+  /* epic metrics: per-epic delivery/parallelism telemetry recorded at merge time
+     (one row per epic, upserted). Read back for aggregation to decide whether
+     finer decomposition would pay off. */
+  recordEpicMetrics(m: Omit<EpicMetrics, 'createdAt'>): EpicMetrics {
+    const ts = now();
+    this.db
+      .prepare(
+        `INSERT INTO epic_metrics
+           (epic_id,project_id,task_count,builder_count,independent_builders,
+            max_concurrent,integration_conflicts,duration_ms,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(epic_id) DO UPDATE SET
+           task_count=excluded.task_count, builder_count=excluded.builder_count,
+           independent_builders=excluded.independent_builders,
+           max_concurrent=excluded.max_concurrent,
+           integration_conflicts=excluded.integration_conflicts,
+           duration_ms=excluded.duration_ms, created_at=excluded.created_at`,
+      )
+      .run(
+        m.epicId,
+        m.projectId,
+        m.taskCount,
+        m.builderCount,
+        m.independentBuilders,
+        m.maxConcurrent,
+        m.integrationConflicts,
+        m.durationMs,
+        ts,
+      );
+    return { ...m, createdAt: ts };
+  }
+
+  private rowToMetrics(r: EpicMetricsRow): EpicMetrics {
+    return {
+      epicId: r.epic_id,
+      projectId: r.project_id,
+      taskCount: r.task_count,
+      builderCount: r.builder_count,
+      independentBuilders: r.independent_builders,
+      maxConcurrent: r.max_concurrent,
+      integrationConflicts: r.integration_conflicts,
+      durationMs: r.duration_ms,
+      createdAt: r.created_at,
+    };
+  }
+
+  getEpicMetrics(epicId: string): EpicMetrics | undefined {
+    const row = this.db.prepare(`SELECT * FROM epic_metrics WHERE epic_id=?`).get(epicId) as
+      EpicMetricsRow | undefined;
+    return row ? this.rowToMetrics(row) : undefined;
+  }
+
+  listEpicMetrics(projectId: string): EpicMetrics[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM epic_metrics WHERE project_id=? ORDER BY created_at ASC`)
+      .all(projectId) as EpicMetricsRow[];
+    return rows.map((r) => this.rowToMetrics(r));
   }
 
   /* acceptance criteria: the Product Manager's structured, testable criteria for

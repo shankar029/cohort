@@ -218,6 +218,46 @@ describe('independent sibling tasks run concurrently (per-task clones)', () => {
     expect(everRan.size).toBeGreaterThanOrEqual(2);
     expect(maxConcurrent).toBeGreaterThanOrEqual(2);
   });
+
+  it('records per-epic parallelism metrics when the epic merges', async () => {
+    const projectId = await createProject('Metrics');
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'backend-engineer');
+    await addSpecialist(projectId, 'ux-designer');
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+    const done = await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' && m.workItem.kind === 'epic' && m.workItem.status === 'done',
+      25000,
+    );
+    const epicId = done.type === 'workitem.updated' ? done.workItem.id : '';
+
+    const res = await ctx.app.inject({ method: 'GET', url: `/api/workitems/${epicId}/metrics` });
+    expect(res.statusCode).toBe(200);
+    const { metrics } = res.json() as {
+      metrics: {
+        taskCount: number;
+        builderCount: number;
+        independentBuilders: number;
+        maxConcurrent: number;
+      } | null;
+    };
+    expect(metrics).toBeTruthy();
+    // Three independent builder streams should have run in parallel.
+    expect(metrics!.independentBuilders).toBeGreaterThanOrEqual(2);
+    expect(metrics!.maxConcurrent).toBeGreaterThanOrEqual(2);
+    expect(metrics!.builderCount).toBeGreaterThanOrEqual(3);
+
+    // The project-level aggregate lists it too.
+    const agg = await ctx.app.inject({ method: 'GET', url: `/api/projects/${projectId}/metrics` });
+    const { metrics: all } = agg.json() as { metrics: Array<{ epicId: string }> };
+    expect(all.some((m) => m.epicId === epicId)).toBe(true);
+  });
 });
 
 describe('QA sign-off is gated on the project test command actually passing', () => {

@@ -186,6 +186,18 @@ CREATE TABLE IF NOT EXISTS epic_designs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS epic_metrics (
+  epic_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_count INTEGER NOT NULL,
+  builder_count INTEGER NOT NULL,
+  independent_builders INTEGER NOT NULL,
+  max_concurrent INTEGER NOT NULL,
+  integration_conflicts INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS acceptance_criteria (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

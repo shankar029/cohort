@@ -337,6 +337,29 @@ export interface AcceptanceCriterion {
   updatedAt: string;
 }
 
+/**
+ * Per-epic delivery/parallelism telemetry, recorded when an epic merges. Used to
+ * decide whether finer decomposition (more tasks per stream) would actually pay
+ * off, and to tune the per-epic concurrency cap.
+ */
+export interface EpicMetrics {
+  epicId: string;
+  projectId: string;
+  /** Total child tasks (builders + verifiers). */
+  taskCount: number;
+  /** Builder tasks (excludes verifier/QA/review sign-off tasks). */
+  builderCount: number;
+  /** Builder tasks with no dependency on a sibling — the parallelism ceiling. */
+  independentBuilders: number;
+  /** Observed peak of simultaneously-running child tasks. */
+  maxConcurrent: number;
+  /** How many task integrations hit a merge conflict. */
+  integrationConflicts: number;
+  /** Wall-clock from epic creation to merge, in ms. */
+  durationMs: number;
+  createdAt: string;
+}
+
 export const QUESTION_STATUSES = ['pending', 'answered'] as const;
 export type QuestionStatus = (typeof QUESTION_STATUSES)[number];
 

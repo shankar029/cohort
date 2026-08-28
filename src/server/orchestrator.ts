@@ -207,6 +207,9 @@ class ProjectOrchestrator {
   private readonly taskConflicts = new Map<string, number>();
   /** Per-epic integrated-build failure rounds, capped so it escalates. */
   private readonly epicBuildIter = new Map<string, number>();
+  /** Live parallelism telemetry per epic (peak concurrency + conflicts), flushed
+   *  to epic_metrics when the epic merges. */
+  private readonly epicMetrics = new Map<string, { maxConcurrent: number; conflicts: number }>();
   /** PR/review state per epic for the iterate-to-quality loop. */
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
@@ -718,6 +721,7 @@ class ProjectOrchestrator {
     this.epicReviewIter.delete(epicId);
     this.epicAcceptIter.delete(epicId);
     this.epicBuildIter.delete(epicId);
+    this.epicMetrics.delete(epicId);
     this.epicIntegrateChain.delete(epicId);
     this.epicReviewing.delete(epicId);
 
@@ -1623,6 +1627,50 @@ class ProjectOrchestrator {
     return n;
   }
 
+  /** Track the peak number of an epic's child tasks running at once. */
+  private recordEpicConcurrency(parentId: string): void {
+    const cur = this.epicMetrics.get(parentId) ?? { maxConcurrent: 0, conflicts: 0 };
+    const running = this.epicRunning(parentId);
+    if (running > cur.maxConcurrent) cur.maxConcurrent = running;
+    this.epicMetrics.set(parentId, cur);
+  }
+
+  /**
+   * Flush an epic's parallelism telemetry to epic_metrics when it merges, and
+   * emit a one-line summary event. This is the evidence for whether finer
+   * decomposition (more tasks per stream) would actually raise concurrency, and
+   * for tuning the per-epic cap.
+   */
+  private finalizeEpicMetrics(epic: WorkItem): void {
+    const tasks = this.deps.store.listChildTasks(epic.id);
+    const isVerifier = (stream: string | null): boolean =>
+      !!stream && /^(qa|reviewer|security)$/.test(stream);
+    const builders = tasks.filter((t) => !isVerifier(t.stream));
+    const independentBuilders = builders.filter((t) => t.dependsOn.length === 0).length;
+    const acc = this.epicMetrics.get(epic.id) ?? { maxConcurrent: 0, conflicts: 0 };
+    const durationMs = Math.max(0, Date.now() - new Date(epic.createdAt).getTime());
+    const metrics = this.deps.store.recordEpicMetrics({
+      epicId: epic.id,
+      projectId: this.projectId,
+      taskCount: tasks.length,
+      builderCount: builders.length,
+      independentBuilders,
+      maxConcurrent: acc.maxConcurrent,
+      integrationConflicts: acc.conflicts,
+      durationMs,
+    });
+    this.epicMetrics.delete(epic.id);
+    this.emitEvent(
+      this.lead().id,
+      'system',
+      `Epic parallelism: ${metrics.taskCount} task(s), ${metrics.independentBuilders} independent ` +
+        `builder(s), peak ${metrics.maxConcurrent} concurrent, ${metrics.integrationConflicts} ` +
+        `conflict(s), ${Math.round(metrics.durationMs / 1000)}s`,
+      { metrics },
+      epic.id,
+    );
+  }
+
   /**
    * Run `fn` after any pending integration for this epic, so merges into the
    * epic clone never overlap even while sibling tasks execute concurrently.
@@ -2111,6 +2159,7 @@ class ProjectOrchestrator {
     if (item.parentId && this.epicRunning(item.parentId) >= this.epicConcurrency) return;
     this.running.add(workItemId);
     this.lastBoardActivityAt = Date.now();
+    if (item.parentId) this.recordEpicConcurrency(item.parentId);
     try {
       await this.runWorkItemInner(item.id, agent);
     } finally {
@@ -2573,6 +2622,9 @@ class ProjectOrchestrator {
         .catch(() => undefined);
 
       if (conflict) {
+        const met = this.epicMetrics.get(parentId) ?? { maxConcurrent: 0, conflicts: 0 };
+        met.conflicts += 1;
+        this.epicMetrics.set(parentId, met);
         // Re-queue so the agent redoes the work in a fresh clone forked off the
         // now-integrated epic tip (where the conflicting sibling already landed).
         const n = (this.taskConflicts.get(item.id) ?? 0) + 1;
@@ -3299,6 +3351,7 @@ class ProjectOrchestrator {
     }
     this.moveItem(epic.id, 'done');
     this.setProgress(epic.id, 100);
+    this.finalizeEpicMetrics(epic);
     this.emitEvent(
       this.lead().id,
       'system',

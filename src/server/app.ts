@@ -304,6 +304,17 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     return { criteria: store.listCriteria(workItemId) };
   });
 
+  app.get('/api/workitems/:workItemId/metrics', async (req) => {
+    const { workItemId } = req.params as { workItemId: string };
+    return { metrics: store.getEpicMetrics(workItemId) ?? null };
+  });
+
+  app.get('/api/projects/:id/metrics', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    return { metrics: store.listEpicMetrics(id) };
+  });
+
   app.get('/api/projects/:id/git', async (req) => {
     const { id } = req.params as { id: string };
     requireProject(id);
