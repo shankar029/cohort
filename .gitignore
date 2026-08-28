@@ -15,3 +15,4 @@ coverage/
 data/worktrees
 worktrees/
 evals/reports/
+._*
