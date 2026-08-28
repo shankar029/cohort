@@ -32,6 +32,42 @@ function preview(text: string): string {
   return t.length > PREVIEW ? `${t.slice(0, PREVIEW)}…` : t;
 }
 
+/** Sum per-call token usage recorded in a turn's events. */
+function sumTokens(events: RecordedSessionEvent[]): { input: number; output: number } {
+  let input = 0;
+  let output = 0;
+  for (const e of events) {
+    if (e.kind !== 'usage' || !e.detail) continue;
+    input += Number(e.detail.inputTokens ?? 0) || 0;
+    output += Number(e.detail.outputTokens ?? 0) || 0;
+  }
+  return { input, output };
+}
+
+/** A compact one-line detail string for a recorded step (tool output, usage). */
+function stepDetail(e: RecordedSessionEvent): string {
+  if (!e.detail) return '';
+  if (e.kind === 'usage') {
+    const i = Number(e.detail.inputTokens ?? 0) || 0;
+    const o = Number(e.detail.outputTokens ?? 0) || 0;
+    return `${i} in / ${o} out`;
+  }
+  if (e.kind === 'tool_result') {
+    const parts: string[] = [];
+    if (e.detail.success === false) parts.push('FAILED');
+    if (typeof e.detail.error === 'string') parts.push(e.detail.error);
+    else if (typeof e.detail.output === 'string')
+      parts.push(e.detail.output.replace(/\s+/g, ' ').trim());
+    const s = parts.join(': ');
+    return s.length > PREVIEW ? `${s.slice(0, PREVIEW)}…` : s;
+  }
+  if (e.kind === 'tool_call') {
+    const f = e.detail.file ?? e.detail.command ?? e.detail.path;
+    return typeof f === 'string' ? f : '';
+  }
+  return '';
+}
+
 /**
  * Records full agent turns (prompt, response, reasoning, tool calls) to disk as
  * newline-delimited JSON, one file per project. Opt-in per project. All writes
@@ -75,6 +111,7 @@ export class SessionRecorder {
     if (!turn) return;
     this.open.delete(key);
     const endedAt = Date.now();
+    const tokens = sumTokens(turn.events);
     const record: RecordedTurn = {
       id: turn.id,
       projectId: turn.projectId,
@@ -89,6 +126,8 @@ export class SessionRecorder {
       prompt: turn.prompt,
       response,
       events: turn.events,
+      inputTokens: tokens.input,
+      outputTokens: tokens.output,
       startedAt: new Date(turn.startedAt).toISOString(),
       endedAt: new Date(endedAt).toISOString(),
       durationMs: endedAt - turn.startedAt,
@@ -146,6 +185,8 @@ export class SessionRecorder {
       responsePreview: preview(t.response),
       eventCount: t.events.length,
       toolCount: t.events.filter((e) => e.kind === 'tool_call').length,
+      inputTokens: t.inputTokens ?? sumTokens(t.events).input,
+      outputTokens: t.outputTokens ?? sumTokens(t.events).output,
       startedAt: t.startedAt,
       endedAt: t.endedAt,
       durationMs: t.durationMs,
@@ -177,11 +218,14 @@ export class SessionRecorder {
     ];
     for (const t of turns) {
       const secs = (t.durationMs / 1000).toFixed(1);
+      const tok = t.inputTokens ?? sumTokens(t.events).input;
+      const tokOut = t.outputTokens ?? sumTokens(t.events).output;
       lines.push(
         `## ${t.agentName}${t.workItemTitle ? ` — ${t.workItemTitle}` : ''}`,
         '',
         `- **When:** ${t.startedAt} (${secs}s)`,
         `- **Model:** ${t.model}`,
+        `- **Tokens:** ${tok} in / ${tokOut} out`,
         `- **Working dir:** \`${t.cwd}\``,
         '',
         '### Prompt',
@@ -194,7 +238,8 @@ export class SessionRecorder {
       if (t.events.length) {
         lines.push('### Steps', '');
         for (const e of t.events) {
-          lines.push(`- \`${e.kind}\` ${e.label}`);
+          const extra = stepDetail(e);
+          lines.push(`- \`${e.kind}\` ${e.label}${extra ? ` — ${extra}` : ''}`);
         }
         lines.push('');
       }

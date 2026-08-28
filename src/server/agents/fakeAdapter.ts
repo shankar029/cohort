@@ -151,6 +151,11 @@ class FakeAgentSession implements AgentSession {
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, `# ${this.config.displayName} deliverable\n\n${summarize(prompt)}\n`);
         onEvent({ kind: 'tool_call', toolName: 'edit_file', detail: { file: rel } });
+        onEvent({
+          kind: 'tool_result',
+          toolName: 'edit_file',
+          detail: { success: true, output: `wrote ${rel}` },
+        });
       } catch {
         /* best-effort: cwd may not exist for non-epic asks */
       }

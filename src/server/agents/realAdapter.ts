@@ -133,10 +133,18 @@ class RealAgentSession implements AgentSession {
       offs.push(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.session.on('tool.execution_complete', (e: any) => {
+          const d = e?.data ?? {};
+          const result = d.result ?? {};
+          const output = typeof result.content === 'string' ? result.content : undefined;
           onEvent({
             kind: 'tool_result',
-            toolName: String(e?.data?.toolName ?? e?.data?.name ?? 'tool'),
-            detail: { status: e?.data?.status },
+            toolName: String(d.toolName ?? d.name ?? 'tool'),
+            detail: {
+              success: d.success !== false,
+              ...(output !== undefined ? { output: output.slice(0, 4000) } : {}),
+              ...(d.error?.message ? { error: String(d.error.message).slice(0, 1000) } : {}),
+              ...(d.toolTelemetry ? { telemetry: d.toolTelemetry } : {}),
+            },
           });
         }),
       );

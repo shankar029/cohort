@@ -418,7 +418,7 @@ export interface Notification {
 /** A single recorded event that occurred during an agent turn. */
 export interface RecordedSessionEvent {
   at: string;
-  kind: 'reasoning' | 'tool_call' | 'tool_result';
+  kind: 'reasoning' | 'tool_call' | 'tool_result' | 'usage';
   label: string;
   detail?: Record<string, unknown> | null;
 }
@@ -442,6 +442,9 @@ export interface RecordedTurn {
   prompt: string;
   response: string;
   events: RecordedSessionEvent[];
+  /** Summed input/output tokens across this turn's per-call usage events. */
+  inputTokens: number;
+  outputTokens: number;
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -461,6 +464,8 @@ export interface RecordedTurnSummary {
   responsePreview: string;
   eventCount: number;
   toolCount: number;
+  inputTokens: number;
+  outputTokens: number;
   startedAt: string;
   endedAt: string;
   durationMs: number;

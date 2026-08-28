@@ -400,6 +400,17 @@ class ProjectOrchestrator {
           label: e.toolName,
           detail: e.detail ?? null,
         });
+      } else if (e.kind === 'usage') {
+        this.deps.recorder.event(agent.id, {
+          at: new Date().toISOString(),
+          kind: 'usage',
+          label: e.model || 'model',
+          detail: {
+            inputTokens: e.inputTokens,
+            outputTokens: e.outputTokens,
+            durationMs: e.durationMs,
+          },
+        });
       }
     }
     switch (e.kind) {

@@ -91,6 +91,36 @@ describe('session recording', () => {
     expect(typeof detail.response).toBe('string');
     expect(detail.durationMs).toBeGreaterThanOrEqual(0);
 
+    // Per-call token usage is captured into events[] and summed onto the turn.
+    const usageEvents = detail.events.filter((e) => e.kind === 'usage');
+    expect(usageEvents.length).toBeGreaterThan(0);
+    expect(detail.inputTokens).toBeGreaterThan(0);
+    expect(summary.inputTokens + summary.outputTokens).toBeGreaterThan(0);
+
+    // Tool results carry their payload (success + output), not just a label. Look
+    // at the turn that actually ran a tool (the build/execute turn). Recordings
+    // are appended asynchronously, so poll briefly for it to flush.
+    let toolTurn: RecordedTurnSummary | undefined;
+    for (let i = 0; i < 40 && !toolTurn; i++) {
+      const res = await ctx.app.inject({
+        method: 'GET',
+        url: `/api/projects/${projectId}/recordings`,
+      });
+      const recs = (res.json() as { recordings: RecordedTurnSummary[] }).recordings;
+      toolTurn = recs.find((r) => r.agentId === agentId && r.toolCount > 0);
+      if (!toolTurn) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(toolTurn).toBeTruthy();
+    const toolDetailRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/recordings/${toolTurn!.id}`,
+    });
+    const toolDetail = (toolDetailRes.json() as { recording: RecordedTurn }).recording;
+    const toolResult = toolDetail.events.find((e) => e.kind === 'tool_result');
+    expect(toolResult).toBeTruthy();
+    expect(toolResult!.detail?.success).toBe(true);
+    expect(String(toolResult!.detail?.output ?? '')).toContain('wrote');
+
     // Markdown + JSONL exports are non-empty.
     const md = await ctx.app.inject({
       method: 'GET',

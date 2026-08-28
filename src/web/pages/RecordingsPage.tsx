@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Link } from 'react-router-dom';
-import type { RecordedTurn, RecordedTurnSummary } from '@shared/index';
+import type { RecordedTurn, RecordedTurnSummary, RecordedSessionEvent } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { api } from '../api';
 import { Avatar, agentAvatar, Banner, EmptyState, Spinner } from '../components/ui';
@@ -10,6 +10,27 @@ import { Markdown } from '../components/Markdown';
 function fmtDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/** Compact one-line detail for a recorded step (tool output, usage, target). */
+function stepDetail(e: RecordedSessionEvent): string {
+  const d = e.detail;
+  if (!d) return '';
+  if (e.kind === 'usage')
+    return `${Number(d.inputTokens ?? 0)} in / ${Number(d.outputTokens ?? 0)} out`;
+  if (e.kind === 'tool_result') {
+    const parts: string[] = [];
+    if (d.success === false) parts.push('FAILED');
+    if (typeof d.error === 'string') parts.push(d.error);
+    else if (typeof d.output === 'string') parts.push(d.output.replace(/\s+/g, ' ').trim());
+    const s = parts.join(': ');
+    return s.length > 160 ? `${s.slice(0, 160)}…` : s;
+  }
+  if (e.kind === 'tool_call') {
+    const f = d.file ?? d.command ?? d.path;
+    return typeof f === 'string' ? f : '';
+  }
+  return '';
 }
 
 export function RecordingsPage(): React.JSX.Element {
@@ -182,6 +203,9 @@ export function RecordingsPage(): React.JSX.Element {
                     <div>
                       {fmtDuration(r.durationMs)} · {r.toolCount} tool
                       {r.toolCount === 1 ? '' : 's'}
+                      {r.inputTokens + r.outputTokens > 0 && (
+                        <> · {r.inputTokens + r.outputTokens} tok</>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -284,6 +308,14 @@ function RecordingDetail({
                   <dt className="inline text-slate-500">Dir: </dt>
                   <dd className="inline font-mono">{turn.cwd}</dd>
                 </div>
+                {turn.inputTokens + turn.outputTokens > 0 && (
+                  <div>
+                    <dt className="inline text-slate-500">Tokens: </dt>
+                    <dd className="inline">
+                      {turn.inputTokens} in / {turn.outputTokens} out
+                    </dd>
+                  </div>
+                )}
               </dl>
 
               <section>
@@ -301,14 +333,26 @@ function RecordingDetail({
                     Steps ({turn.events.length})
                   </h3>
                   <ol className="space-y-1">
-                    {turn.events.map((e, i) => (
-                      <li key={i} className="flex items-start gap-2 font-mono text-xs">
-                        <span aria-hidden="true">
-                          {e.kind === 'reasoning' ? '🧠' : e.kind === 'tool_call' ? '🔧' : '✅'}
-                        </span>
-                        <span className="min-w-0 flex-1 text-slate-400">{e.label}</span>
-                      </li>
-                    ))}
+                    {turn.events.map((e, i) => {
+                      const icon =
+                        e.kind === 'reasoning'
+                          ? '🧠'
+                          : e.kind === 'tool_call'
+                            ? '🔧'
+                            : e.kind === 'usage'
+                              ? '💰'
+                              : '✅';
+                      const d = stepDetail(e);
+                      return (
+                        <li key={i} className="flex items-start gap-2 font-mono text-xs">
+                          <span aria-hidden="true">{icon}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="text-slate-400">{e.label}</span>
+                            {d && <span className="ml-1 text-slate-500">— {d}</span>}
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ol>
                 </section>
               )}
