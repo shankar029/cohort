@@ -184,3 +184,25 @@ Prerequisite structural changes BEFORE wiring:
 5. **`integrated` is a REQUIRED check** asserting a real integration commit/record; close the fall-through where a non-conflict integration failure or null `completion.hash` still reaches `review`.
 6. **Four statuses: `pass`/`fail`/`skip`(n/a)/`error`(timeout/install/infra).** Only genuine `fail` consumes budget; `error` → one bounded retry then advisory. Keep `build`=`typecheck`. NO coverage% / docs-present / dep-audit in v1 (non-deterministic).
 7. **Route every `moveItem(_,'done')` side-door (Skip/conflict/needs-input) + `forcedAccept` through the chokepoint or a recorded `skipped`/override report.**
+
+---
+
+## 10. IMPLEMENTED (2026-08-29)
+
+- **Slice 1** (`verification.ts` + 11 unit tests) — pure model, 4 statuses.
+- **Slice 2** (`verification_reports` table + store + `GET /workitems/:id/verification`
+  + `GET /projects/:id/verification` + 1 integration test) — auditable trail.
+- **Slice 3+4** (orchestrator wiring) — every gate decision persists a GateReport
+  and emits a `verification` event; recovery budget re-keyed `agent.id → item.id`
+  (`restartedForItem`); `integrated` is a required check that blocks review on a
+  genuine integration failure; all Skip side-doors record an override report.
+- **Slice 6** (harness) — asserts on persisted reports; `tasksDoneWithFailingGate`
+  invariant; new `gate-enforcement` scenario (fake self-test passes 6/6, 10 reports).
+
+Full suite: **170 passing**. tsc/eslint/prettier clean.
+
+### Deferred (follow-ups, not blocking)
+- Epic-level integrated authority report in `finalizeEpic` (Q2 authority split) +
+  collapsing `epicBuildIter`/`epicAcceptIter` into one `epicRemediationIter`.
+- A board/detail UI gate badge from the report.
+- Real-LLM `gate-enforcement` convergence run.

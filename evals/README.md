@@ -51,6 +51,14 @@ npm run eval -- smoke               # quickest real end-to-end check
   system delivers **faithfully**: it must scope streams itself (no ux / frontend
   / researcher tasks — I1/I6) and honor the request's hard constraints — **no
   external runtime deps, no UI files, and in-memory / no disk writes** (I2/I7).
+  Also asserts the **verification-gate invariants** (below).
+- **`gate-enforcement`** — reproduces the live expense-tracker run: a headless,
+  in-memory, dependency-free API that **tempts** the model into disk persistence
+  and a web framework. Asserts the deterministic gate ran and left a durable audit
+  trail, that **no task ever sits terminal with a failing gate**
+  (`tasksDoneWithFailingGate === 0`), and that any delivery stays faithful (no
+  deps, in-memory, no UI). This is the regression guard for the verification-gate
+  framework.
 - **`brownfield`** — a focused, convention-respecting change on an **existing**
   medium repo. Validates that agents study and match the established structure,
   style, and design patterns instead of reinventing. Point it at any repo with
@@ -85,5 +93,5 @@ fixes back into the app (see `PLAN-correctness.md`).
 - `harness.mjs` — engine: server lifecycle, API/WS client, monitor, scoring,
   repo helpers.
 - `run.mjs` — CLI + scenario registry (`smoke`, `greenfield`, `headless`,
-  `brownfield`).
+  `gate-enforcement`, `brownfield`).
 - `reports/` — generated reports (git-ignored).
