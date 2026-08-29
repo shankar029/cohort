@@ -207,6 +207,19 @@ CREATE TABLE IF NOT EXISTS acceptance_criteria (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS verification_reports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL,
+  agent_id TEXT,
+  scope TEXT NOT NULL,
+  stream TEXT,
+  passed INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  checks TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 /** Indexes created AFTER migrations so they can reference migrated columns. */
@@ -229,6 +242,8 @@ CREATE INDEX IF NOT EXISTS idx_work_usage_project ON work_usage(project_id);
 CREATE INDEX IF NOT EXISTS idx_work_usage_item ON work_usage(work_item_id);
 CREATE INDEX IF NOT EXISTS idx_work_usage_agent ON work_usage(project_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_criteria_epic ON acceptance_criteria(epic_id);
+CREATE INDEX IF NOT EXISTS idx_verification_item ON verification_reports(work_item_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_verification_project ON verification_reports(project_id, created_at);
 `;
 
 /** Additive column migrations for databases created by an earlier schema. */

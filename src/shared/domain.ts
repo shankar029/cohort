@@ -337,6 +337,33 @@ export interface AcceptanceCriterion {
   updatedAt: string;
 }
 
+/** A single deterministic verification check within a gate report. */
+export interface VerificationCheck {
+  id: string;
+  severity: 'required' | 'advisory';
+  status: 'pass' | 'fail' | 'skip' | 'error';
+  detail: string;
+  evidence?: unknown;
+}
+
+/**
+ * Persisted, auditable record of a verification gate decision for a work item.
+ * A task/epic may not reach a terminal state without a passing (or explicitly
+ * overridden) report; the history is append-only so a run is fully auditable.
+ */
+export interface VerificationReportRecord {
+  id: string;
+  projectId: string;
+  workItemId: string;
+  agentId: string | null;
+  scope: 'task' | 'epic';
+  stream: string | null;
+  passed: boolean;
+  outcome: 'passed' | 'failed' | 'skipped';
+  checks: VerificationCheck[];
+  createdAt: string;
+}
+
 /**
  * Per-epic delivery/parallelism telemetry, recorded when an epic merges. Used to
  * decide whether finer decomposition (more tasks per stream) would actually pay

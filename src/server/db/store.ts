@@ -18,6 +18,8 @@ import type {
   PrStatus,
   PrComment,
   AcceptanceCriterion,
+  VerificationReportRecord,
+  VerificationCheck,
   EpicMetrics,
   Question,
   Notification,
@@ -935,6 +937,108 @@ export class Store {
 
   deleteCriteria(epicId: string): void {
     this.db.prepare(`DELETE FROM acceptance_criteria WHERE epic_id=?`).run(epicId);
+  }
+
+  /* verification reports: append-only audit of every gate decision. */
+  insertVerification(p: {
+    projectId: string;
+    workItemId: string;
+    agentId: string | null;
+    scope: 'task' | 'epic';
+    stream: string | null;
+    passed: boolean;
+    outcome: 'passed' | 'failed' | 'skipped';
+    checks: VerificationCheck[];
+  }): VerificationReportRecord {
+    const ts = now();
+    const rid = id('vr');
+    this.db
+      .prepare(
+        `INSERT INTO verification_reports
+         (id,project_id,work_item_id,agent_id,scope,stream,passed,outcome,checks,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        rid,
+        p.projectId,
+        p.workItemId,
+        p.agentId,
+        p.scope,
+        p.stream,
+        p.passed ? 1 : 0,
+        p.outcome,
+        JSON.stringify(p.checks),
+        ts,
+      );
+    return {
+      id: rid,
+      projectId: p.projectId,
+      workItemId: p.workItemId,
+      agentId: p.agentId,
+      scope: p.scope,
+      stream: p.stream,
+      passed: p.passed,
+      outcome: p.outcome,
+      checks: p.checks,
+      createdAt: ts,
+    };
+  }
+
+  private rowToVerification(r: {
+    id: string;
+    project_id: string;
+    work_item_id: string;
+    agent_id: string | null;
+    scope: string;
+    stream: string | null;
+    passed: number;
+    outcome: string;
+    checks: string;
+    created_at: string;
+  }): VerificationReportRecord {
+    let checks: VerificationCheck[] = [];
+    try {
+      checks = JSON.parse(r.checks) as VerificationCheck[];
+    } catch {
+      checks = [];
+    }
+    return {
+      id: r.id,
+      projectId: r.project_id,
+      workItemId: r.work_item_id,
+      agentId: r.agent_id,
+      scope: r.scope as 'task' | 'epic',
+      stream: r.stream,
+      passed: r.passed === 1,
+      outcome: r.outcome as 'passed' | 'failed' | 'skipped',
+      checks,
+      createdAt: r.created_at,
+    };
+  }
+
+  listVerification(workItemId: string): VerificationReportRecord[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM verification_reports WHERE work_item_id=? ORDER BY created_at ASC`)
+      .all(workItemId) as Parameters<Store['rowToVerification']>[0][];
+    return rows.map((r) => this.rowToVerification(r));
+  }
+
+  latestVerification(workItemId: string): VerificationReportRecord | null {
+    const r = this.db
+      .prepare(
+        `SELECT * FROM verification_reports WHERE work_item_id=? ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(workItemId) as Parameters<Store['rowToVerification']>[0] | undefined;
+    return r ? this.rowToVerification(r) : null;
+  }
+
+  listProjectVerification(projectId: string, limit = 200): VerificationReportRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM verification_reports WHERE project_id=? ORDER BY created_at DESC LIMIT ?`,
+      )
+      .all(projectId, limit) as Parameters<Store['rowToVerification']>[0][];
+    return rows.map((r) => this.rowToVerification(r));
   }
 
   /* events */

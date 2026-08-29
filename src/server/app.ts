@@ -305,6 +305,14 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     return { criteria: store.listCriteria(workItemId) };
   });
 
+  app.get('/api/workitems/:workItemId/verification', async (req) => {
+    const { workItemId } = req.params as { workItemId: string };
+    return {
+      latest: store.latestVerification(workItemId),
+      history: store.listVerification(workItemId),
+    };
+  });
+
   app.get('/api/workitems/:workItemId/metrics', async (req) => {
     const { workItemId } = req.params as { workItemId: string };
     return { metrics: store.getEpicMetrics(workItemId) ?? null };
@@ -314,6 +322,13 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { id } = req.params as { id: string };
     requireProject(id);
     return { metrics: store.listEpicMetrics(id) };
+  });
+
+  app.get('/api/projects/:id/verification', async (req) => {
+    const { id } = req.params as { id: string };
+    requireProject(id);
+    const limit = Number((req.query as { limit?: string }).limit ?? 200);
+    return { reports: store.listProjectVerification(id, limit) };
   });
 
   app.get('/api/projects/:id/git', async (req) => {
