@@ -1,16 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { ApprovalMode } from '@shared/index';
-import { useApp } from '../state';
+import { useApp, useBundle } from '../state';
 import { Banner, ModelSelect } from '../components/ui';
 
 export function SettingsPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { state, updateProject, deleteProject } = useApp();
+  const { state, updateProject, updateAgent, deleteProject } = useApp();
+  const bundle = useBundle(projectId);
   const project = state.projects.find((p) => p.id === projectId);
 
   const [defaultModel, setDefaultModel] = useState('');
+  const [applyToAll, setApplyToAll] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('auto-workspace');
   const [extraRoots, setExtraRoots] = useState('');
   const [testCommand, setTestCommand] = useState('');
@@ -50,6 +52,15 @@ export function SettingsPage(): React.JSX.Element {
         buildCommand: buildCommand.trim() || undefined,
         recordSessions,
       });
+      // Optionally re-point every existing agent at the new project default, so
+      // changing the model here is a true per-project switch rather than a
+      // new-agents-only default.
+      if (applyToAll) {
+        await Promise.all(
+          bundle.agents.map((a) => updateAgent(project.id, a.id, { model: defaultModel })),
+        );
+        setApplyToAll(false);
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -67,7 +78,7 @@ export function SettingsPage(): React.JSX.Element {
       <form className="mx-auto max-w-2xl space-y-5 p-6" onSubmit={save}>
         <div>
           <label className="label" htmlFor="s-model">
-            Default model (for new agents)
+            Default model
           </label>
           <ModelSelect
             id="s-model"
@@ -75,6 +86,24 @@ export function SettingsPage(): React.JSX.Element {
             value={defaultModel}
             onChange={setDefaultModel}
           />
+          <label className="mt-2 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              data-testid="apply-model-all"
+              checked={applyToAll}
+              onChange={(e) => setApplyToAll(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium text-slate-200">
+                Also apply to all {bundle.agents.length} existing agent
+                {bundle.agents.length === 1 ? '' : 's'}
+              </span>
+              <span className="block text-xs text-slate-500">
+                Otherwise this model is only the default for agents you add from now on.
+              </span>
+            </span>
+          </label>
         </div>
 
         <div>
