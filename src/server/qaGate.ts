@@ -122,6 +122,48 @@ export function runProjectBuild(
   return runResolved(resolveBuildCommand(dir, override), dir, timeoutMs);
 }
 
+/**
+ * Ensure a project directory's dependencies are installed before a build/test
+ * gate runs there. The integrated epic clone (and freshly-forked task clones)
+ * start with source only - `node_modules` is git-ignored, never committed - so a
+ * project whose build/test command needs installed tooling (`tsc`, `vitest`, `tsx`)
+ * would spuriously fail the gate. This installs deps ONLY when:
+ *   - a package.json exists AND declares dependencies/devDependencies, AND
+ *   - `node_modules` is absent (so it is a cheap no-op once installed).
+ * Prefers `npm ci` when a lockfile is present, else `npm install`. Best-effort:
+ * a script-less / dependency-less project is a graceful no-op (`ran: false`), and
+ * an install failure is reported but left for the downstream gate to surface.
+ */
+export function ensureDependencies(dir: string, timeoutMs = 300_000): Promise<TestRunResult> {
+  try {
+    const pkgPath = path.join(dir, 'package.json');
+    if (!fs.existsSync(pkgPath)) {
+      return Promise.resolve({ ran: false, passed: true, command: '', output: '' });
+    }
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const depCount =
+      Object.keys(pkg.dependencies ?? {}).length + Object.keys(pkg.devDependencies ?? {}).length;
+    if (depCount === 0) {
+      return Promise.resolve({ ran: false, passed: true, command: '', output: '' });
+    }
+    if (fs.existsSync(path.join(dir, 'node_modules'))) {
+      return Promise.resolve({
+        ran: false,
+        passed: true,
+        command: '',
+        output: 'node_modules present',
+      });
+    }
+    const cmd = fs.existsSync(path.join(dir, 'package-lock.json')) ? 'npm ci' : 'npm install';
+    return runResolved(cmd, dir, timeoutMs);
+  } catch {
+    return Promise.resolve({ ran: false, passed: true, command: '', output: '' });
+  }
+}
+
 function runResolved(
   command: string | null,
   dir: string,

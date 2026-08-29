@@ -6,6 +6,7 @@ import {
   resolveTestCommand,
   runProjectTests,
   resolveBuildCommand,
+  ensureDependencies,
 } from '../../src/server/qaGate.js';
 
 let dir: string;
@@ -132,5 +133,32 @@ describe('runProjectTests', () => {
     expect(r.ran).toBe(true);
     expect(r.passed).toBe(true);
     expect(r.output).not.toContain('[timed out]');
+  });
+});
+
+describe('ensureDependencies (I3)', () => {
+  it('is a no-op when there is no package.json', async () => {
+    const r = await ensureDependencies(dir);
+    expect(r.ran).toBe(false);
+    expect(r.passed).toBe(true);
+  });
+
+  it('is a no-op when package.json declares no dependencies', async () => {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: {} }));
+    const r = await ensureDependencies(dir);
+    expect(r.ran).toBe(false);
+    expect(r.passed).toBe(true);
+  });
+
+  it('is a no-op when node_modules already exists', async () => {
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'x', dependencies: { left_pad: '1.0.0' } }),
+    );
+    fs.mkdirSync(path.join(dir, 'node_modules'));
+    const r = await ensureDependencies(dir);
+    expect(r.ran).toBe(false);
+    expect(r.passed).toBe(true);
+    expect(r.output).toContain('node_modules present');
   });
 });

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { runProjectBuild, runProjectTests } from './qaGate.js';
+import { runProjectBuild, runProjectTests, ensureDependencies } from './qaGate.js';
 import { sanitizeDag } from './dag.js';
 import { scopeStreams } from './streamScope.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
@@ -2429,6 +2429,7 @@ class ProjectOrchestrator {
     // separately at epic finish. A script-less project is a graceful no-op.
     if (gate && produced && worktree && item.parentId) {
       {
+        await this.ensureGateDeps(runDir, agent.id, item.id);
         const build = await runProjectBuild(
           runDir,
           this.project().settings.buildCommand,
@@ -2503,6 +2504,7 @@ class ProjectOrchestrator {
     // see the gap. This runs in the same dir the agent worked in (epic clone or
     // repo checkout), after QA has had its chance to add/fix tests.
     if (qaStream) {
+      await this.ensureGateDeps(runDir, agent.id, item.id);
       const test = await runProjectTests(
         runDir,
         this.project().settings.testCommand,
@@ -3115,6 +3117,7 @@ class ProjectOrchestrator {
     // isolation yet break once merged together - this is the catch. A script-less
     // project is a graceful no-op.
     if (wt && !this.forcedAccept.has(epic.id)) {
+      await this.ensureGateDeps(wt.path, lead.id, epic.id);
       const built = await runProjectBuild(
         wt.path,
         this.project().settings.buildCommand,
@@ -3146,6 +3149,40 @@ class ProjectOrchestrator {
     this.epicAcceptIter.delete(epic.id);
     this.epicBuildIter.delete(epic.id);
     await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+  }
+
+  /**
+   * Install a gate directory's dependencies if they are missing before a
+   * build/test gate runs there. The integrated epic clone and freshly-forked task
+   * clones carry source only (node_modules is git-ignored), so a project whose
+   * gate needs installed tooling (tsc/vitest/tsx) would spuriously fail. No-op
+   * once node_modules exists. Best-effort - emits an event when it installs.
+   */
+  private async ensureGateDeps(
+    dir: string,
+    agentId: string,
+    workItemId: string | null,
+  ): Promise<void> {
+    try {
+      const res = await ensureDependencies(
+        dir,
+        Number(process.env.ATEAM_DEP_INSTALL_TIMEOUT_MS ?? 300_000),
+      );
+      if (res.ran) {
+        const tail = res.output.split('\n').slice(-15).join('\n').slice(-1500);
+        this.emitEvent(
+          agentId,
+          'system',
+          res.passed
+            ? `Installed dependencies before gate: \`${res.command}\``
+            : `Dependency install failed before gate: \`${res.command}\``,
+          res.passed ? null : tail ? { output: tail } : null,
+          workItemId,
+        );
+      }
+    } catch {
+      /* best-effort: the downstream gate will surface any real failure */
+    }
   }
 
   /**
