@@ -12,6 +12,8 @@ import {
   Settings,
   Pause,
   Play,
+  PanelLeftClose,
+  PanelLeft,
   type LucideIcon,
 } from 'lucide-react';
 import { useApp, useBundle } from './state';
@@ -45,6 +47,19 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
   const { state } = useApp();
   const bundle = useBundle(projectId);
   const project = state.projects.find((p) => p.id === projectId);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem('ateam:navCollapsed') === '1',
+  );
+  const toggleCollapsed = (): void =>
+    setCollapsed((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem('ateam:navCollapsed', next ? '1' : '0');
+      } catch {
+        /* ignore quota/availability */
+      }
+      return next;
+    });
   const working = bundle.agents.filter((a) => a.status === 'working').length;
   const needsInput = bundle.questions.filter((q) => q.status === 'pending').length;
   const unread = bundle.notifications.filter((n) => !n.read).length;
@@ -64,11 +79,20 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
   };
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-surface-border bg-surface-1">
-      <div className="border-b border-surface-border px-4 py-4">
+    <aside
+      className={`flex h-full shrink-0 flex-col border-r border-surface-border bg-surface-1 transition-[width] duration-150 ${
+        collapsed ? 'w-16' : 'w-64'
+      }`}
+    >
+      <div
+        className={`flex items-center border-b border-surface-border py-4 ${
+          collapsed ? 'justify-center px-2' : 'justify-between px-4'
+        }`}
+      >
         <NavLink
           to="/"
           className="flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-100"
+          title="A Team"
         >
           <span
             className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg"
@@ -77,40 +101,72 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
           >
             <img src="/brand/mark.png" alt="" className="h-full w-full object-contain" />
           </span>
-          <span>A Team</span>
+          {!collapsed && <span>A Team</span>}
         </NavLink>
-      </div>
-      <div className="border-b border-surface-border p-3">
-        <label className="label" htmlFor="project-switch">
-          Project
-        </label>
-        <select
-          id="project-switch"
-          className="input"
-          value={projectId}
-          onChange={(e) => {
-            window.location.href = `/p/${e.target.value}/chat`;
-          }}
-        >
-          {state.projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        {project && (
-          <p className="mt-2 truncate text-xs text-slate-500" title={project.repoDir}>
-            {project.repoDir}
-          </p>
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+            data-testid="nav-collapse"
+            className="rounded-md p-1 text-slate-500 hover:bg-surface-2 hover:text-slate-200"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
         )}
       </div>
-      <nav className="flex-1 space-y-0.5 p-3" aria-label="Project navigation">
+      {collapsed && (
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          title="Expand sidebar"
+          aria-label="Expand sidebar"
+          data-testid="nav-expand"
+          className="mx-auto mt-2 rounded-md p-1.5 text-slate-500 hover:bg-surface-2 hover:text-slate-200"
+        >
+          <PanelLeft className="h-4 w-4" />
+        </button>
+      )}
+      {!collapsed && (
+        <div className="border-b border-surface-border p-3">
+          <label className="label" htmlFor="project-switch">
+            Project
+          </label>
+          <select
+            id="project-switch"
+            className="input"
+            value={projectId}
+            onChange={(e) => {
+              window.location.href = `/p/${e.target.value}/chat`;
+            }}
+          >
+            {state.projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {project && (
+            <p className="mt-2 truncate text-xs text-slate-500" title={project.repoDir}>
+              {project.repoDir}
+            </p>
+          )}
+        </div>
+      )}
+      <nav
+        className={`flex-1 space-y-0.5 p-3 ${collapsed ? 'px-2' : ''}`}
+        aria-label="Project navigation"
+      >
         {NAV.map((item) => (
           <NavLink
             key={item.to}
             to={`/p/${projectId}/${item.to}`}
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) =>
-              `nav-link ${isActive ? 'nav-link-active' : 'nav-link-idle'}`
+              `nav-link ${isActive ? 'nav-link-active' : 'nav-link-idle'} ${
+                collapsed ? 'justify-center' : ''
+              }`
             }
           >
             {({ isActive }) => (
@@ -123,27 +179,35 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
                 )}
                 <span className="flex items-center gap-2.5">
                   <item.icon aria-hidden="true" className="h-[1.05rem] w-[1.05rem] shrink-0" />{' '}
-                  {item.label}
+                  {!collapsed && item.label}
                 </span>
                 {item.to === 'board' && needsInput > 0 && (
-                  <span className="rounded-full bg-status-input px-1.5 text-xs font-semibold text-black">
-                    {needsInput}
+                  <span
+                    className={`rounded-full bg-status-input text-xs font-semibold text-black ${
+                      collapsed ? 'absolute right-1 top-1 h-2 w-2 p-0' : 'px-1.5'
+                    }`}
+                  >
+                    {!collapsed && needsInput}
                   </span>
                 )}
                 {item.to === 'chat' && unreadThreads > 0 && (
                   <span
-                    className="rounded-full bg-accent-500 px-1.5 text-xs font-semibold text-white"
+                    className={`rounded-full bg-accent-500 text-xs font-semibold text-white ${
+                      collapsed ? 'absolute right-1 top-1 h-2 w-2 p-0' : 'px-1.5'
+                    }`}
                     data-testid="unread-threads-badge"
                   >
-                    {unreadThreads > 99 ? '99+' : unreadThreads}
+                    {!collapsed && (unreadThreads > 99 ? '99+' : unreadThreads)}
                   </span>
                 )}
                 {item.to === 'notifications' && unread > 0 && (
                   <span
-                    className="rounded-full bg-accent-500 px-1.5 text-xs font-semibold text-white"
+                    className={`rounded-full bg-accent-500 text-xs font-semibold text-white ${
+                      collapsed ? 'absolute right-1 top-1 h-2 w-2 p-0' : 'px-1.5'
+                    }`}
                     data-testid="unread-badge"
                   >
-                    {unread}
+                    {!collapsed && unread}
                   </span>
                 )}
               </>
@@ -166,37 +230,47 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
         >
           {paused ? (
             <>
-              <Play className="h-3.5 w-3.5" /> Resume team
+              <Play className="h-3.5 w-3.5" /> {!collapsed && 'Resume team'}
             </>
           ) : (
             <>
-              <Pause className="h-3.5 w-3.5" /> Pause team
+              <Pause className="h-3.5 w-3.5" /> {!collapsed && 'Pause team'}
             </>
           )}
         </button>
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span
-                className={`h-2 w-2 rounded-full ${state.wsConnected ? 'bg-status-done' : 'bg-status-blocked'}`}
-              />
-              {state.wsConnected ? 'Live' : 'Reconnecting…'}
-            </div>
-            <div className="mt-1 flex items-center gap-1.5">
-              {paused ? (
-                <span className="text-status-working">Paused — no new work</span>
-              ) : working > 0 ? (
-                <>
-                  <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-status-working" />
-                  {`${working} agent${working > 1 ? 's' : ''} working`}
-                </>
-              ) : (
-                'All agents idle'
-              )}
-            </div>
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-2">
+            <span
+              title={state.wsConnected ? 'Live' : 'Reconnecting…'}
+              className={`h-2 w-2 rounded-full ${state.wsConnected ? 'bg-status-done' : 'bg-status-blocked'}`}
+            />
+            <ThemeToggle />
           </div>
-          <ThemeToggle />
-        </div>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`h-2 w-2 rounded-full ${state.wsConnected ? 'bg-status-done' : 'bg-status-blocked'}`}
+                />
+                {state.wsConnected ? 'Live' : 'Reconnecting…'}
+              </div>
+              <div className="mt-1 flex items-center gap-1.5">
+                {paused ? (
+                  <span className="text-status-working">Paused — no new work</span>
+                ) : working > 0 ? (
+                  <>
+                    <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-status-working" />
+                    {`${working} agent${working > 1 ? 's' : ''} working`}
+                  </>
+                ) : (
+                  'All agents idle'
+                )}
+              </div>
+            </div>
+            <ThemeToggle />
+          </div>
+        )}
       </div>
     </aside>
   );
