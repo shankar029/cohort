@@ -9,10 +9,12 @@ Source: `RUN-ISSUES.md` (live run `prj_IUPzF5KUig-r`, discarded).
 ## Fix order
 - [x] **I1** Scope stream fan-out to the request (drop irrelevant ux/frontend/etc.). `11bb010`
 - [x] **I6** Exclude non-implementing roles (researcher) from code-delivery fan-out. `11bb010`
-- [ ] **I7 + I2** Anchor review/QA/acceptance on the ORIGINAL request + hard-enforce constraints.
-- [ ] **I3** `npm install` in the integrated clone before the build/QA gate.
-- [ ] **I5** Gate contract-consuming tasks on the (bounded) design turn.
-- [ ] **I8** Per-epic review-round budget that escalates instead of looping forever.
+- [x] **I7 + I2** Anchor review/QA/acceptance on the ORIGINAL request + hard-enforce constraints. `4e11e52`
+- [x] **I3** `npm install` in the integrated clone before the build/QA gate. `58ab3ea`
+- [x] **I5** Gate contract-consuming tasks on the (bounded) design turn. `f1ad9f6`
+- [x] **I8** Per-epic review-round budget that escalates instead of looping forever. `64e4ef2`
+
+**Status:** all 8 issues fixed; suite green.
 
 ## Verification
 - `npx tsc -p tsconfig.json --noEmit` clean

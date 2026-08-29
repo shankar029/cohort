@@ -176,3 +176,20 @@ the wrong thing — cost is unbounded in proportion to how far the build drifted
 4. **I3** (install deps before the integrated gate) — small, isolated robustness fix.
 5. **I5** (design-before-contract-consumers) — sequencing refinement.
 6. **I8** (review-round budget) — safety net after I1/I7.
+
+---
+
+## Resolution (all fixed — post-run, 2026-08-28)
+
+| # | Fix | Commit |
+|---|-----|--------|
+| I1 | Scope epic fan-out to relevant streams (drop UI streams for headless) | `11bb010` |
+| I6 | Exclude read-only roles (researcher) from code-delivery fan-out | `11bb010` |
+| I7 | Review anchored on the ORIGINAL request + hard-constraint conformance | `4e11e52` |
+| I2 | Acceptance gate hard-fails constraint deviations; PM extracts hard constraints | `4e11e52` |
+| I3 | `ensureDependencies` installs deps before build/QA gates | `58ab3ea` |
+| I5 | Bounded design barrier for contract-consuming builders | `f1ad9f6` |
+| I8 | Review-round budget escalates to the user instead of silent merge (configurable) | `64e4ef2` |
+| I4 | Mitigated by I1 (fewer siblings) + existing conflict→re-queue path | (via I1) |
+
+Suite after fixes: 141 unit/integration passed (1 skipped); tsc/eslint/prettier clean.
