@@ -193,3 +193,48 @@ the wrong thing — cost is unbounded in proportion to how far the build drifted
 | I4 | Mitigated by I1 (fewer siblings) + existing conflict→re-queue path | (via I1) |
 
 Suite after fixes: 141 unit/integration passed (1 skipped); tsc/eslint/prettier clean.
+
+---
+
+## Run #3 — real-SDK `headless` eval (2026-08-29)
+
+First real-SDK run of the new `headless` faithfulness scenario (in-memory,
+dependency-free URL shortener, full team on purpose). **Interrupted by a host
+sleep** (monitor jumped t+571s -> t+9380s), so merge/completion is INCONCLUSIVE.
+Still surfaced high-value signal:
+
+**Confirmed working**
+- **I1/I6 (stream scoping) — CONFIRMED LIVE.** Decomposition produced streams
+  `backend, devops, docs, qa, reviewer, security` — no `frontend`, no `ux`, no
+  `researcher`. Exactly the behavior that was broken in run #2.
+- The **acceptance gate fired** ("fix: unmet acceptance criteria (11)") — the
+  I2/I7 gate is active.
+
+**NOT satisfied / new issues**
+- **FAITH-1 (product, HIGH): the backend build used `express`** (`src/app.js:1`
+  `const express = require('express')`) despite "ONLY Node's built-in http, no
+  external dependencies." Build-time guardrails did NOT prevent it. The
+  acceptance gate flagged "11 unmet" but ran against an *un-integrated, empty*
+  epic clone, so it caught the ABSENCE of code, not the express violation
+  specifically. -> Enforce the no-external-deps / dependency-manifest check at
+  BUILD/gate time, not only at final acceptance.
+- **FAITH-2 (harness, HIGH — FIXED): faithfulness checks were a false ✅.**
+  `collectDeliverables()`/`analyzeDelivery()` only read the epic clone + default
+  branch, which had NO source (the real impl sat un-integrated in nested
+  `.tasks-<epicId>/wi_*` task clones). So `runtimeDeps:[]`, `uiFileCount:0`,
+  `writesToDisk:false` all passed vacuously. Fixed: harness now enumerates task
+  clones via `cloneDirs()`; re-scoring the same run yields the correct
+  `runtimeDeps:['express']`.
+- **FAITH-3 (product, MED): out-of-scope `ux` fix-task stream.** The acceptance
+  gate's fix task was assigned stream `ux` on a headless project (picked up by
+  the ux-designer). `scopeStreams` runs only at decompose; fix/verify task
+  creation should also be constrained to the scoped/implementing streams.
+
+**Follow-ups**
+1. Enforce no-external-deps at the per-task BUILD gate (manifest + runtime-import
+   scan), so `express` is rejected before review, not just at acceptance.
+2. Constrain fix/verify task stream assignment to the scoped allow-list.
+3. Re-run `headless` on a machine that won't sleep for a conclusive merge outcome
+   (and to see whether the self-healing loop converges to a dep-free build — the
+   interrupted `ux` fix task was already rebuilding a cleaner `src/store.js` +
+   `http-utils.js` version).

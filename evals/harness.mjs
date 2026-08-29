@@ -356,9 +356,47 @@ export class EvalHarness {
   }
 
   /**
+   * Every git clone the team worked in under the worktree root: the per-epic
+   * clone AND the per-task clones nested under `.tasks-<epicId>/wi_<taskId>/`.
+   * Un-integrated task clones are where real source often still lives while an
+   * epic is mid-flight, so faithfulness scoring MUST see them (otherwise an
+   * empty epic clone reads as trivially "faithful").
+   */
+  cloneDirs() {
+    const dirs = [];
+    try {
+      const projDir = path.join(this.worktreeRoot, this.projectId ?? '');
+      if (!fs.existsSync(projDir)) return dirs;
+      for (const name of fs.readdirSync(projDir)) {
+        const full = path.join(projDir, name);
+        try {
+          if (!fs.statSync(full).isDirectory()) continue;
+        } catch {
+          continue;
+        }
+        if (name.startsWith('.tasks-')) {
+          for (const t of fs.readdirSync(full)) {
+            const tf = path.join(full, t);
+            try {
+              if (fs.statSync(tf).isDirectory()) dirs.push(tf);
+            } catch {
+              /* ignore */
+            }
+          }
+        } else {
+          dirs.push(full); // per-epic clone
+        }
+      }
+    } catch {
+      /* no clones / fs unavailable */
+    }
+    return dirs;
+  }
+
+  /**
    * Files the team ADDED or changed, regardless of merge state: new files on the
    * default branch (vs the pre-run baseline) plus files changed on any active
-   * epic-branch clone under the worktree root. Excludes ateam bookkeeping.
+   * epic- OR task-branch clone under the worktree root. Excludes ateam bookkeeping.
    */
   collectDeliverables() {
     const out = new Set();
@@ -368,13 +406,9 @@ export class EvalHarness {
     for (const f of this.gitTrackedFiles(this.repoDir)) {
       if (keep(f) && !this.baselineFiles.has(f)) out.add(f);
     }
-    // 2. Files changed on epic-branch clones that have not merged yet.
+    // 2. Files changed on epic/task clones that have not merged yet.
     try {
-      const projDir = path.join(this.worktreeRoot, this.projectId ?? '');
-      const epicDirs = fs.existsSync(projDir)
-        ? fs.readdirSync(projDir).map((d) => path.join(projDir, d))
-        : [];
-      for (const dir of epicDirs) {
+      for (const dir of this.cloneDirs()) {
         let base = '';
         try {
           base = execFileSync('git', ['merge-base', 'HEAD', 'main'], {
@@ -417,13 +451,7 @@ export class EvalHarness {
   analyzeDelivery(deliverables) {
     const readAnywhere = (rel) => {
       const candidates = [path.join(this.repoDir, rel)];
-      try {
-        const projDir = path.join(this.worktreeRoot, this.projectId ?? '');
-        if (fs.existsSync(projDir))
-          for (const d of fs.readdirSync(projDir)) candidates.push(path.join(projDir, d, rel));
-      } catch {
-        /* ignore */
-      }
+      for (const d of this.cloneDirs()) candidates.push(path.join(d, rel));
       for (const c of candidates) {
         try {
           if (fs.existsSync(c) && fs.statSync(c).isFile()) return fs.readFileSync(c, 'utf8');
