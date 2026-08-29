@@ -386,7 +386,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     [],
   );
 
-  const value = useMemo<AppContextValue>(() => {
+  const value = useMemo<Omit<AppContextValue, 'state'>>(() => {
     const refreshProjects = async (): Promise<void> => {
       const { projects } = await api.listProjects();
       dispatch({ type: 'SET_PROJECTS', projects });
@@ -425,7 +425,6 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     };
 
     return {
-      state,
       refreshProjects,
       ensureBundle,
       createProject: async (input) => {
@@ -496,7 +495,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       markNotificationRead: async (notificationId) => {
         await api.markNotificationRead(notificationId);
-        for (const [pid, b] of Object.entries(state.bundles)) {
+        for (const [pid, b] of Object.entries(stateRef.current.bundles)) {
           if (b.notifications.some((n) => n.id === notificationId)) {
             dispatch({
               type: 'SET_BUNDLE',
@@ -513,7 +512,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       },
       markAllNotificationsRead: async (projectId) => {
         await api.markAllNotificationsRead(projectId);
-        const b = state.bundles[projectId];
+        const b = stateRef.current.bundles[projectId];
         if (b)
           dispatch({
             type: 'SET_BUNDLE',
@@ -522,9 +521,16 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           });
       },
     };
-  }, [state, markThreadsSeen, loadThreadMessages]);
+  }, [markThreadsSeen, loadThreadMessages]);
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  // Stable action identities (above) + a thin state wrapper here. Because the
+  // action closures never change reference, effects/memoized children that depend
+  // on them stop re-running on every WS batch - only components that actually read
+  // `state` re-render on live updates, which is what kept page-switches snappy
+  // while agents work.
+  const fullValue = useMemo<AppContextValue>(() => ({ state, ...value }), [state, value]);
+
+  return <AppContext.Provider value={fullValue}>{children}</AppContext.Provider>;
 }
 
 export function useApp(): AppContextValue {
