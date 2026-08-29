@@ -321,6 +321,49 @@ describe('QA sign-off is gated on the project test command actually passing', ()
   });
 });
 
+describe('deterministic constraint gate (FAITH-1)', () => {
+  it('blocks a task that violates a hard constraint (external dependency)', async () => {
+    const projectId = await createProject('Constraint');
+    // A backend builder that ships an external dependency (express) despite the
+    // request's explicit dependency-free requirement.
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/agents`,
+      payload: {
+        name: 'backend',
+        displayName: 'Backend Engineer',
+        prompt:
+          'You build the service. ' +
+          "[[EMIT_FILE: src/app.js | const express = require('express');\\nconst app = express();\\nmodule.exports = app;]]",
+      },
+    });
+
+    let merged = false;
+    const unsub = ctx.bus.subscribe((m) => {
+      if (m.type === 'pull_request.updated' && m.pr.status === 'merged') merged = true;
+    });
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: {
+        content:
+          "Build an in-memory URL shortener using ONLY Node's built-in http module - " +
+          'no external dependencies. This is a headless API, there is no UI.',
+      },
+    });
+
+    // The deterministic scan catches the express import BEFORE review.
+    const ev = await ctx.waitFor(
+      (m) => m.type === 'event.appended' && /Constraint gate FAILED/.test(m.event.summary),
+      20000,
+    );
+    expect(ev.type === 'event.appended' && ev.event.summary).toMatch(/no-external-deps/);
+    unsub();
+    expect(merged).toBe(false);
+  });
+});
+
 describe('brownfield epics converge on a single concrete build task', () => {
   it('creates ONE primary build task (not a per-stream fan-out) on an existing codebase', async () => {
     // Seed the repo with substantial existing source so it reads as brownfield.

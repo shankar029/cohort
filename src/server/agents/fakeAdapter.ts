@@ -161,6 +161,33 @@ class FakeAgentSession implements AgentSession {
       }
     }
 
+    // [[EMIT_FILE: relpath | content]] — test hook: write an arbitrary file into
+    // the working clone (used to exercise deterministic gates like the constraint
+    // scan with real, violating source). Read from persona AND prompt; may repeat.
+    // Literal "\n" sequences become newlines so multi-line files fit on one marker.
+    {
+      const emitRe = /\[\[EMIT_FILE:\s*([^|\]]+)\|([^\]]*)\]\]/g;
+      const emitSource = `${this.config.persona}\n${prompt}`;
+      let em: RegExpExecArray | null;
+      while ((em = emitRe.exec(emitSource))) {
+        try {
+          const rel = em[1]!.trim();
+          const content = em[2]!.replace(/\\n/g, '\n');
+          const abs = path.join(this.config.workingDirectory, rel);
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, content);
+          onEvent({ kind: 'tool_call', toolName: 'edit_file', detail: { file: rel } });
+          onEvent({
+            kind: 'tool_result',
+            toolName: 'edit_file',
+            detail: { success: true, output: `wrote ${rel}` },
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+
     let extra = '';
     const askUser = /\[\[ASK_USER\]\]/.test(prompt);
     if (askUser || /\[\[ASK\]\]/.test(prompt)) {

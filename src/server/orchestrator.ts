@@ -3,6 +3,12 @@ import fs from 'node:fs';
 import { runProjectBuild, runProjectTests, ensureDependencies } from './qaGate.js';
 import { sanitizeDag } from './dag.js';
 import { scopeStreams } from './streamScope.js';
+import {
+  detectConstraints,
+  checkClone,
+  summarizeViolations,
+  type Constraint,
+} from './constraints.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { AcceptanceCriterion, CriterionStatus } from '@shared/index';
@@ -1735,6 +1741,26 @@ class ProjectOrchestrator {
     return this.specialists().filter((s) => s.name !== 'pm' && s.name !== 'architect');
   }
 
+  /**
+   * Assignable specialists SCOPED to an epic's request (FAITH-3). Fix/verify
+   * tasks created after decomposition must respect the same relevance scoping the
+   * initial fan-out used - otherwise a headless epic can route an acceptance-fix
+   * to the ux-designer (live run #3). Verifiers stay eligible; irrelevant builders
+   * (ux/frontend on a headless request, read-only roles) are dropped. Never
+   * strands: falls back to all assignable specialists if scoping empties the set.
+   */
+  private scopedSpecialists(epic: WorkItem): Agent[] {
+    const specs = this.assignableSpecialists();
+    const verifiers = specs.filter((s) => /^(qa|reviewer|security)$/.test(s.name));
+    const builders = specs.filter((s) => !verifiers.includes(s));
+    const scope = scopeStreams(
+      `${epic.title ?? ''}\n${epic.description ?? ''}`,
+      builders.map((s) => s.name),
+    );
+    const kept = specs.filter((s) => verifiers.includes(s) || scope.keep.includes(s.name));
+    return kept.length ? kept : specs;
+  }
+
   /** Route a task to a specialist by stream tag, else to the least-loaded one. */
   private pickAgentForItem(item: WorkItem, specs: Agent[]): Agent | undefined {
     const stream = item.stream ?? /^\[(\w[\w-]*)\]/.exec(item.title)?.[1] ?? null;
@@ -2514,6 +2540,73 @@ class ProjectOrchestrator {
             null,
             item.id,
           );
+
+        // Deterministic CONSTRAINT gate (FAITH-1): the code must not violate the
+        // request's hard constraints ("only built-in http / no external deps",
+        // "in-memory / no persistence", "headless / no UI"). This is a pure
+        // filesystem scan - no LLM, no trust - so an `express` import on a
+        // dependency-free task is caught HERE, before review, instead of being
+        // rationalized away downstream. Same restart-once-then-escalate policy as
+        // the build gate. Only fires when a constraint was actually stated.
+        const constraints = this.epicConstraints(item.parentId);
+        if (constraints.length > 0) {
+          const violations = checkClone(runDir, constraints);
+          if (violations.length > 0) {
+            const summary = summarizeViolations(violations);
+            this.emitEvent(
+              agent.id,
+              'system',
+              `Constraint gate FAILED: ${summary} - blocking review`,
+              { violations },
+              item.id,
+            );
+            this.troubleSignal(agent.id);
+            if (!this.restartedOnce.has(agent.id)) {
+              this.restartedOnce.add(agent.id);
+              await this.restartAgentSession(
+                agent.id,
+                `hard-constraint violation on "${item.title}": ${summary}`,
+              );
+              return;
+            }
+            this.setStatus(agent.id, 'needs_input');
+            this.awaitingInput.add(item.id);
+            this.notify(
+              'question',
+              `Constraint blocked: ${item.title}`,
+              `${agent.displayName}'s delivery violates a hard constraint: ${summary}.`,
+              'board',
+              item.id,
+              agent.id,
+            );
+            void this.raiseQuestion(
+              agent.id,
+              `"${item.title}" violates a hard constraint from the request (${summary}) even after a ` +
+                `session restart. How should we proceed?`,
+              ['Retry', 'Skip this task'],
+            ).then((ans) => {
+              this.awaitingInput.delete(item.id);
+              this.setStatus(agent.id, 'idle');
+              if (ans.toLowerCase().startsWith('skip')) {
+                this.clearTrouble(agent.id);
+                this.moveItem(item.id, 'done');
+                this.maybeFinishEpic(item.parentId);
+              } else {
+                this.restartedOnce.delete(agent.id);
+                this.moveItem(item.id, 'todo');
+                this.pokeLead();
+              }
+            });
+            return;
+          }
+          this.emitEvent(
+            agent.id,
+            'system',
+            `Constraint gate: honored ${constraints.map((c) => c.kind).join(', ')}`,
+            null,
+            item.id,
+          );
+        }
       }
     }
 
@@ -3210,6 +3303,27 @@ class ProjectOrchestrator {
   }
 
   /**
+   * Detect the machine-checkable hard constraints for an epic from its request
+   * text + acceptance criteria. Memoized per epic (the source text is immutable
+   * once decomposed) so the per-task constraint gate stays cheap. Returns [] when
+   * the parent isn't an epic or nothing is stated.
+   */
+  private epicConstraints(parentId: string | null): Constraint[] {
+    if (!parentId) return [];
+    const cached = this.epicConstraintCache.get(parentId);
+    if (cached) return cached;
+    const epic = this.deps.store.getWorkItem(parentId);
+    if (!epic || epic.kind !== 'epic') return [];
+    const texts: Array<string | null | undefined> = [epic.title, epic.description];
+    for (const c of this.deps.store.listCriteria(parentId)) texts.push(c.text);
+    const cons = detectConstraints(texts);
+    this.epicConstraintCache.set(parentId, cons);
+    return cons;
+  }
+
+  private readonly epicConstraintCache = new Map<string, Constraint[]>();
+
+  /**
    * Poll for the epic's Architect design up to timeoutMs, resolving early the
    * moment it lands (or the epic is discarded). Bounded so a contract-consuming
    * builder never waits forever on a design turn that stalls.
@@ -3446,7 +3560,7 @@ class ProjectOrchestrator {
   private createFixTask(epic: WorkItem, title: string, description: string, lead: Agent): void {
     const target = this.pickAgentForItem(
       { stream: null } as WorkItem,
-      this.assignableSpecialists(),
+      this.scopedSpecialists(epic),
     );
     const fix = this.deps.store.createWorkItem({
       projectId: this.projectId,

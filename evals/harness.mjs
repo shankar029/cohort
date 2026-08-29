@@ -18,7 +18,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { builtinModules } from 'node:module';
 import { WebSocket } from 'ws';
+
+const BUILTIN_MODULES = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(__dirname, '..');
@@ -479,6 +482,24 @@ export class EvalHarness {
       if (/\b(writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream)\b/.test(src)) {
         writesToDisk = true;
         break;
+      }
+    }
+    // External bare imports in shipped (non-test) source - catches a dependency
+    // the build used WITHOUT declaring it in package.json. Deterministic, mirrors
+    // src/server/constraints.ts so the eval never has to trust the model.
+    const importRe = /\b(?:import\b[^'"]*?from\s*|import\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
+    for (const f of deliverables.filter(
+      (f) => /\.(js|mjs|cjs|jsx|ts|tsx)$/i.test(f) && !/(test|spec|\.d\.ts$)/i.test(f),
+    )) {
+      const src = readAnywhere(f);
+      importRe.lastIndex = 0;
+      let m;
+      while ((m = importRe.exec(src))) {
+        const spec = m[1];
+        if (!spec || spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('node:'))
+          continue;
+        const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+        if (!BUILTIN_MODULES.has(pkg)) runtimeDeps.add(pkg);
       }
     }
     return { uiFileCount: uiFiles.length, runtimeDeps: [...runtimeDeps], writesToDisk };
