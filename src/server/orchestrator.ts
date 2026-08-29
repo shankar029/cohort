@@ -9,6 +9,15 @@ import {
   summarizeViolations,
   type Constraint,
 } from './constraints.js';
+import {
+  assembleChecks,
+  makeReport,
+  overrideReport,
+  requiredChecks,
+  summarizeReport,
+  type CheckStatus,
+  type GateScope,
+} from './verification.js';
 import type { Agent, NotificationType, Project, Thread, WorkItem } from '@shared/index';
 import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { AcceptanceCriterion, CriterionStatus } from '@shared/index';
@@ -261,6 +270,10 @@ class ProjectOrchestrator {
   private static readonly RESTART_THRESHOLD = 2;
   /** agentIds whose session the Lead has already restarted once (avoid loops). */
   private readonly restartedOnce = new Set<string>();
+  /** Per-WORK-ITEM one-restart-then-escalate budget for the per-task gates. Kept
+   *  separate from the agent-scoped `restartedOnce` (used by supervision) so a
+   *  restart on task A never prematurely escalates task B for the same agent. */
+  private readonly restartedForItem = new Set<string>();
   /** Throttle + dedupe the Lead's status heartbeat posted to main chat. */
   private readonly statusHeartbeatMs = Number(process.env.ATEAM_STATUS_HEARTBEAT_MS ?? 90000);
   private lastStatusAt = 0;
@@ -2416,8 +2429,11 @@ class ProjectOrchestrator {
     // STILL empty after that restart do we park it and escalate for guidance.
     if (gate && !produced) {
       this.troubleSignal(agent.id);
-      if (!this.restartedOnce.has(agent.id)) {
-        this.restartedOnce.add(agent.id);
+      this.recordTaskReport(item, agent, [
+        { id: 'produced', status: 'fail', detail: `no code after ${MAX_ATTEMPTS} attempts` },
+      ]);
+      if (!this.restartedForItem.has(item.id)) {
+        this.restartedForItem.add(item.id);
         this.emitEvent(
           agent.id,
           'system',
@@ -2457,11 +2473,13 @@ class ProjectOrchestrator {
         this.setStatus(agent.id, 'idle');
         if (ans.toLowerCase().startsWith('skip')) {
           this.clearTrouble(agent.id);
+          this.restartedForItem.delete(item.id);
+          this.recordOverride(item, agent, 'task', 'user skipped: no code produced');
           this.moveItem(item.id, 'done');
           this.maybeFinishEpic(item.parentId);
         } else {
           // Retry: allow another restart cycle and let the manager re-drive it.
-          this.restartedOnce.delete(agent.id);
+          this.restartedForItem.delete(item.id);
           this.moveItem(item.id, 'todo');
           this.pokeLead();
         }
@@ -2484,6 +2502,16 @@ class ProjectOrchestrator {
         );
         if (build.ran && !build.passed) {
           const tail = build.output.split('\n').slice(-25).join('\n').slice(-2000);
+          this.recordTaskReport(item, agent, [
+            {
+              id: 'build',
+              status: 'fail',
+              detail: `\`${build.command}\` did not pass`,
+              evidence: tail
+                ? { command: build.command, output: tail }
+                : { command: build.command },
+            },
+          ]);
           this.emitEvent(
             agent.id,
             'system',
@@ -2494,8 +2522,8 @@ class ProjectOrchestrator {
           this.troubleSignal(agent.id);
           // First failure: restart the session once and re-drive so the agent can
           // fix the break. Still red after that -> park and ask the user.
-          if (!this.restartedOnce.has(agent.id)) {
-            this.restartedOnce.add(agent.id);
+          if (!this.restartedForItem.has(item.id)) {
+            this.restartedForItem.add(item.id);
             await this.restartAgentSession(
               agent.id,
               `build failing on "${item.title}" (${build.command})`,
@@ -2522,10 +2550,17 @@ class ProjectOrchestrator {
             this.setStatus(agent.id, 'idle');
             if (ans.toLowerCase().startsWith('skip')) {
               this.clearTrouble(agent.id);
+              this.restartedForItem.delete(item.id);
+              this.recordOverride(
+                item,
+                agent,
+                'task',
+                `user skipped: build failing (${build.command})`,
+              );
               this.moveItem(item.id, 'done');
               this.maybeFinishEpic(item.parentId);
             } else {
-              this.restartedOnce.delete(agent.id);
+              this.restartedForItem.delete(item.id);
               this.moveItem(item.id, 'todo');
               this.pokeLead();
             }
@@ -2553,6 +2588,9 @@ class ProjectOrchestrator {
           const violations = checkClone(runDir, constraints);
           if (violations.length > 0) {
             const summary = summarizeViolations(violations);
+            this.recordTaskReport(item, agent, [
+              { id: 'constraints', status: 'fail', detail: summary, evidence: { violations } },
+            ]);
             this.emitEvent(
               agent.id,
               'system',
@@ -2561,8 +2599,8 @@ class ProjectOrchestrator {
               item.id,
             );
             this.troubleSignal(agent.id);
-            if (!this.restartedOnce.has(agent.id)) {
-              this.restartedOnce.add(agent.id);
+            if (!this.restartedForItem.has(item.id)) {
+              this.restartedForItem.add(item.id);
               await this.restartAgentSession(
                 agent.id,
                 `hard-constraint violation on "${item.title}": ${summary}`,
@@ -2589,16 +2627,30 @@ class ProjectOrchestrator {
               this.setStatus(agent.id, 'idle');
               if (ans.toLowerCase().startsWith('skip')) {
                 this.clearTrouble(agent.id);
+                this.restartedForItem.delete(item.id);
+                this.recordOverride(
+                  item,
+                  agent,
+                  'task',
+                  `user skipped: constraint violation (${summary})`,
+                );
                 this.moveItem(item.id, 'done');
                 this.maybeFinishEpic(item.parentId);
               } else {
-                this.restartedOnce.delete(agent.id);
+                this.restartedForItem.delete(item.id);
                 this.moveItem(item.id, 'todo');
                 this.pokeLead();
               }
             });
             return;
           }
+          this.recordTaskReport(item, agent, [
+            {
+              id: 'constraints',
+              status: 'pass',
+              detail: `honored ${constraints.map((c) => c.kind).join(', ')}`,
+            },
+          ]);
           this.emitEvent(
             agent.id,
             'system',
@@ -2626,6 +2678,14 @@ class ProjectOrchestrator {
       );
       if (test.ran && !test.passed) {
         const tail = test.output.split('\n').slice(-25).join('\n').slice(-2000);
+        this.recordTaskReport(item, agent, [
+          {
+            id: 'tests',
+            status: 'fail',
+            detail: `\`${test.command}\` did not pass`,
+            evidence: { command: test.command, output: tail },
+          },
+        ]);
         this.emitEvent(
           agent.id,
           'system',
@@ -2636,8 +2696,8 @@ class ProjectOrchestrator {
         this.troubleSignal(agent.id);
         // First failure: restart QA's session once and re-drive so it can fix the
         // tests/feature. Still failing after that -> park and ask the user.
-        if (!this.restartedOnce.has(agent.id)) {
-          this.restartedOnce.add(agent.id);
+        if (!this.restartedForItem.has(item.id)) {
+          this.restartedForItem.add(item.id);
           await this.restartAgentSession(
             agent.id,
             `QA tests failing on "${item.title}" (${test.command})`,
@@ -2663,10 +2723,17 @@ class ProjectOrchestrator {
           this.setStatus(agent.id, 'idle');
           if (ans.toLowerCase().startsWith('skip')) {
             this.clearTrouble(agent.id);
+            this.restartedForItem.delete(item.id);
+            this.recordOverride(
+              item,
+              agent,
+              'task',
+              `user skipped: QA tests failing (${test.command})`,
+            );
             this.moveItem(item.id, 'done');
             this.maybeFinishEpic(item.parentId);
           } else {
-            this.restartedOnce.delete(agent.id);
+            this.restartedForItem.delete(item.id);
             this.moveItem(item.id, 'todo');
             this.pokeLead();
           }
@@ -2674,6 +2741,14 @@ class ProjectOrchestrator {
         return;
       }
       const okTail = test.ran ? test.output.split('\n').slice(-8).join('\n').slice(-1000) : '';
+      this.recordTaskReport(item, agent, [
+        {
+          id: 'tests',
+          status: test.ran ? 'pass' : 'skip',
+          detail: test.ran ? `\`${test.command}\` passed` : 'no test command detected',
+          evidence: okTail ? { command: test.command, output: okTail } : undefined,
+        },
+      ]);
       this.emitEvent(
         agent.id,
         'system',
@@ -2690,6 +2765,9 @@ class ProjectOrchestrator {
     this.clearTrouble(agent.id);
     // Record an audit note and commit the task's work on the epic branch.
     let completion: { branch: string; hash: string | null; files: GitFileChange[] } | null = null;
+    // Integration outcome for the required `integrated` check (builders/qa). Stays
+    // `skip` when no separate integration ran; resolved to pass/fail below.
+    let integratedStatus: CheckStatus = 'skip';
     if (worktree) {
       try {
         const noteDir = path.join(worktree.path, '.ateam', 'tasks');
@@ -2748,6 +2826,7 @@ class ProjectOrchestrator {
           item.id,
         );
         conflict = !r.ok && r.conflict;
+        integratedStatus = r.ok ? 'pass' : r.conflict ? 'skip' : 'fail';
         if (!r.ok && !r.conflict)
           this.notify(
             'system',
@@ -2758,6 +2837,7 @@ class ProjectOrchestrator {
             agent.id,
           );
       } catch (err) {
+        integratedStatus = 'fail';
         this.emitEvent(
           agent.id,
           'git',
@@ -2802,6 +2882,12 @@ class ProjectOrchestrator {
             this.setStatus(agent.id, 'idle');
             this.taskConflicts.delete(item.id);
             if (ans.toLowerCase().startsWith('skip')) {
+              this.recordOverride(
+                item,
+                agent,
+                'task',
+                'user skipped: persistent integration conflict',
+              );
               this.moveItem(item.id, 'done');
               this.maybeFinishEpic(parentId);
             } else {
@@ -2818,6 +2904,81 @@ class ProjectOrchestrator {
       this.taskConflicts.delete(item.id);
     }
 
+    // INTEGRATED is a required check for builders/qa within an epic: if a real
+    // integration attempt FAILED, the task may not reach review (its work isn't on
+    // the epic branch). `skip` (no separate integration - same-clone/standalone)
+    // and `pass` are both fine; empty builders are already caught by `produced`.
+    const requiresIntegration =
+      gate &&
+      item.parentId != null &&
+      requiredChecks(item.stream ?? null, 'task').includes('integrated');
+    if (requiresIntegration && integratedStatus === 'fail') {
+      this.recordTaskReport(item, agent, [
+        {
+          id: 'integrated',
+          status: 'fail',
+          detail: 'work did not land on the epic branch (no commit or merge failed)',
+        },
+      ]);
+      this.emitEvent(
+        agent.id,
+        'system',
+        `Integration gate FAILED: "${item.title}" did not land on the epic branch - blocking review`,
+        null,
+        item.id,
+      );
+      this.troubleSignal(agent.id);
+      if (!this.restartedForItem.has(item.id)) {
+        this.restartedForItem.add(item.id);
+        await this.restartAgentSession(agent.id, `work did not integrate on "${item.title}"`);
+        return;
+      }
+      this.setStatus(agent.id, 'needs_input');
+      this.awaitingInput.add(item.id);
+      this.notify(
+        'question',
+        `Integration blocked: ${item.title}`,
+        `${agent.displayName}'s work did not land on the epic branch.`,
+        'board',
+        item.id,
+        agent.id,
+      );
+      void this.raiseQuestion(
+        agent.id,
+        `"${item.title}" did not integrate into the epic branch even after a restart. How should we proceed?`,
+        ['Retry', 'Skip this task'],
+      ).then((ans) => {
+        this.awaitingInput.delete(item.id);
+        this.setStatus(agent.id, 'idle');
+        this.restartedForItem.delete(item.id);
+        if (ans.toLowerCase().startsWith('skip')) {
+          this.recordOverride(item, agent, 'task', 'user skipped: work did not integrate');
+          this.moveItem(item.id, 'done');
+          this.maybeFinishEpic(item.parentId);
+        } else {
+          this.moveItem(item.id, 'todo');
+          this.pokeLead();
+        }
+      });
+      return;
+    }
+
+    // Passing task report: the single durable record that authorizes advancement.
+    this.recordTaskReport(item, agent, [
+      {
+        id: 'produced',
+        status: gate ? 'pass' : 'skip',
+        detail: gate ? 'delivered changes' : 'verifier',
+      },
+      {
+        id: 'integrated',
+        status: integratedStatus,
+        detail:
+          integratedStatus === 'pass'
+            ? 'landed on the epic branch'
+            : 'no separate integration (n/a)',
+      },
+    ]);
     // Every sub-task in the checklist is now complete.
     this.setSubtaskStatus(subtasks, 'done');
     const latest = this.deps.store.getWorkItem(item.id);
@@ -3300,6 +3461,55 @@ class ProjectOrchestrator {
     this.epicAcceptIter.delete(epic.id);
     this.epicBuildIter.delete(epic.id);
     await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+  }
+
+  /**
+   * Assemble, persist (audit trail), and emit a task-scoped verification report
+   * from the raw check outcomes the gate just computed. This is the single place
+   * a gate decision becomes a durable, queryable record.
+   */
+  private recordTaskReport(
+    item: WorkItem,
+    agent: Agent,
+    raw: Array<{ id: string; status: CheckStatus; detail: string; evidence?: unknown }>,
+  ): ReturnType<typeof makeReport> {
+    const checks = assembleChecks(item.stream ?? null, 'task', raw);
+    const report = makeReport(
+      { workItemId: item.id, agentId: agent.id, stream: item.stream ?? null, scope: 'task' },
+      checks,
+    );
+    this.persistReport(report);
+    return report;
+  }
+
+  /** Record an explicit, audited override (user Skip / merge-anyway). */
+  private recordOverride(item: WorkItem, agent: Agent, scope: GateScope, reason: string): void {
+    this.persistReport(
+      overrideReport(
+        { workItemId: item.id, agentId: agent.id, stream: item.stream ?? null, scope },
+        reason,
+      ),
+    );
+  }
+
+  private persistReport(report: ReturnType<typeof makeReport>): void {
+    this.deps.store.insertVerification({
+      projectId: this.projectId,
+      workItemId: report.workItemId,
+      agentId: report.agentId,
+      scope: report.scope,
+      stream: report.stream,
+      passed: report.passed,
+      outcome: report.outcome,
+      checks: report.checks,
+    });
+    this.emitEvent(
+      report.agentId,
+      'verification',
+      `Verification (${report.scope}): ${summarizeReport(report)}`,
+      { report: report as unknown as Record<string, unknown> },
+      report.workItemId,
+    );
   }
 
   /**

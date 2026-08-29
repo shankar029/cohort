@@ -18,6 +18,7 @@ const TYPE_STYLE: Record<AgentEventType, { icon: string; color: string }> = {
   git: { icon: '🔀', color: 'text-orange-300' },
   pull_request: { icon: '🔃', color: 'text-fuchsia-300' },
   system: { icon: 'ℹ️', color: 'text-slate-400' },
+  verification: { icon: '🛡️', color: 'text-teal-300' },
 };
 
 export function ActivityPage(): React.JSX.Element {
