@@ -8,6 +8,10 @@
  * Scenarios:
  *   greenfield   — medium-scale app split into 2 parallel epics (API + UI).
  *                  Validates: agents deliver, QA gates, PRs merge, files land.
+ *   headless     — in-memory, dependency-free HTTP API (reproduces live run #2).
+ *                  Validates FAITHFULNESS: the system scopes streams (no ux/
+ *                  frontend/researcher) and honors hard constraints (no external
+ *                  deps, no UI files, in-memory / no disk writes).
  *   brownfield   — a focused change on an EXISTING medium repo. Validates that
  *                  agents read + respect the established structure/conventions.
  *   smoke        — tiny greenfield task, quickest end-to-end plumbing check.
@@ -53,6 +57,50 @@ const SCENARIOS = {
       { label: 'At least one epic reached done', check: (o) => o.epicsDone >= 1 },
       { label: 'At least one PR merged', check: (o) => o.prsMerged >= 1 },
       { label: 'Real deliverable files landed', check: (o) => o.deliverableCount >= 1 },
+    ],
+  },
+
+  // Reproduces live run #2's failure mode and guards the fixes: a headless,
+  // in-memory, dependency-free API request. Asserts the SYSTEM scopes streams
+  // (no ux/frontend/researcher) and the delivery stays faithful to the hard
+  // constraints (no external deps, no UI files, in-memory / no disk writes).
+  headless: {
+    name: 'headless-faithful',
+    kind: 'greenfield',
+    // Full team ON PURPOSE: the system must scope it DOWN itself, not rely on a
+    // hand-picked roster.
+    team: FULL_TEAM,
+    defaultTimeoutMin: 45,
+    async drive(h) {
+      await h.sendChat(
+        'Build an in-memory URL shortener as a small Node service using ONLY ' +
+          "Node's built-in http module - no external dependencies, no database, and " +
+          'no files on disk (state lives in memory and is lost on restart). ' +
+          'Endpoints: POST /shorten {url} -> {code}; GET /:code -> 302 redirect to ' +
+          'the original URL; GET /api/stats/:code -> {code, url, hits}. Validate input ' +
+          'and return correct status codes. Also ship a small standalone client library ' +
+          'that talks to the service over HTTP. Plain JavaScript. Include unit and ' +
+          'integration tests. This is a headless API - there is no UI.',
+      );
+    },
+    until: (s) => s.epics.length > 0 && s.epics.every((e) => e.status === 'done'),
+    acceptance: [
+      { label: 'At least one epic reached done', check: (o) => o.epicsDone >= 1 },
+      { label: 'At least one PR merged', check: (o) => o.prsMerged >= 1 },
+      { label: 'Real deliverable files landed', check: (o) => o.deliverableCount >= 1 },
+      // I1/I6 - the system scoped irrelevant streams OUT.
+      {
+        label: 'No UI streams spawned (ux/frontend)',
+        check: (o) => !o.taskStreams.includes('ux') && !o.taskStreams.includes('frontend'),
+      },
+      {
+        label: 'No researcher build stream spawned',
+        check: (o) => !o.taskStreams.includes('researcher'),
+      },
+      // I2/I7 - the delivery honored the request's HARD CONSTRAINTS.
+      { label: 'No external runtime dependencies', check: (o) => o.runtimeDeps.length === 0 },
+      { label: 'No UI files delivered', check: (o) => o.uiFileCount === 0 },
+      { label: 'In-memory (no disk persistence)', check: (o) => !o.writesToDisk },
     ],
   },
 

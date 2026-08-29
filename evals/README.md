@@ -23,6 +23,7 @@ node evals/run.mjs smoke --fake
 
 # Real-SDK runs (must be signed in):
 npm run eval -- greenfield          # 2 parallel epics: REST API + web UI
+npm run eval -- headless            # in-memory dep-free API: scoping + faithfulness
 npm run eval -- brownfield --repo=https://github.com/OWNER/REPO.git
 npm run eval -- smoke               # quickest real end-to-end check
 ```
@@ -45,6 +46,11 @@ npm run eval -- smoke               # quickest real end-to-end check
 - **`greenfield`** — medium-scale app as **two parallel epics** (a tested REST
   task API, and an accessible web UI that consumes it). Full 10-member team.
   Validates parallel-epic delivery, QA gating, and merges.
+- **`headless`** — an in-memory, dependency-free HTTP API + client library that
+  **reproduces live run #2**. Runs the FULL team on purpose and asserts the
+  system delivers **faithfully**: it must scope streams itself (no ux / frontend
+  / researcher tasks — I1/I6) and honor the request's hard constraints — **no
+  external runtime deps, no UI files, and in-memory / no disk writes** (I2/I7).
 - **`brownfield`** — a focused, convention-respecting change on an **existing**
   medium repo. Validates that agents study and match the established structure,
   style, and design patterns instead of reinventing. Point it at any repo with
@@ -57,6 +63,9 @@ Each run writes `evals/reports/<run>.md` (+ `.json`) with:
 
 - epics done / total, PRs raised / merged, deliverable files on the default
   branch, QA sign-off observed, and any auth failure;
+- **faithfulness signals** — the task streams the system spawned, external
+  runtime dependencies declared, UI files produced, and whether the code writes
+  state to disk (used by the `headless` scenario's acceptance checks);
 - per-scenario **acceptance checks** (pass/fail);
 - the Team Lead chat transcript (last 40 messages) and pointers to the raw WS
   event log + server log in the scratch dir.
@@ -75,5 +84,6 @@ fixes back into the app (see `PLAN-correctness.md`).
 
 - `harness.mjs` — engine: server lifecycle, API/WS client, monitor, scoring,
   repo helpers.
-- `run.mjs` — CLI + scenario registry (`smoke`, `greenfield`, `brownfield`).
+- `run.mjs` — CLI + scenario registry (`smoke`, `greenfield`, `headless`,
+  `brownfield`).
 - `reports/` — generated reports (git-ignored).

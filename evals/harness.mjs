@@ -407,12 +407,65 @@ export class EvalHarness {
     return [...out];
   }
 
+  /**
+   * Inspect the delivered files for faithfulness signals used by the `headless`
+   * scenario (and useful generally): whether any UI files were produced, the set
+   * of external RUNTIME dependencies declared, and whether the code persists
+   * state to disk. Reads each deliverable from the default branch first, then any
+   * epic-branch clone. Heuristic but server-authoritative on file NAMES + content.
+   */
+  analyzeDelivery(deliverables) {
+    const readAnywhere = (rel) => {
+      const candidates = [path.join(this.repoDir, rel)];
+      try {
+        const projDir = path.join(this.worktreeRoot, this.projectId ?? '');
+        if (fs.existsSync(projDir))
+          for (const d of fs.readdirSync(projDir)) candidates.push(path.join(projDir, d, rel));
+      } catch {
+        /* ignore */
+      }
+      for (const c of candidates) {
+        try {
+          if (fs.existsSync(c) && fs.statSync(c).isFile()) return fs.readFileSync(c, 'utf8');
+        } catch {
+          /* ignore */
+        }
+      }
+      return '';
+    };
+    const uiFiles = deliverables.filter((f) => /\.(tsx|jsx|vue|svelte)$/i.test(f));
+    const runtimeDeps = new Set();
+    for (const f of deliverables.filter((f) => /(^|\/)package\.json$/.test(f))) {
+      try {
+        const pkg = JSON.parse(readAnywhere(f));
+        for (const k of Object.keys(pkg.dependencies ?? {})) runtimeDeps.add(k);
+      } catch {
+        /* unreadable/invalid */
+      }
+    }
+    let writesToDisk = false;
+    for (const f of deliverables.filter(
+      (f) => /\.(js|mjs|cjs|ts)$/i.test(f) && !/(test|spec|\.d\.ts$)/i.test(f),
+    )) {
+      const src = readAnywhere(f);
+      if (/\b(writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream)\b/.test(src)) {
+        writesToDisk = true;
+        break;
+      }
+    }
+    return { uiFileCount: uiFiles.length, runtimeDeps: [...runtimeDeps], writesToDisk };
+  }
+
   /** Build a structured outcome + a human-readable markdown report. */
   async report(scenario, monitorResult) {
     const snap = monitorResult.snap;
     const deliverables = this.collectDeliverables();
     const merged = snap.pulls.filter((p) => p.status === 'merged');
     const chat = await this.chat();
+    const faithfulness = this.analyzeDelivery(deliverables);
+    const taskStreams = [
+      ...new Set((snap.tasks ?? []).map((t) => t.stream).filter(Boolean)),
+    ];
 
     // Event-derived signals (server-authoritative, not fuzzy keyword matches).
     const evStr = this.events.map((e) => JSON.stringify(e)).join('\n');
@@ -433,6 +486,10 @@ export class EvalHarness {
       prsMerged: merged.length,
       deliverableFiles: deliverables,
       deliverableCount: deliverables.length,
+      taskStreams,
+      uiFileCount: faithfulness.uiFileCount,
+      runtimeDeps: faithfulness.runtimeDeps,
+      writesToDisk: faithfulness.writesToDisk,
       qaSignoff,
       authIssue,
     };
@@ -464,6 +521,12 @@ function renderReport(scenario, o, chat, h) {
   lines.push(`- **PRs merged:** ${o.prsMerged}/${o.prs.length}`);
   lines.push(`- **Deliverable files on default branch:** ${o.deliverableCount}`);
   lines.push(`- **QA sign-off observed:** ${check(o.qaSignoff)}`);
+  if (o.taskStreams)
+    lines.push(`- **Task streams:** ${o.taskStreams.length ? o.taskStreams.join(', ') : '(none)'}`);
+  if (o.runtimeDeps)
+    lines.push(
+      `- **External runtime deps:** ${o.runtimeDeps.length ? o.runtimeDeps.join(', ') : '(none)'} | **UI files:** ${o.uiFileCount} | **writes to disk:** ${check(o.writesToDisk)}`,
+    );
   if (o.authIssue) lines.push(`- **⚠ AUTH ISSUE detected** — SDK appeared unauthenticated.`);
   lines.push('');
   lines.push(`## Epics`);
