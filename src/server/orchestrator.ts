@@ -2272,6 +2272,21 @@ class ProjectOrchestrator {
     // injected so every builder implements against the SAME plan instead of
     // guessing. Empty until the design turn lands; the first task may run without
     // it (unchanged from prior behavior), later siblings pick it up.
+    //
+    // I5: contract-consuming streams (frontend/backend/data) must agree on the
+    // SAME shared interfaces. If the design turn hasn't landed yet, wait a BOUNDED
+    // time for it before building - bounded + early-exit so throughput is never
+    // blocked indefinitely, but avoiding the "build now, re-validate against the
+    // late design" churn we saw in live run #2. Only when the team has an Architect.
+    const contractStream = /^(frontend|backend|data)$/.test(item.stream ?? '');
+    if (
+      contractStream &&
+      item.parentId &&
+      !this.deps.store.getEpicDesign(item.parentId) &&
+      this.specialists().some((s) => s.name === 'architect')
+    ) {
+      await this.awaitEpicDesign(item.parentId, Number(process.env.ATEAM_DESIGN_WAIT_MS ?? 45_000));
+    }
     const design = item.parentId ? this.deps.store.getEpicDesign(item.parentId) : '';
     const designClause = design
       ? `\n# Epic technical design (follow it - honor these shared interfaces/contracts)\n${design}\n\n`
@@ -3149,6 +3164,20 @@ class ProjectOrchestrator {
     this.epicAcceptIter.delete(epic.id);
     this.epicBuildIter.delete(epic.id);
     await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+  }
+
+  /**
+   * Poll for the epic's Architect design up to timeoutMs, resolving early the
+   * moment it lands (or the epic is discarded). Bounded so a contract-consuming
+   * builder never waits forever on a design turn that stalls.
+   */
+  private async awaitEpicDesign(epicId: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    while (Date.now() < deadline) {
+      if (this.discardedEpics.has(epicId)) return;
+      if (this.deps.store.getEpicDesign(epicId)) return;
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
   /**
