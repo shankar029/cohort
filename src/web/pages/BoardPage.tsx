@@ -304,12 +304,20 @@ function WorkItemCard({
           <div className="flex items-center gap-2">
             <UsageChip tokens={usage.tokens} timeMs={usage.timeMs} />
             {assignee && (
-              <Avatar
-                emoji={assignee.emoji}
-                color={assignee.color}
-                src={agentAvatar(assignee.catalogId, assignee.kind)}
-                size={22}
-              />
+              <span
+                className="flex items-center gap-1.5"
+                title={`Assigned by Team Lead → ${assignee.displayName}`}
+              >
+                <Avatar
+                  emoji={assignee.emoji}
+                  color={assignee.color}
+                  src={agentAvatar(assignee.catalogId, assignee.kind)}
+                  size={22}
+                />
+                <span className="max-w-[7rem] truncate text-xs text-slate-400">
+                  {assignee.displayName}
+                </span>
+              </span>
             )}
           </div>
         </div>
@@ -501,6 +509,9 @@ function WorkItemDetailModal({
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
           {assignee && (
             <DetailField label="Assignee" value={`${assignee.emoji} ${assignee.displayName}`} />
+          )}
+          {assignee && item.kind !== 'epic' && (
+            <DetailField label="Assigned by" value="👑 Team Lead" />
           )}
           {item.branch && <DetailField label="Branch" value={item.branch} mono />}
           {item.scheduledAt && (
