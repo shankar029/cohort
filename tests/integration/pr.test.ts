@@ -163,4 +163,55 @@ describe('PR + review + iterate-to-quality (Phase 4)', () => {
       await app2.close();
     }
   });
+
+  it('escalates to the user instead of silently merging past the review budget (I8)', async () => {
+    const prev = process.env.ATEAM_MAX_REVIEW_ITER;
+    process.env.ATEAM_MAX_REVIEW_ITER = '1';
+    const app2 = createTestApp();
+    try {
+      const res = await app2.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: { name: 'Review Budget', repoDir },
+      });
+      const projectId = (res.json() as { project: { id: string } }).project.id;
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/agents`,
+        payload: { catalogId: 'frontend-engineer' },
+      });
+      // A reviewer that always files an unresolved comment on every review round.
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/agents`,
+        payload: {
+          name: 'reviewer',
+          displayName: 'Code Reviewer',
+          prompt: 'You review PRs. [[REVIEW_COMMENT: frontend | needs more test coverage]]',
+        },
+      });
+
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/chat`,
+        payload: { content: 'Build a profile page.' },
+      });
+
+      // With the budget at 1, the first round of open comments must ESCALATE to
+      // the user (a question), NOT auto-merge.
+      const q = await app2.waitFor(
+        (m) => m.type === 'question.updated' && /open review comment/i.test(m.question.question),
+        15000,
+      );
+      expect(q.type).toBe('question.updated');
+
+      // And the PR must not have merged while awaiting the user's decision.
+      const pulls = app2.store.listPRs(projectId);
+      expect(pulls[0]!.status).not.toBe('merged');
+    } finally {
+      if (prev === undefined) delete process.env.ATEAM_MAX_REVIEW_ITER;
+      else process.env.ATEAM_MAX_REVIEW_ITER = prev;
+      await app2.close();
+    }
+  });
 });

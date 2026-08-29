@@ -8,6 +8,7 @@ import type { AgentTask, AgentTaskStatus } from '@shared/index';
 import type { AcceptanceCriterion, CriterionStatus } from '@shared/index';
 import type { GitFileChange } from '@shared/index';
 import type { GitCommit } from '@shared/index';
+import type { PrComment } from '@shared/index';
 import type { Store } from './db/store.js';
 import type { Bus } from './bus.js';
 import type {
@@ -224,6 +225,11 @@ class ProjectOrchestrator {
   private static readonly MAX_REVIEW_ITER = 3;
   private static readonly MAX_ACCEPT_ITER = 3;
   private static readonly MAX_BUILD_ITER = 3;
+  /** Per-epic review-round budget (I8): configurable so ops can tighten/loosen it. */
+  private get maxReviewIter(): number {
+    const v = Number(process.env.ATEAM_MAX_REVIEW_ITER);
+    return Number.isFinite(v) && v > 0 ? v : ProjectOrchestrator.MAX_REVIEW_ITER;
+  }
 
   /** Work items with an in-flight runWorkItem, so the manager never double-starts one. */
   private readonly running = new Set<string>();
@@ -3036,24 +3042,61 @@ class ProjectOrchestrator {
       reviewer.id,
     );
 
-    // Deadlock guard: after the cap, the Lead resolves outstanding comments and
-    // merges rather than letting the epic hang forever.
-    if (iter >= ProjectOrchestrator.MAX_REVIEW_ITER) {
-      for (const c of open) this.resolveComment(c.id);
-      this.emitEvent(
-        lead.id,
-        'pull_request',
-        `Merging after ${iter} review rounds (cap reached)`,
-        null,
+    // I8: after the review-round cap, do NOT silently resolve open comments and
+    // merge - that is exactly the "ship the wrong thing" compromise we set out to
+    // stop. Park the epic and ask the USER to decide (merge anyway / keep working).
+    if (iter >= this.maxReviewIter) {
+      const list = open.map((c) => `- ${c.body.slice(0, 140)}`).join('\n');
+      this.awaitingInput.add(epic.id);
+      this.notify(
+        'question',
+        `Review blocked: ${epic.title}`,
+        `${open.length} review comment(s) still open after ${iter} rounds.`,
+        'git',
         epic.id,
+        lead.id,
       );
-      await this.finalizeEpic(epic, prId, lead, repoDir, branch, wt, diff);
+      void this.raiseQuestion(
+        lead.id,
+        `Epic "${epic.title}" still has ${open.length} open review comment(s) after ${iter} ` +
+          `rounds:\n${list}\n\nMerge anyway, or keep working on them?`,
+        ['Keep working', 'Merge anyway'],
+      ).then(async (ans) => {
+        this.awaitingInput.delete(epic.id);
+        if (ans.toLowerCase().startsWith('merge')) {
+          for (const c of open) this.resolveComment(c.id);
+          this.forcedAccept.add(epic.id);
+          this.epicReviewIter.delete(epic.id);
+          this.emitEvent(
+            lead.id,
+            'pull_request',
+            `Merging after ${iter} review rounds (user approved)`,
+            null,
+            epic.id,
+          );
+          await this.finalizeEpic(epic, prId, lead, repoDir, branch, wt, diff);
+        } else {
+          // Give the team another budget of rounds to actually address the comments.
+          this.epicReviewIter.set(epic.id, 0);
+          this.assignReviewFixes(epic, open, lead);
+          this.pokeLead();
+        }
+      });
       return;
     }
 
     // The Team Lead turns each open comment into a fix task assigned to the
     // responsible stream. When those tasks land, comments resolve and review
     // re-runs automatically.
+    this.assignReviewFixes(epic, open, lead);
+  }
+
+  /**
+   * Turn each open review comment into a high-priority fix task assigned to the
+   * responsible stream. When those tasks land, the comments resolve and review
+   * re-runs automatically.
+   */
+  private assignReviewFixes(epic: WorkItem, open: PrComment[], lead: Agent): void {
     for (const c of open) {
       if (c.workItemId) continue;
       const target =
