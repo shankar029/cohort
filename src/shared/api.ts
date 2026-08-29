@@ -83,6 +83,13 @@ export const createThreadSchema = z.object({
 });
 export type SendChatInput = z.infer<typeof sendChatSchema>;
 
+export const uploadFileSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  /** base64-encoded file contents. */
+  dataBase64: z.string().min(1),
+});
+export type UploadFileInput = z.infer<typeof uploadFileSchema>;
+
 export const answerQuestionSchema = z.object({
   answer: z.string().trim().min(1).max(4000),
 });

@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Paperclip, X } from 'lucide-react';
 import type { Thread } from '@shared/index';
 import { useApp, useBundle } from '../state';
+import { api } from '../api';
 import { Avatar, Banner, EmptyState, agentAvatar } from '../components/ui';
 import { Markdown } from '../components/Markdown';
 
@@ -11,6 +12,20 @@ const THREAD_META: Record<Thread['kind'], { icon: string; label: string }> = {
   group: { icon: '🗣️', label: 'Discussion' },
   dm: { icon: '💬', label: 'Conversation' },
 };
+
+/** Read a File as base64 (strips the data: URL prefix) for JSON upload. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const res = String(reader.result ?? '');
+      const comma = res.indexOf(',');
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function ChatPage(): React.JSX.Element {
   const { projectId } = useParams<{ projectId: string }>();
@@ -24,10 +39,14 @@ export function ChatPage(): React.JSX.Element {
     if (projectId) markThreadsSeen(projectId);
   }, [projectId, bundle.chat.length, markThreadsSeen]);
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<{ name: string; path: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeThread, setActiveThread] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   // Whether the viewport is pinned to the newest message. Auto-scroll only when
   // true, so a user reading older messages up top isn't yanked down by streaming
   // updates. A ref (not state) so the scroll handler never triggers re-renders.
@@ -149,16 +168,52 @@ export function ChatPage(): React.JSX.Element {
     void loadThreadMessages(projectId, selectedId);
   }, [projectId, selectedId, onMain, loadThreadMessages]);
 
+  // Auto-grow the composer with its content (up to a cap), so long prompts are
+  // fully visible while editing instead of scrolling a one-line box.
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [input]);
+
+  const onFiles = async (files: FileList | null): Promise<void> => {
+    if (!files || files.length === 0 || !projectId) return;
+    setUploading(true);
+    setError(null);
+    try {
+      for (const file of Array.from(files)) {
+        const dataBase64 = await fileToBase64(file);
+        const res = await api.uploadFile(projectId, file.name, dataBase64);
+        setAttachments((a) => [...a, { name: res.name, path: res.path }]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const send = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     const content = input.trim();
-    if (!content || !projectId || !isConversation) return;
+    if ((!content && attachments.length === 0) || !projectId || !isConversation) return;
+    const atts = attachments;
     setInput('');
+    setAttachments([]);
     setError(null);
+    let full = content;
+    if (atts.length) {
+      const list = atts.map((a) => `- ${a.name} (${a.path})`).join('\n');
+      full =
+        `${content}${content ? '\n\n' : ''}📎 Attached files (saved in the workspace — ` +
+        `open them with your file tools if relevant):\n${list}`;
+    }
     try {
-      await sendChat(projectId, content, sendTargetId ?? undefined);
+      await sendChat(projectId, full, sendTargetId ?? undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send');
+      setAttachments(atts);
     }
   };
 
@@ -404,9 +459,51 @@ export function ChatPage(): React.JSX.Element {
           )}
           {isConversation ? (
             <>
+              {attachments.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1.5" data-testid="chat-attachments">
+                  {attachments.map((a) => (
+                    <span
+                      key={a.path}
+                      className="flex items-center gap-1 rounded-md border border-surface-border bg-surface-2 px-2 py-1 text-xs text-slate-300"
+                    >
+                      📎 <span className="max-w-[10rem] truncate">{a.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setAttachments((s) => s.filter((x) => x.path !== a.path))}
+                        className="text-slate-500 hover:text-slate-200"
+                        aria-label={`Remove ${a.name}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2">
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  data-testid="chat-file-input"
+                  onChange={(e) => {
+                    void onFiles(e.target.files);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading}
+                  title="Attach files"
+                  data-testid="chat-attach"
+                  className="btn-ghost shrink-0 self-end px-3 py-2 disabled:opacity-60"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
                 <textarea
-                  className="input min-h-[2.75rem] flex-1 resize-none"
+                  ref={taRef}
+                  className="input max-h-52 min-h-[2.75rem] flex-1 resize-none overflow-y-auto"
                   placeholder="Ask the Team Lead to build something…"
                   data-testid="chat-input"
                   rows={1}
@@ -418,15 +515,17 @@ export function ChatPage(): React.JSX.Element {
                 />
                 <button
                   type="submit"
-                  className="btn-primary"
+                  className="btn-primary self-end"
                   data-testid="chat-send"
-                  disabled={!input.trim()}
+                  disabled={!input.trim() && attachments.length === 0}
                 >
                   Send
                 </button>
               </div>
               <p className="mt-2 text-[0.7rem] text-slate-600">
-                You always talk to the Team Lead. Enter to send · Shift+Enter for a new line.
+                {uploading
+                  ? 'Uploading…'
+                  : 'You always talk to the Team Lead. Enter to send · Shift+Enter for a new line · 📎 to attach files.'}
               </p>
             </>
           ) : (

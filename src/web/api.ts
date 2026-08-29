@@ -151,6 +151,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ content, threadId }),
     }),
+  uploadFile: (projectId: string, name: string, dataBase64: string) =>
+    request<{ path: string; name: string; bytes: number }>(`/api/projects/${projectId}/uploads`, {
+      method: 'POST',
+      body: JSON.stringify({ name, dataBase64 }),
+    }),
   createThread: (projectId: string, topic?: string) =>
     request<{ thread: Thread }>(`/api/projects/${projectId}/threads`, {
       method: 'POST',

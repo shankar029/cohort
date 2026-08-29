@@ -14,6 +14,7 @@ import {
   createWorkItemSchema,
   sendChatSchema,
   createThreadSchema,
+  uploadFileSchema,
   updateAgentSchema,
   updateProjectSettingsSchema,
   updateWorkItemSchema,
@@ -532,6 +533,25 @@ export function buildApp(ctx: AppContext): FastifyInstance {
       .catch(() => undefined);
     reply.status(202);
     return { accepted: true };
+  });
+
+  // File uploads for the chat composer. Accepts base64 JSON (no multipart dep) and
+  // stores the file under <repoDir>/.ateam/uploads/ - inside the workspace so the
+  // Team Lead's read tools can open it, but under the .ateam bookkeeping prefix
+  // that is excluded from deliverables/commits. Returns a repo-relative path the
+  // client references in the message it sends.
+  app.post('/api/projects/:id/uploads', { bodyLimit: 32 * 1024 * 1024 }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const project = requireProject(id);
+    const input = uploadFileSchema.parse(req.body);
+    const safe = input.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'file';
+    const rel = path.join('.ateam', 'uploads', `${Date.now()}-${safe}`);
+    const abs = path.join(project.repoDir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    const buf = Buffer.from(input.dataBase64, 'base64');
+    fs.writeFileSync(abs, buf);
+    reply.status(201);
+    return { path: rel.replace(/\\/g, '/'), name: input.name, bytes: buf.length };
   });
 
   app.post('/api/projects/:id/threads', async (req, reply) => {
