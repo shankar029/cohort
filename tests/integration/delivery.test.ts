@@ -361,6 +361,26 @@ describe('deterministic constraint gate (FAITH-1)', () => {
     expect(ev.type === 'event.appended' && ev.event.summary).toMatch(/no-external-deps/);
     unsub();
     expect(merged).toBe(false);
+
+    // The failure is a DURABLE, AUDITABLE record - not just a log line. The backend
+    // task's latest verification report must be a fail with a failing constraints
+    // check (proving the gate decision was persisted, per the redesign).
+    const { workItems } = (await ctx.app
+      .inject({ method: 'GET', url: `/api/projects/${projectId}/workitems` })
+      .then((r) => r.json())) as { workItems: WorkItem[] };
+    const backendTask = workItems.find((w) => w.kind === 'task' && w.stream === 'backend');
+    expect(backendTask).toBeTruthy();
+    const verif = (await ctx.app
+      .inject({ method: 'GET', url: `/api/workitems/${backendTask!.id}/verification` })
+      .then((r) => r.json())) as {
+      latest: { passed: boolean; outcome: string; checks: { id: string; status: string }[] } | null;
+      history: unknown[];
+    };
+    expect(verif.latest).toBeTruthy();
+    expect(verif.latest!.passed).toBe(false);
+    expect(verif.latest!.checks.some((c) => c.id === 'constraints' && c.status === 'fail')).toBe(
+      true,
+    );
   });
 });
 
