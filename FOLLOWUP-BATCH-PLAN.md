@@ -19,15 +19,15 @@ and 5 UX/product improvements, one verified commit per slice.
   scanned as of `755280c`).
 
 ## Part B — UX / product
-- [ ] **B1 · Collapsible side nav.** Toggle + persisted (localStorage); icons-only
+- [x] **B1 · Collapsible side nav.** Toggle + persisted (localStorage); icons-only
   collapsed state.
-- [ ] **B2 · Chat: multiline + file upload.** Auto-growing textarea (Enter=send,
+- [x] **B2 · Chat: multiline + file upload.** Auto-growing textarea (Enter=send,
   Shift+Enter=newline), attach files (backend upload endpoint + storage), show
   attachments; pass attachment context to the Lead.
-- [ ] **B3 · Work-item assignee.** Surface the assignee agent on the card/detail.
-- [ ] **B4 · Per-project default model.** Project settings dropdown (from
+- [x] **B3 · Work-item assignee.** Surface the assignee agent on the card/detail.
+- [x] **B4 · Per-project default model.** Project settings dropdown (from
   `/api/models`), persisted on the project, default for its agents.
-- [ ] **B5 · Page-switch latency.** Profile nav while agents work; fix the
+- [x] **B5 · Page-switch latency.** Profile nav while agents work; fix the
   blocking cause (heavy re-render / synchronous refetch / WS flood).
 
 ## Verification per slice
@@ -38,3 +38,8 @@ commit `-F -`.
 ## Decisions log
 - 2026-08-29 — no-external-deps enforced on RUNTIME deps + non-test imports only;
   dev tooling (vitest/tsc) allowed, matching "dependency-free runtime" intent.
+
+## Status: DONE (2026-08-29)
+All of Part A (A1/A2/A3) and Part B (B1–B5) shipped. Commits: e7be529 (A1/A2/A3),
+49883e0 (B5), 8367e98 (B1), 0ab0bea (B3), d505104 (B2), + B4. B4 pre-existed and
+was extended to apply to existing agents.
