@@ -258,6 +258,18 @@ export class EvalHarness {
   /* --------------------------------------------------------------- monitoring */
 
   /** One condensed snapshot of the project's delivery state. */
+  /** Fetch the persisted verification reports (deterministic gate audit trail). */
+  async verification() {
+    try {
+      const { reports } = await this.api.get(
+        `/api/projects/${this.projectId}/verification?limit=500`,
+      );
+      return reports ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async snapshot() {
     const bundle = await this.api.get(`/api/projects/${this.projectId}`);
     const items = bundle.workItems ?? [];
@@ -516,6 +528,23 @@ export class EvalHarness {
       ...new Set((snap.tasks ?? []).map((t) => t.stream).filter(Boolean)),
     ];
 
+    // Deterministic verification-gate signals (server-authoritative audit trail).
+    const reports = await this.verification();
+    const latestByItem = new Map();
+    for (const r of reports) if (!latestByItem.has(r.workItemId)) latestByItem.set(r.workItemId, r);
+    const terminalTasks = (snap.tasks ?? []).filter(
+      (t) => t.status === 'done' || t.status === 'review',
+    );
+    // Invariant: no task may sit in a terminal state while its LATEST gate report
+    // is a genuine failure (must be 0).
+    const tasksDoneWithFailingGate = terminalTasks.filter((t) => {
+      const r = latestByItem.get(t.id);
+      return r && r.outcome === 'failed';
+    }).length;
+    const verificationReports = reports.length;
+    const gateFailures = reports.filter((r) => r.outcome === 'failed').length;
+    const gateOverrides = reports.filter((r) => r.outcome === 'skipped').length;
+
     // Event-derived signals (server-authoritative, not fuzzy keyword matches).
     const evStr = this.events.map((e) => JSON.stringify(e)).join('\n');
     const qaSignoff = /QA gate: .* passed/.test(evStr);
@@ -539,6 +568,10 @@ export class EvalHarness {
       uiFileCount: faithfulness.uiFileCount,
       runtimeDeps: faithfulness.runtimeDeps,
       writesToDisk: faithfulness.writesToDisk,
+      verificationReports,
+      gateFailures,
+      gateOverrides,
+      tasksDoneWithFailingGate,
       qaSignoff,
       authIssue,
     };
@@ -577,6 +610,10 @@ function renderReport(scenario, o, chat, h) {
       `- **External runtime deps:** ${o.runtimeDeps.length ? o.runtimeDeps.join(', ') : '(none)'} | **UI files:** ${o.uiFileCount} | **writes to disk:** ${check(o.writesToDisk)}`,
     );
   if (o.authIssue) lines.push(`- **⚠ AUTH ISSUE detected** — SDK appeared unauthenticated.`);
+  if (o.verificationReports !== undefined)
+    lines.push(
+      `- **Verification reports:** ${o.verificationReports} (failures ${o.gateFailures}, overrides ${o.gateOverrides}) | **tasks terminal with a failing gate:** ${o.tasksDoneWithFailingGate} ${o.tasksDoneWithFailingGate === 0 ? '✅' : '❌'}`,
+    );
   lines.push('');
   lines.push(`## Epics`);
   for (const e of o.epics)
