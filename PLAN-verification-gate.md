@@ -199,10 +199,29 @@ Prerequisite structural changes BEFORE wiring:
 - **Slice 6** (harness) — asserts on persisted reports; `tasksDoneWithFailingGate`
   invariant; new `gate-enforcement` scenario (fake self-test passes 6/6, 10 reports).
 
-Full suite: **170 passing**. tsc/eslint/prettier clean.
+Full suite: **168 passing**. tsc/eslint/prettier clean.
 
 ### Deferred (follow-ups, not blocking)
 - Epic-level integrated authority report in `finalizeEpic` (Q2 authority split) +
   collapsing `epicBuildIter`/`epicAcceptIter` into one `epicRemediationIter`.
 - A board/detail UI gate badge from the report.
 - Real-LLM `gate-enforcement` convergence run.
+
+### Real-LLM validation (gate-enforcement, 2026-08-29)
+Ran the real SDK on an isolated instance. The framework worked end-to-end:
+- Scoping (I1/I6): ux/frontend/researcher scoped out at decompose.
+- The deterministic `produced` gate caught a **hallucinated completion** — the
+  backend narrated "Committed as 9daa39b, src/store.js, confirmed green, pushing"
+  while its task clone held only the `init` commit and NO source. Gate → produced:fail.
+- Re-keyed per-item budget: restart-once, then escalated to a human question
+  (Retry/Skip) instead of silently advancing.
+- Auditable: two durable failed reports via GET /projects/:id/verification.
+- Invariant held throughout: `tasksDoneWithFailingGate === 0` (parked, never
+  terminal-with-failing-gate).
+Conclusion: the gate refused to advance an empty/unverified delivery a trusting
+Lead would previously have accepted on narration — the exact defect class fixed.
+
+### Follow-up surfaced (separate issue)
+Investigate WHY the backend's claimed git commit did not land in its run dir
+(agent hallucinating tool results / committing in the wrong cwd). The gate guards
+the symptom; the root cause is a separate reliability item.
