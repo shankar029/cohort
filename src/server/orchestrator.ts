@@ -1020,6 +1020,10 @@ class ProjectOrchestrator {
             `State the user outcome in one sentence, then list the acceptance criteria. ` +
             `Format EVERY acceptance criterion on its OWN line, one criterion per line, each ` +
             `prefixed with "AC:" and written in Given/When/Then form where possible. ` +
+            `CRITICALLY: turn every HARD CONSTRAINT in the request into its own explicit, ` +
+            `checkable criterion - storage model (e.g. in-memory, not persisted), dependency ` +
+            `policy (e.g. no external dependencies), language/runtime, and each required ` +
+            `endpoint/interface. ` +
             `Do not ask the user questions here and do not write code.`,
           thread.id,
           epic.id,
@@ -2956,12 +2960,28 @@ class ProjectOrchestrator {
     // the add_review_comment tool. We resolve the PR from reviewContext during
     // the ask.
     this.reviewContext.set(reviewer.id, { epicId: epic.id, prId });
+    const reviewCriteria = this.deps.store.listCriteria(epic.id);
+    const critBlock = reviewCriteria.length
+      ? `Acceptance criteria the delivery must satisfy:\n` +
+        reviewCriteria.map((c, i) => `${i + 1}. ${c.text}`).join('\n') +
+        `\n\n`
+      : '';
     const prompt =
-      `Please review the pull request for epic "${epic.title}" against the design and the ` +
-      `quality bar.\n\n` +
+      `Please review the pull request for epic "${epic.title}".\n\n` +
+      `ORIGINAL REQUEST (the source of truth - review against THIS, not against ` +
+      `whatever the team happened to build):\n${(epic.description ?? '').slice(0, 2000)}\n\n` +
+      critBlock +
       `Diff:\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
+      `Check CONFORMANCE to the request FIRST, before any code-quality nits. File a ` +
+      `BLOCKING comment for ANY deviation from what the user actually asked for - ` +
+      `especially the request's HARD CONSTRAINTS: persistence model (e.g. in-memory vs ` +
+      `file/db), dependency policy (e.g. "no external dependencies"), language/runtime, ` +
+      `and the exact required interface/endpoints. Building something the request did ` +
+      `not ask for (e.g. a UI or a datastore it forbade) is itself a blocking defect. ` +
+      `Then review the design and quality bar.\n\n` +
       `For every issue, call add_review_comment(body, targetStream) routed to the responsible ` +
-      `stream. If it meets the bar, leave no comments and it will be approved.`;
+      `stream. If it meets the bar AND conforms to the request, leave no comments and it ` +
+      `will be approved.`;
     try {
       await this.actor(reviewer).ask(prompt, thread.id, epic.id, wt?.path);
     } finally {
@@ -3211,11 +3231,15 @@ class ProjectOrchestrator {
     const numbered = criteria.map((c, i) => `${i + 1}. ${c.text}`).join('\n');
     const prompt =
       `Judge each acceptance criterion for epic "${epic.title}" against the delivered work.\n\n` +
+      `ORIGINAL REQUEST (source of truth):\n${(epic.description ?? '').slice(0, 2000)}\n\n` +
       `Acceptance criteria:\n${numbered}\n\n` +
       `Diff (may be truncated):\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
       `Reply with ONE line per criterion in the exact form "AC<n>: MET" or ` +
-      `"AC<n>: FAILED - <short reason>". Judge whether the code actually satisfies ` +
-      `the criterion, not whether it was intended. Do not write code here.`;
+      `"AC<n>: FAILED - <short reason>". Judge whether the code ACTUALLY satisfies ` +
+      `the criterion, not whether it was intended. A criterion that encodes a HARD ` +
+      `CONSTRAINT from the request (in-memory storage, "no external dependencies", ` +
+      `language/runtime, required endpoints) must be FAILED if the delivery deviates - ` +
+      `even if the feature otherwise works. Do not write code here.`;
     let verdictText = '';
     try {
       verdictText = (await this.actor(judge).ask(prompt, thread.id, epic.id, wt?.path)) ?? '';

@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createTestApp, rmDir, type TestApp } from '../helpers/testApp.js';
+import { FakeCopilotAdapter } from '../../src/server/agents/fakeAdapter.js';
+import type { AgentSession, AgentSessionConfig } from '../../src/server/agents/adapter.js';
 import type { PullRequest } from '../../src/shared/index.js';
 
 let ctx: TestApp;
@@ -99,5 +101,66 @@ describe('PR + review + iterate-to-quality (Phase 4)', () => {
     const comments = ctx.store.listProjectPrComments(projectId);
     expect(comments.length).toBeGreaterThanOrEqual(1);
     expect(comments.every((c) => c.status === 'resolved')).toBe(true);
+  });
+
+  it('feeds the ORIGINAL request into the reviewer prompt (I7)', async () => {
+    // A recorder adapter captures every prompt sent to any agent session.
+    class PromptRecorderAdapter extends FakeCopilotAdapter {
+      prompts: string[] = [];
+      override async createAgentSession(config: AgentSessionConfig): Promise<AgentSession> {
+        const session = await super.createAgentSession(config);
+        const orig = session.ask.bind(session);
+        session.ask = async (prompt: string, messageId: string): Promise<string> => {
+          this.prompts.push(prompt);
+          return orig(prompt, messageId);
+        };
+        return session;
+      }
+    }
+    const rec = new PromptRecorderAdapter();
+    const app2 = createTestApp([], rec);
+    try {
+      const res = await app2.app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: { name: 'Review Anchoring', repoDir },
+      });
+      const projectId = (res.json() as { project: { id: string } }).project.id;
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/agents`,
+        payload: { catalogId: 'frontend-engineer' },
+      });
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/agents`,
+        payload: {
+          name: 'reviewer',
+          displayName: 'Code Reviewer',
+          prompt: 'You review pull requests.',
+        },
+      });
+
+      const PHRASE = 'Zircon-in-memory-no-deps-marker';
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/projects/${projectId}/chat`,
+        payload: { content: `Build a headless widget. Constraint: ${PHRASE}.` },
+      });
+
+      // Wait until the PR reaches a terminal review state (merged or changes).
+      await app2.waitFor(
+        (m) =>
+          m.type === 'pull_request.updated' &&
+          (m.pr.status === 'merged' || m.pr.status === 'changes_requested'),
+        15000,
+      );
+      const reviewPrompt = rec.prompts.find((p) => /Please review the pull request/.test(p));
+      expect(reviewPrompt).toBeTruthy();
+      expect(reviewPrompt).toContain(PHRASE);
+      expect(reviewPrompt).toMatch(/HARD CONSTRAINTS/);
+    } finally {
+      await app2.close();
+    }
   });
 });
