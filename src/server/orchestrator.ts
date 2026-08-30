@@ -2376,7 +2376,7 @@ class ProjectOrchestrator {
       summary = await this.actor(agent).ask(basePrompt + firm, thread.id, item.id, cwd);
       if (!gate) break;
       produced = worktree
-        ? await this.deps.git.hasRealChanges(worktree.path)
+        ? await this.deps.git.hasWorkToIntegrate(worktree.path)
         : this.producedRealChanges(runDir, fsBaseline ?? new Map());
       // On an existing codebase, a build task whose ONLY output is documentation
       // has not made the change - require real code/tests. Fake mode intentionally
@@ -2389,7 +2389,9 @@ class ProjectOrchestrator {
         (await this.isBrownfieldRepo())
       ) {
         const changed = await this.deps.git.changedFiles(worktree.path);
-        const nonDoc = changed.filter((f) => !/\.md$/i.test(f) && !f.startsWith('docs/'));
+        const committed = await this.deps.git.committedFilesAheadOfBase(worktree.path);
+        const all = [...new Set([...changed, ...committed])];
+        const nonDoc = all.filter((f) => !/\.md$/i.test(f) && !f.startsWith('docs/'));
         if (nonDoc.length === 0) {
           produced = false;
           this.emitEvent(

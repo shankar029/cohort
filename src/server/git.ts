@@ -154,7 +154,18 @@ export class GitService {
     }
     await this.run(['add', '-A'], worktreePath);
     const status = await this.run(['status', '--porcelain'], worktreePath);
-    if (status.stdout.trim().length === 0) return { committed: false, hash: null };
+    if (status.stdout.trim().length === 0) {
+      // Nothing staged in the working tree. But capable (real-SDK) agents often
+      // run git THEMSELVES - creating files, `git add`, `git commit` on the task
+      // branch - which leaves the working tree clean. That is real, deliverable
+      // work: credit the agent's own commit(s) so the task integrates instead of
+      // being lost as "produced nothing" (the empty-epic defect).
+      if ((await this.commitsAheadOfBase(worktreePath)) > 0) {
+        const hash = (await this.run(['rev-parse', 'HEAD'], worktreePath)).stdout.trim();
+        return { committed: true, hash };
+      }
+      return { committed: false, hash: null };
+    }
     const c = await this.commit(worktreePath, message);
     if (!c.ok) return { committed: false, hash: null };
     const hash = (await this.run(['rev-parse', 'HEAD'], worktreePath)).stdout.trim();
@@ -256,6 +267,48 @@ export class GitService {
 
   async hasRealChanges(worktreePath: string): Promise<boolean> {
     return (await this.changedFiles(worktreePath)).length > 0;
+  }
+
+  /**
+   * Number of commits on the current branch ahead of its fork point (origin's
+   * default/epic branch). Non-zero means the agent committed real work on the
+   * task branch itself. Returns 0 when the fork point can't be resolved (safe).
+   */
+  async commitsAheadOfBase(worktreePath: string): Promise<number> {
+    const abs = path.resolve(worktreePath);
+    if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot) return 0;
+    const mb = await this.run(['merge-base', 'HEAD', 'origin/HEAD'], worktreePath);
+    const base = mb.ok ? mb.stdout.trim() : '';
+    if (!base) return 0;
+    const c = await this.run(['rev-list', '--count', `${base}..HEAD`], worktreePath);
+    const n = parseInt(c.stdout.trim() || '0', 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  /** Deliverable file paths changed by the agent's own commits ahead of base. */
+  async committedFilesAheadOfBase(worktreePath: string): Promise<string[]> {
+    const abs = path.resolve(worktreePath);
+    if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot) return [];
+    const mb = await this.run(['merge-base', 'HEAD', 'origin/HEAD'], worktreePath);
+    const base = mb.ok ? mb.stdout.trim() : '';
+    if (!base) return [];
+    const d = await this.run(['diff', '--name-only', `${base}..HEAD`], worktreePath);
+    return d.stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((p) => !p.startsWith('.ateam/') && p !== '.ateam');
+  }
+
+  /**
+   * Whether a task clone holds real, deliverable work to integrate - EITHER
+   * uncommitted working-tree changes OR commit(s) the agent made itself on the
+   * task branch. The old working-tree-only check (`hasRealChanges`) reported a
+   * false "produced nothing" whenever the agent committed its own work.
+   */
+  async hasWorkToIntegrate(worktreePath: string): Promise<boolean> {
+    if ((await this.changedFiles(worktreePath)).length > 0) return true;
+    return (await this.commitsAheadOfBase(worktreePath)) > 0;
   }
 
   /** Repo-relative tracked file paths (via `git ls-files`). */

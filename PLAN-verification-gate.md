@@ -225,3 +225,27 @@ Lead would previously have accepted on narration — the exact defect class fixe
 Investigate WHY the backend's claimed git commit did not land in its run dir
 (agent hallucinating tool results / committing in the wrong cwd). The gate guards
 the symptom; the root cause is a separate reliability item.
+
+### Root-cause fix: commit-aware work detection (2026-08-29)
+The real-LLM run's `produced:fail` was NOT a hallucination - it was a genuine
+orchestrator bug the gate correctly surfaced:
+
+- **Cause:** `produced` = `git.hasRealChanges()` = `git status --porcelain` -
+  UNCOMMITTED working-tree changes only. `commitWork` was the same. A capable
+  real-SDK agent ran git ITSELF (create files -> `git add` -> `git commit` on the
+  task branch, commit `9daa39b`), leaving a clean working tree. So the orchestrator
+  concluded "produced no file changes", restarted, and re-cloned the task clone -
+  which is why the post-mortem showed the local branch back at `init` while the
+  real work survived only as `origin/ateam/task-* = 9daa39b`. Same class as the
+  live "empty epic" symptom.
+- **Fix (`git.ts`):** added `commitsAheadOfBase` (rev-list HEAD vs `origin/HEAD`
+  fork point), `committedFilesAheadOfBase`, and `hasWorkToIntegrate` (dirty OR
+  ahead). `commitWork` now credits an agent's own commit(s) - clean tree but ahead
+  of base returns `{committed:true, hash:HEAD}` (no empty commit) so integration
+  proceeds. Orchestrator's `produced` and the brownfield doc-only refinement are
+  now commit-aware.
+- **Tests:** `tests/unit/gitCommitAware.test.ts` (+2) - an agent that commits its
+  own work is credited and integrates; the uncommitted path still works. Suite 170.
+- **Note:** the recovered commit used `express` - so once it integrates, the
+  constraint gate will (correctly) catch the dep violation on the real content,
+  which is the intended layered behavior.
