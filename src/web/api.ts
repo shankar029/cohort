@@ -20,6 +20,7 @@ import type {
   UpdateProjectSettingsInput,
   UpdateWorkItemInput,
   UsageEntry,
+  VerificationReportRecord,
   WorkItem,
 } from '@shared/index';
 
@@ -164,6 +165,12 @@ export const api = {
 
   events: (projectId: string) =>
     request<{ events: AgentEvent[] }>(`/api/projects/${projectId}/events`),
+  projectVerification: (projectId: string) =>
+    request<{ reports: VerificationReportRecord[] }>(`/api/projects/${projectId}/verification`),
+  workItemVerification: (workItemId: string) =>
+    request<{ latest: VerificationReportRecord | null; history: VerificationReportRecord[] }>(
+      `/api/workitems/${workItemId}/verification`,
+    ),
   gitSnapshot: (projectId: string) =>
     request<{ snapshot: GitSnapshot }>(`/api/projects/${projectId}/git`),
   models: () => request<{ models: string[] }>('/api/models'),

@@ -129,6 +129,8 @@ test('board: create item, columns, epic filter, detail modal + progress', async 
   await expect(page.getByTestId('workitem').first()).toBeVisible({ timeout: 20000 });
   // Time + token usage accrues on the epic card as the team works it.
   await expect(page.getByTestId('usage-chip').first()).toBeVisible({ timeout: 20000 });
+  // The deterministic verification gate badge appears on worked cards (pushed live).
+  await expect(page.getByTestId('gate-badge').first()).toBeVisible({ timeout: 25000 });
 
   // Create an additional assigned item.
   await page.getByTestId('add-workitem').click();

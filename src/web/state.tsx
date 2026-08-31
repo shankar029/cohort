@@ -22,6 +22,7 @@ import type {
   PrComment,
   Thread,
   UsageEntry,
+  VerificationReportRecord,
 } from '@shared/index';
 import { api } from './api';
 
@@ -39,6 +40,8 @@ export interface ProjectBundle {
   notifications: Notification[];
   prComments: PrComment[];
   usage: UsageEntry[];
+  /** Deterministic gate reports (newest-first), for the board gate badge. */
+  verification: VerificationReportRecord[];
   loaded: boolean;
 }
 
@@ -76,8 +79,40 @@ const emptyBundle = (): ProjectBundle => ({
   notifications: [],
   prComments: [],
   usage: [],
+  verification: [],
   loaded: false,
 });
+
+/**
+ * Synthesize a verification record from a 'verification' event's detail so the
+ * board gate badge can update live (the event carries the report under detail.report).
+ */
+function verificationFromEvent(event: AgentEvent): VerificationReportRecord | null {
+  const rep = (event.detail as { report?: Record<string, unknown> } | null)?.report;
+  if (!rep || typeof rep !== 'object') return null;
+  const r = rep as {
+    workItemId?: string;
+    agentId?: string | null;
+    stream?: string | null;
+    scope?: 'task' | 'epic';
+    passed?: boolean;
+    outcome?: 'passed' | 'failed' | 'skipped';
+    checks?: VerificationReportRecord['checks'];
+  };
+  if (!r.workItemId || !r.scope) return null;
+  return {
+    id: event.id,
+    projectId: event.projectId,
+    workItemId: r.workItemId,
+    agentId: r.agentId ?? event.agentId,
+    scope: r.scope,
+    stream: r.stream ?? null,
+    passed: r.passed ?? false,
+    outcome: r.outcome ?? (r.passed ? 'passed' : 'failed'),
+    checks: r.checks ?? [],
+    createdAt: event.createdAt,
+  };
+}
 
 type Action =
   | { type: 'SET_PROJECTS'; projects: Project[] }
@@ -186,8 +221,16 @@ function applyWs(state: State, message: ServerMessage): State {
         return { ...b, notifications: [message.notification, ...b.notifications].slice(0, 300) };
       case 'pr_comment.updated':
         return { ...b, prComments: upsert(b.prComments, message.comment) };
-      case 'event.appended':
-        return { ...b, events: [...b.events, message.event].slice(-1000) };
+      case 'event.appended': {
+        const next = { ...b, events: [...b.events, message.event].slice(-1000) };
+        // A verification gate decision arrives as an event carrying the report;
+        // synthesize a record so the board gate badge updates live.
+        if (message.event.type === 'verification') {
+          const rep = verificationFromEvent(message.event);
+          if (rep) next.verification = [rep, ...b.verification].slice(0, 500);
+        }
+        return next;
+      }
       case 'usage.updated': {
         const key = (u: UsageEntry): string => `${u.workItemId ?? '_none'}::${u.agentId}`;
         const k = key(message.entry);
@@ -395,10 +438,11 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
     const ensureBundle = async (projectId: string): Promise<void> => {
       const existing = stateRef.current.bundles[projectId];
       if (existing?.loaded) return;
-      const [detail, chat, events] = await Promise.all([
+      const [detail, chat, events, verification] = await Promise.all([
         api.getProject(projectId),
         api.chatHistory(projectId),
         api.events(projectId),
+        api.projectVerification(projectId).catch(() => ({ reports: [] })),
       ]);
       dispatch({
         type: 'SET_BUNDLE',
@@ -414,6 +458,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
           notifications: detail.notifications,
           prComments: detail.prComments,
           usage: detail.usage,
+          verification: verification.reports,
           loaded: true,
         },
       });

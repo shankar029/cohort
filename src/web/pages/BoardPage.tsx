@@ -1,10 +1,62 @@
 import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { Agent, WorkItem, WorkItemStatus } from '@shared/index';
+import type { Agent, VerificationReportRecord, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, Banner, Modal, UsageChip, agentAvatar } from '../components/ui';
 import { usageForWorkItem } from '../usage';
 import { Markdown } from '../components/Markdown';
+
+/** The most recent verification report for a work item (list is newest-first). */
+function latestReportFor(
+  reports: VerificationReportRecord[],
+  itemId: string,
+): VerificationReportRecord | undefined {
+  return reports.find((r) => r.workItemId === itemId);
+}
+
+const GATE_STYLE: Record<
+  VerificationReportRecord['outcome'],
+  { cls: string; icon: string; word: string }
+> = {
+  passed: {
+    cls: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+    icon: '✓',
+    word: 'Gate',
+  },
+  failed: { cls: 'bg-red-500/15 text-red-300 border border-red-500/30', icon: '✕', word: 'Gate' },
+  skipped: {
+    cls: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+    icon: '⤼',
+    word: 'Override',
+  },
+};
+
+/** Compact deterministic-gate badge for a card. Renders nothing without a report. */
+function GateBadge({
+  report,
+}: {
+  report: VerificationReportRecord | undefined;
+}): React.JSX.Element | null {
+  if (!report) return null;
+  const s = GATE_STYLE[report.outcome];
+  const failing = report.checks.filter((c) => c.status === 'fail').map((c) => c.id);
+  const title =
+    `Verification ${report.scope} gate: ${report.outcome.toUpperCase()}` +
+    (failing.length ? ` — failing: ${failing.join(', ')}` : '') +
+    `\n${report.checks.map((c) => `${c.id}: ${c.status}`).join('\n')}`;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[0.65rem] font-medium ${s.cls}`}
+      title={title}
+      data-testid="gate-badge"
+      data-gate-outcome={report.outcome}
+    >
+      <span aria-hidden>{s.icon}</span>
+      {s.word}
+      {report.scope === 'epic' ? ' (epic)' : ''}
+    </span>
+  );
+}
 
 /**
  * Deleting an epic is destructive: it removes all child tasks, stops the team,
@@ -240,6 +292,7 @@ function WorkItemCard({
               🔗 {item.dependsOn.length}
             </span>
           )}
+          <GateBadge report={latestReportFor(bundle.verification, item.id)} />
         </div>
         <div className="flex items-start justify-between gap-2">
           <button
@@ -365,6 +418,7 @@ function WorkItemDetailModal({
     .map((d) => bundle.workItems.find((w) => w.id === d))
     .filter((w): w is WorkItem => Boolean(w));
   const pr = bundle.pulls.find((p) => p.workItemId === item.id);
+  const report = latestReportFor(bundle.verification, item.id);
 
   const itemUsage = usageForWorkItem(bundle.usage, bundle.workItems, item.id);
   const usageIds = new Set<string>([item.id, ...children.map((c) => c.id)]);
@@ -489,6 +543,44 @@ function WorkItemDetailModal({
                 >
                   <span className="truncate">{r.agent?.displayName ?? 'Unknown agent'}</span>
                   <UsageChip tokens={r.tokens} timeMs={r.timeMs} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {report && (
+          <div data-testid="verification-panel">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="label !mb-0">Verification gate</span>
+              <GateBadge report={report} />
+            </div>
+            <ul className="space-y-1 rounded bg-surface-2 p-2">
+              {report.checks.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex items-center justify-between gap-2 text-xs text-slate-300"
+                >
+                  <span className="truncate">
+                    {c.id}
+                    {c.severity === 'advisory' ? (
+                      <span className="ml-1 text-slate-500">(advisory)</span>
+                    ) : null}
+                  </span>
+                  <span
+                    className={
+                      c.status === 'pass'
+                        ? 'text-emerald-300'
+                        : c.status === 'fail'
+                          ? 'text-red-300'
+                          : c.status === 'error'
+                            ? 'text-amber-300'
+                            : 'text-slate-500'
+                    }
+                    title={c.detail}
+                  >
+                    {c.status}
+                  </span>
                 </li>
               ))}
             </ul>
