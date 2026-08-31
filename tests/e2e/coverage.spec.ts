@@ -187,7 +187,11 @@ test('chat escalation: a question surfaces and answering resumes the work', asyn
   await nav(page, 'Threads');
   await expect(page.getByTestId('question-card')).toBeVisible({ timeout: 20000 });
   await shot(page, 'chat-question');
-  await page.getByTestId('question-choice').first().click();
+  // BUG-3: a question with preset choices must STILL offer a free-text answer.
+  await expect(page.getByTestId('question-choice').first()).toBeVisible();
+  await expect(page.getByTestId('question-answer-input')).toBeVisible();
+  await page.getByTestId('question-answer-input').fill('Use REST with cursor pagination');
+  await page.getByRole('button', { name: 'Answer' }).click();
 
   await nav(page, 'Board');
   await expect(page.getByTestId('column-review')).toContainText('Ambiguous API', {

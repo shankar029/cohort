@@ -129,8 +129,8 @@ Legend: 🐛 bug · ⚠️ issue · 🌀 drift · ✅ working-as-intended observ
   reviewer should be constraint-aware (or the Lead should reconcile) before spawning
   such a fix. This is the `test:e2e` failure feeding `qst_s2wdG5jmQGpH`.
 
-- 🐛 **BUG-2 (concrete, recorded not fixed mid-run): the events feed returns the OLDEST
-  events and ignores `limit`.** `store.listEvents` (`store.ts:1072`) uses
+- 🐛 **BUG-2 [FIXED 2026-08-31 — commit after `6d75ff9`]: the events feed returned the OLDEST
+  events and ignored `limit`.** `store.listEvents` (`store.ts`) used
   `ORDER BY created_at ASC LIMIT ?` and the route (`app.ts:635`) never forwards the
   `?limit=` query param (defaults to 500). Verified live: `events?limit=200|1000|3000`
   ALL return `count=500, newest=07:45` while the run is at 08:27. Impact: once a
@@ -140,7 +140,7 @@ Legend: 🐛 bug · ⚠️ issue · 🌀 drift · ✅ working-as-intended observ
   now because editing `src/server/*` restarts the `tsx watch` backend and would kill
   the in-flight epic. Queued for after the run.
 
-- 🐛 **BUG-3 (UX, user-reported): “Need Your Input” offers no custom answer.** The
+- 🐛 **BUG-3 [FIXED 2026-08-31 — commit after `6d75ff9`]: “Need Your Input” offered no custom answer.** The
   escalation UI only exposes **Retry** / **Skip this task** buttons — there's no free-
   text field to actually answer the agent's question (e.g. tell backend which contract
   wins, or tell QA to use stdlib-http e2e). Since these escalations are literally

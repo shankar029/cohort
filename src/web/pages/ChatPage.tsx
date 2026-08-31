@@ -609,8 +609,8 @@ function QuestionCard({
         Needs your input{from && ` · ${from}`}
       </div>
       <p className="mb-3 text-sm text-slate-100">{question}</p>
-      {choices && choices.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
+      {choices && choices.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
           {choices.map((c) => (
             <button
               key={c}
@@ -622,25 +622,25 @@ function QuestionCard({
             </button>
           ))}
         </div>
-      ) : (
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (text.trim()) void onAnswer(text.trim());
-          }}
-        >
-          <input
-            className="input flex-1"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Your answer"
-          />
-          <button type="submit" className="btn-primary">
-            Answer
-          </button>
-        </form>
       )}
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) void onAnswer(text.trim());
+        }}
+      >
+        <input
+          className="input flex-1"
+          data-testid="question-answer-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={choices && choices.length > 0 ? 'Or type your own answer…' : 'Your answer'}
+        />
+        <button type="submit" className="btn-primary" disabled={!text.trim()}>
+          Answer
+        </button>
+      </form>
     </div>
   );
 }

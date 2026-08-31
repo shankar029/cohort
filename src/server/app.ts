@@ -631,8 +631,18 @@ export function buildApp(ctx: AppContext): FastifyInstance {
   app.get('/api/projects/:id/events', async (req) => {
     const { id } = req.params as { id: string };
     requireProject(id);
-    const query = z.object({ agentId: z.string().optional() }).parse(req.query);
-    return { events: store.listEvents(id, query.agentId ? { agentId: query.agentId } : {}) };
+    const query = z
+      .object({
+        agentId: z.string().optional(),
+        limit: z.coerce.number().int().positive().optional(),
+      })
+      .parse(req.query);
+    return {
+      events: store.listEvents(id, {
+        ...(query.agentId ? { agentId: query.agentId } : {}),
+        ...(query.limit ? { limit: query.limit } : {}),
+      }),
+    };
   });
 
   return app;

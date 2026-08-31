@@ -1049,6 +1049,7 @@ export class Store {
     type: AgentEventType;
     summary: string;
     detail?: Record<string, unknown> | null;
+    createdAt?: string;
   }): AgentEvent {
     const row: AgentEventRow = {
       id: id('evt'),
@@ -1058,7 +1059,7 @@ export class Store {
       type: e.type,
       summary: e.summary,
       detail: e.detail ? JSON.stringify(e.detail) : null,
-      created_at: now(),
+      created_at: e.createdAt ?? now(),
     };
     this.db
       .prepare(
@@ -1073,19 +1074,28 @@ export class Store {
     projectId: string,
     opts: { agentId?: string | null; limit?: number } = {},
   ): AgentEvent[] {
-    const limit = opts.limit ?? 500;
+    // Keep the NEWEST `limit` rows (so a busy project's live feed doesn't freeze on
+    // the oldest 500), but return them in chronological order for display. rowid is
+    // the tie-breaker for events sharing a millisecond timestamp.
+    const limit = Math.min(Math.max(opts.limit ?? 500, 1), 5000);
     if (opts.agentId !== undefined) {
       return this.db
         .prepare(
-          `SELECT * FROM agent_events WHERE project_id=? AND agent_id IS ? ORDER BY created_at ASC LIMIT ?`,
+          `SELECT * FROM agent_events WHERE project_id=? AND agent_id IS ?
+           ORDER BY created_at DESC, rowid DESC LIMIT ?`,
         )
         .all(projectId, opts.agentId, limit)
-        .map((r) => toEvent(r as AgentEventRow));
+        .map((r) => toEvent(r as AgentEventRow))
+        .reverse();
     }
     return this.db
-      .prepare(`SELECT * FROM agent_events WHERE project_id=? ORDER BY created_at ASC LIMIT ?`)
+      .prepare(
+        `SELECT * FROM agent_events WHERE project_id=?
+         ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
       .all(projectId, limit)
-      .map((r) => toEvent(r as AgentEventRow));
+      .map((r) => toEvent(r as AgentEventRow))
+      .reverse();
   }
 
   /* threads */
