@@ -203,6 +203,87 @@ export class GitService {
   }
 
   /**
+   * Refresh a task clone with the latest integrated work on its epic branch,
+   * PRESERVING the agent's in-progress (uncommitted) changes. The task clone's
+   * `origin` is the epic clone, so we fetch the epic branch and merge it into the
+   * current task branch under a stash. This kills stale-clone FALSE NEGATIVES
+   * (MAJOR-2): a fix-task whose gate runs against sibling code that has since been
+   * integrated on the epic branch. It only does work when the clone is actually
+   * BEHIND the epic tip; on ANY complication (fetch/merge/stash conflict) it
+   * restores the pre-refresh state and reports `conflict`/`ok:false` so the caller
+   * can safely fall back to running gates on the current tree.
+   *
+   * changed=true only when integrated sibling commits were merged in.
+   */
+  async refreshTaskFromEpic(
+    taskClonePath: string,
+    epicBranch: string,
+  ): Promise<{ ok: boolean; conflict: boolean; changed: boolean; detail: string }> {
+    const abs = path.resolve(taskClonePath);
+    if (!abs.startsWith(this.worktreeRoot + path.sep) && abs !== this.worktreeRoot)
+      return {
+        ok: false,
+        conflict: false,
+        changed: false,
+        detail: 'task clone outside worktree root',
+      };
+    const fetched = await this.run(['fetch', 'origin', epicBranch], taskClonePath);
+    if (!fetched.ok)
+      return {
+        ok: false,
+        conflict: false,
+        changed: false,
+        detail: `fetch failed: ${fetched.stderr.trim()}`,
+      };
+    const behind = await this.run(['rev-list', '--count', 'HEAD..FETCH_HEAD'], taskClonePath);
+    if (!behind.ok)
+      return { ok: false, conflict: false, changed: false, detail: 'rev-list failed' };
+    if (Number(behind.stdout.trim() || '0') === 0)
+      return { ok: true, conflict: false, changed: false, detail: 'already up to date' };
+
+    const preHead = (await this.run(['rev-parse', 'HEAD'], taskClonePath)).stdout.trim();
+    const status = await this.run(['status', '--porcelain'], taskClonePath);
+    const hasLocal = status.stdout.trim().length > 0;
+    if (hasLocal) {
+      const stashed = await this.run(['stash', 'push', '-u', '-m', 'ateam-refresh'], taskClonePath);
+      if (!stashed.ok)
+        return { ok: false, conflict: false, changed: false, detail: 'stash failed' };
+    }
+    const merged = await this.run(
+      ['merge', '--no-ff', '-m', `ateam: sync ${epicBranch}`, 'FETCH_HEAD'],
+      taskClonePath,
+    );
+    if (!merged.ok) {
+      await this.run(['merge', '--abort'], taskClonePath);
+      if (hasLocal) await this.run(['stash', 'pop'], taskClonePath);
+      const conflict = /conflict/i.test(merged.stdout + merged.stderr);
+      return {
+        ok: false,
+        conflict,
+        changed: false,
+        detail: 'merge conflict with integrated epic work',
+      };
+    }
+    if (hasLocal) {
+      const popped = await this.run(['stash', 'pop'], taskClonePath);
+      if (!popped.ok) {
+        // The agent's uncommitted work conflicts with a merged sibling change.
+        // Undo the merge and restore the working tree to its pre-refresh state so
+        // the caller can proceed exactly as before (gates on the current tree).
+        await this.run(['reset', '--hard', preHead], taskClonePath);
+        await this.run(['stash', 'pop'], taskClonePath).catch(() => undefined);
+        return {
+          ok: false,
+          conflict: true,
+          changed: false,
+          detail: 'local changes conflict with integrated epic work',
+        };
+      }
+    }
+    return { ok: true, conflict: false, changed: true, detail: `synced ${epicBranch}` };
+  }
+
+  /**
    * Integrate a completed task branch into the epic branch, inside the epic
    * clone. Fetches the task branch from the task clone and merges it (--no-ff).
    * On conflict it aborts cleanly, leaving the epic branch untouched, and

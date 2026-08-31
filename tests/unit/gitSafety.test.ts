@@ -163,4 +163,55 @@ describe('per-task worktrees + integration (slice 5a)', () => {
     expect(git(['rev-parse', epic.branch], epic.path)).toBe(headBefore);
     expect(git(['status', '--porcelain'], epic.path)).toBe('');
   });
+
+  describe('refreshTaskFromEpic (MAJOR-2 stale-clone refresh)', () => {
+    it('is a no-op when the task clone is already up to date with the epic', async () => {
+      const { svc, epic, projectId, epicId } = await setupEpicClone();
+      const t = await svc.createTaskWorktree(epic.path, projectId, epicId, 't1');
+      const r = await svc.refreshTaskFromEpic(t.path, epic.branch);
+      expect(r.ok).toBe(true);
+      expect(r.changed).toBe(false);
+    });
+
+    it("pulls a sibling's integrated work in while preserving the agent's uncommitted changes", async () => {
+      const { svc, epic, projectId, epicId } = await setupEpicClone();
+      // T1 forks and starts editing a.txt (uncommitted, still in progress).
+      const t1 = await svc.createTaskWorktree(epic.path, projectId, epicId, 't1');
+      fs.writeFileSync(path.join(t1.path, 'a.txt'), 'A work in progress\n');
+      // Sibling T2 adds b.txt and integrates onto the epic branch WHILE T1 runs.
+      const t2 = await svc.createTaskWorktree(epic.path, projectId, epicId, 't2');
+      fs.writeFileSync(path.join(t2.path, 'b.txt'), 'B done\n');
+      await svc.commitWork(t2.path, 'task(b): add b');
+      expect((await svc.integrateTaskBranch(epic.path, epic.branch, t2.path, t2.branch)).ok).toBe(
+        true,
+      );
+      // Refreshing T1 gains b.txt AND keeps its uncommitted a.txt.
+      const r = await svc.refreshTaskFromEpic(t1.path, epic.branch);
+      expect(r.ok).toBe(true);
+      expect(r.changed).toBe(true);
+      expect(fs.existsSync(path.join(t1.path, 'b.txt'))).toBe(true);
+      expect(fs.readFileSync(path.join(t1.path, 'a.txt'), 'utf8')).toContain('work in progress');
+    });
+
+    it('falls back safely (conflict, tree preserved) when local work conflicts with a sibling', async () => {
+      const { svc, epic, projectId, epicId } = await setupEpicClone();
+      // T1 edits README in progress (uncommitted).
+      const t1 = await svc.createTaskWorktree(epic.path, projectId, epicId, 't1');
+      fs.writeFileSync(path.join(t1.path, 'README.md'), '# from T1 wip\n');
+      // Sibling T2 edits the SAME file and integrates onto the epic branch.
+      const t2 = await svc.createTaskWorktree(epic.path, projectId, epicId, 't2');
+      fs.writeFileSync(path.join(t2.path, 'README.md'), '# from T2\n');
+      await svc.commitWork(t2.path, 'task(b): edit readme');
+      expect((await svc.integrateTaskBranch(epic.path, epic.branch, t2.path, t2.branch)).ok).toBe(
+        true,
+      );
+      const r = await svc.refreshTaskFromEpic(t1.path, epic.branch);
+      expect(r.ok).toBe(false);
+      expect(r.conflict).toBe(true);
+      // T1's uncommitted change survives and no half-finished merge is left behind.
+      expect(fs.readFileSync(path.join(t1.path, 'README.md'), 'utf8')).toContain('T1 wip');
+      expect(git(['status', '--porcelain'], t1.path)).not.toBe('');
+      expect(fs.existsSync(path.join(t1.path, '.git', 'MERGE_HEAD'))).toBe(false);
+    });
+  });
 });

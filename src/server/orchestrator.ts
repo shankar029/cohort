@@ -2530,6 +2530,32 @@ class ProjectOrchestrator {
       return;
     }
 
+    // MAJOR-2: pull any sibling work that integrated onto the epic branch WHILE
+    // this task ran into the task clone before the deterministic gates, so a
+    // fix-task's gate doesn't false-fail against a stale snapshot (the exact
+    // stale-clone false-negative seen in live run). No-op unless the clone is
+    // behind the epic tip; on any conflict it safely leaves the tree untouched and
+    // the gates run on the current tree (status quo).
+    if (gate && produced && worktree && epicWt && worktree !== epicWt && item.parentId) {
+      const sync = await this.deps.git.refreshTaskFromEpic(worktree.path, epicWt.branch);
+      if (sync.changed)
+        this.emitEvent(
+          agent.id,
+          'git',
+          `Synced "${item.title}" with integrated epic work before gates`,
+          null,
+          item.id,
+        );
+      else if (sync.conflict)
+        this.emitEvent(
+          agent.id,
+          'git',
+          `Could not pre-sync "${item.title}" with the epic branch (conflict) - gates run on the current tree`,
+          null,
+          item.id,
+        );
+    }
+
     // Per-task BUILD gate: the task's own isolated clone must compile. Each task
     // builds in ITS OWN clone (forked off the epic branch tip, so it sees
     // already-integrated dependency work), making this an honest owner-attributed

@@ -182,7 +182,7 @@ Legend: 🐛 bug · ⚠️ issue · 🌀 drift · ✅ working-as-intended observ
   resolved in the merged result.** 11/12 fixes in review; only `wi_GXEBvN8ixuhP` still
   `task:failed` (4 reports) and it re-escalated.
 
-- MAJOR-2: **task-clone gate yields FALSE NEGATIVES for interdependent fix-tasks.**
+- MAJOR-2 [FIXED 2026-08-31]: **task-clone gate yields FALSE NEGATIVES for interdependent fix-tasks.**
   `wi_GXEBvN8ixuhP` (rewrite tests to the correct contract) runs `npm run test:e2e` in
   its ISOLATED task clone, which does NOT contain the sibling backend payload fix
   (`wi_rCDRVtUuBVCF`, integrated as `81edc7f`). Its correct, contract-aligned tests
