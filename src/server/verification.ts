@@ -64,7 +64,13 @@ export interface ReportMeta {
  */
 export function requiredChecks(stream: string | null, scope: GateScope): string[] {
   if (scope === 'epic') {
-    return ['integrated-build', 'integrated-constraints', 'integrated-tests', 'acceptance'];
+    return [
+      'integrated-build',
+      'integrated-constraints',
+      'integrated-tests',
+      'acceptance',
+      'acceptance-probe',
+    ];
   }
   const s = (stream ?? '').toLowerCase();
   if (s === 'reviewer') return ['review-comments'];

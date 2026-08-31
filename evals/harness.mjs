@@ -544,6 +544,19 @@ export class EvalHarness {
     const verificationReports = reports.length;
     const gateFailures = reports.filter((r) => r.outcome === 'failed').length;
     const gateOverrides = reports.filter((r) => r.outcome === 'skipped').length;
+    // MAJOR-1: the deterministic acceptance-probe check on the epic-scoped reports.
+    // 'pass'/'fail' when a probe ran on any epic; 'skip' when none did.
+    let acceptanceProbe = 'skip';
+    for (const r of reports) {
+      if (r.scope !== 'epic') continue;
+      const c = (r.checks ?? []).find((x) => x.id === 'acceptance-probe');
+      if (!c) continue;
+      if (c.status === 'fail') {
+        acceptanceProbe = 'fail';
+        break;
+      }
+      if (c.status === 'pass') acceptanceProbe = 'pass';
+    }
 
     // Event-derived signals (server-authoritative, not fuzzy keyword matches).
     const evStr = this.events.map((e) => JSON.stringify(e)).join('\n');
@@ -572,6 +585,7 @@ export class EvalHarness {
       gateFailures,
       gateOverrides,
       tasksDoneWithFailingGate,
+      acceptanceProbe,
       qaSignoff,
       authIssue,
     };
@@ -613,6 +627,10 @@ function renderReport(scenario, o, chat, h) {
   if (o.verificationReports !== undefined)
     lines.push(
       `- **Verification reports:** ${o.verificationReports} (failures ${o.gateFailures}, overrides ${o.gateOverrides}) | **tasks terminal with a failing gate:** ${o.tasksDoneWithFailingGate} ${o.tasksDoneWithFailingGate === 0 ? '✅' : '❌'}`,
+    );
+  if (o.acceptanceProbe && o.acceptanceProbe !== 'skip')
+    lines.push(
+      `- **Acceptance probe (MAJOR-1):** ${o.acceptanceProbe} ${o.acceptanceProbe === 'pass' ? '✅' : '❌'}`,
     );
   lines.push('');
   lines.push(`## Epics`);

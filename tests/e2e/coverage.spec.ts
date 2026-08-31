@@ -269,3 +269,56 @@ test('settings: manual-approval toggle + save', async ({ page }) => {
   await page.getByTestId('settings-save').click();
   await shot(page, 'settings');
 });
+
+// ------------------------------------------- MAJOR-1: acceptance-probe epic gate
+test('acceptance probe: deterministic epic gate runs and surfaces in the verification panel', async ({
+  page,
+}) => {
+  await createProject(page, 'Cov Probe');
+
+  // Set a deterministic passing acceptance probe via the API (the epic gate must
+  // run it against the integrated tree before merge).
+  const list = (await (await page.request.get('/api/projects')).json()) as {
+    projects: Array<{ id: string; name: string }>;
+  };
+  const projectId = list.projects.find((p) => p.name === 'Cov Probe')!.id;
+  await page.request.patch(`/api/projects/${projectId}`, {
+    data: { acceptanceCommand: 'node -e "process.exit(0)"' },
+  });
+
+  await addSpecialist(page, 'frontend-engineer');
+  await addSpecialist(page, 'qa-engineer');
+
+  await nav(page, 'Threads');
+  await page.getByTestId('chat-input').fill('Please build a greeting module.');
+  await page.getByTestId('chat-send').click();
+  await expect(page.getByTestId('lead-message').last()).toBeVisible({ timeout: 20000 });
+
+  // Wait until the epic's merge-authority report (with the acceptance-probe check)
+  // is recorded, then open the epic card detail and confirm it surfaces in the UI.
+  await nav(page, 'Board');
+  const epicCard = page.getByTestId('workitem').filter({ hasText: 'EPIC' }).first();
+  await expect(epicCard).toBeVisible({ timeout: 20000 });
+
+  await expect
+    .poll(
+      async () => {
+        const body = (await (
+          await page.request.get(`/api/projects/${projectId}/verification?limit=500`)
+        ).json()) as {
+          reports: Array<{ scope: string; checks: Array<{ id: string; status: string }> }>;
+        };
+        const epicReport = body.reports.find(
+          (r) => r.scope === 'epic' && r.checks.some((c) => c.id === 'acceptance-probe'),
+        );
+        return epicReport?.checks.find((c) => c.id === 'acceptance-probe')?.status ?? 'none';
+      },
+      { timeout: 30000 },
+    )
+    .toBe('pass');
+
+  await epicCard.getByTestId('workitem-title').click();
+  await expect(page.getByTestId('workitem-detail')).toBeVisible();
+  await expect(page.getByTestId('verification-panel')).toContainText('acceptance-probe');
+  await shot(page, 'acceptance-probe');
+});

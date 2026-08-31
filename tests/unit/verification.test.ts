@@ -39,6 +39,7 @@ describe('verification model', () => {
         'integrated-constraints',
         'integrated-tests',
         'acceptance',
+        'acceptance-probe',
       ]);
     });
   });

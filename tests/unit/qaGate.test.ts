@@ -6,6 +6,8 @@ import {
   resolveTestCommand,
   runProjectTests,
   resolveBuildCommand,
+  resolveAcceptanceProbe,
+  runAcceptanceProbe,
   ensureDependencies,
 } from '../../src/server/qaGate.js';
 
@@ -160,5 +162,59 @@ describe('ensureDependencies (I3)', () => {
     expect(r.ran).toBe(false);
     expect(r.passed).toBe(true);
     expect(r.output).toContain('node_modules present');
+  });
+});
+
+describe('resolveAcceptanceProbe (MAJOR-1)', () => {
+  it('prefers an explicit acceptanceCommand override over everything', () => {
+    fs.mkdirSync(path.join(dir, '.ateam'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.ateam', 'acceptance.mjs'), 'process.exit(0)');
+    expect(resolveAcceptanceProbe(dir, 'node probe.js')).toBe('node probe.js');
+  });
+
+  it('resolves a committed .ateam/acceptance.mjs probe when no override is set', () => {
+    fs.mkdirSync(path.join(dir, '.ateam'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.ateam', 'acceptance.mjs'), 'process.exit(0)');
+    expect(resolveAcceptanceProbe(dir)).toBe('node .ateam/acceptance.mjs');
+  });
+
+  it('returns null (graceful skip) when neither an override nor a probe file exists', () => {
+    expect(resolveAcceptanceProbe(dir)).toBeNull();
+  });
+});
+
+describe('runAcceptanceProbe (MAJOR-1)', () => {
+  it('reports pass when the probe exits 0', async () => {
+    fs.mkdirSync(path.join(dir, '.ateam'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.ateam', 'acceptance.mjs'),
+      'console.log("ok"); process.exit(0);',
+    );
+    const r = await runAcceptanceProbe(dir);
+    expect(r.ran).toBe(true);
+    expect(r.passed).toBe(true);
+  });
+
+  it('reports fail when the probe exits non-zero (contract not met)', async () => {
+    fs.mkdirSync(path.join(dir, '.ateam'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.ateam', 'acceptance.mjs'),
+      'console.error("AC1 FAILED: missing endpoint"); process.exit(1);',
+    );
+    const r = await runAcceptanceProbe(dir);
+    expect(r.ran).toBe(true);
+    expect(r.passed).toBe(false);
+    expect(r.output).toMatch(/AC1 FAILED/);
+  });
+
+  it('is a graceful no-op (ran:false => skip) when there is no probe', async () => {
+    const r = await runAcceptanceProbe(dir);
+    expect(r.ran).toBe(false);
+  });
+
+  it('runs an explicit override command in the directory', async () => {
+    const r = await runAcceptanceProbe(dir, 'node -e "process.exit(0)"');
+    expect(r.ran).toBe(true);
+    expect(r.passed).toBe(true);
   });
 });

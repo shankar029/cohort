@@ -123,6 +123,42 @@ export function runProjectBuild(
 }
 
 /**
+ * Resolve the deterministic epic-level ACCEPTANCE PROBE command (MAJOR-1). An
+ * explicit `override` (project `acceptanceCommand`) always wins; otherwise, if a
+ * committed `.ateam/acceptance.mjs` probe exists in `dir` (authored from the spec
+ * by the QA/architect), run it with Node. Returns null when neither is present,
+ * which makes the acceptance-probe gate a graceful no-op (`skip`, never blocking).
+ * The probe is a spec-derived contract check INDEPENDENT of the builders' own
+ * unit tests, so it catches a green-but-wrong-contract delivery.
+ */
+export function resolveAcceptanceProbe(dir: string, override?: string): string | null {
+  const ov = override?.trim();
+  if (ov) return ov;
+  try {
+    if (fs.existsSync(path.join(dir, '.ateam', 'acceptance.mjs'))) {
+      return 'node .ateam/acceptance.mjs';
+    }
+  } catch {
+    /* fs unavailable */
+  }
+  return null;
+}
+
+/**
+ * Run the epic's acceptance probe in `dir` (the integrated epic clone). Same
+ * isolation + timeout guarantees as runProjectTests; `ran: false` means there was
+ * no probe to run (graceful no-op => the gate records `skip`). `passed` reflects
+ * exit code 0.
+ */
+export function runAcceptanceProbe(
+  dir: string,
+  override?: string,
+  timeoutMs = 240_000,
+): Promise<TestRunResult> {
+  return runResolved(resolveAcceptanceProbe(dir, override), dir, timeoutMs);
+}
+
+/**
  * Ensure a project directory's dependencies are installed before a build/test
  * gate runs there. The integrated epic clone (and freshly-forked task clones)
  * start with source only - `node_modules` is git-ignored, never committed - so a

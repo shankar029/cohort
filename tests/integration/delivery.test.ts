@@ -425,3 +425,83 @@ describe('brownfield epics converge on a single concrete build task', () => {
     expect(buildTasks[0]!.stream).toBe('backend');
   });
 });
+
+describe('MAJOR-1 acceptance-probe epic gate', () => {
+  interface Report {
+    scope: string;
+    outcome: string;
+    checks: Array<{ id: string; status: string }>;
+  }
+  const getReports = async (projectId: string): Promise<Report[]> => {
+    const body = (await ctx.app
+      .inject({ method: 'GET', url: `/api/projects/${projectId}/verification?limit=500` })
+      .then((r) => r.json())) as { reports: Report[] };
+    return body.reports;
+  };
+
+  it('runs a passing probe and records acceptance-probe:pass on the merged epic', async () => {
+    const projectId = await createProject('Probe Pass');
+    await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}`,
+      payload: { acceptanceCommand: 'node -e "process.exit(0)"' },
+    });
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 20000);
+
+    const reports = await getReports(projectId);
+    const epicReport = reports.find(
+      (r) => r.scope === 'epic' && r.checks.some((c) => c.id === 'acceptance-probe'),
+    );
+    expect(epicReport).toBeTruthy();
+    const probe = epicReport!.checks.find((c) => c.id === 'acceptance-probe');
+    expect(probe!.status).toBe('pass');
+    expect(epicReport!.outcome).toBe('passed');
+  });
+
+  it('BLOCKS merge when the probe fails: records acceptance-probe:fail and does not merge', async () => {
+    const projectId = await createProject('Probe Fail');
+    await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}`,
+      payload: { acceptanceCommand: 'node -e "process.exit(1)"' },
+    });
+    await addSpecialist(projectId, 'frontend-engineer');
+    await addSpecialist(projectId, 'qa-engineer');
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a profile page.' },
+    });
+
+    // The deterministic probe fails => the gate blocks the merge and says so.
+    const ev = await ctx.waitFor(
+      (m) => m.type === 'event.appended' && /Acceptance probe FAILED/i.test(m.event.summary),
+      20000,
+    );
+    expect(ev.type === 'event.appended' && ev.event.summary).toMatch(/Acceptance probe FAILED/i);
+
+    // A durable failing epic report exists...
+    const reports = await getReports(projectId);
+    const failing = reports.find(
+      (r) =>
+        r.scope === 'epic' &&
+        r.checks.some((c) => c.id === 'acceptance-probe' && c.status === 'fail'),
+    );
+    expect(failing).toBeTruthy();
+    expect(failing!.outcome).toBe('failed');
+
+    // ...and no PR was allowed to merge on a failing contract.
+    const { pulls } = (await ctx.app
+      .inject({ method: 'GET', url: `/api/projects/${projectId}/pulls` })
+      .then((r) => r.json())) as { pulls: Array<{ status: string }> };
+    expect(pulls.every((p) => p.status !== 'merged')).toBe(true);
+  });
+});

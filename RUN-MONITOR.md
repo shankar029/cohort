@@ -282,18 +282,17 @@ waves + a 3rd-round budget cap. Final: merged, 64/64 tests, 0 deps, correct cont
 | — | Review→comments→remediation | 12 cited defects wave-1 caught a spec-noncompliant delivery |
 
 ### 🐛 / 🌀 Issues to fix (priority order)
-1. **MAJOR-1** — ❌ OPEN (deferred; needs design + real-SDK validation) — green
-   tests+gates NOT sufficient: agents test their own wrong contract. The epic
-   acceptance gate is itself LLM-narrated (`evaluateAcceptance` asks the QA/reviewer
-   agent to judge the diff), so it shares the blind spot. → add a spec-derived,
-   machine-checkable acceptance probe as a REQUIRED epic-level check independent of
-   agent-authored tests. **Design sketch:** (a) Architect emits, as part of the epic
-   design, an executable `acceptance-probe` (e.g. a `node --test` file or a shell
-   script that boots the integrated build and asserts the contract: `POST {body}→201`,
-   `GET→array`); (b) a new deterministic epic gate runs it in the integrated worktree
-   and BLOCKS merge on failure, recorded as an `acceptance-probe` check in the epic
-   GateReport; (c) fall back to the LLM judge only when no probe is derivable. Needs a
-   real-SDK run to validate probe generation + harness, so it's its own effort.
+1. **MAJOR-1** — ✅ FIXED (this batch): deterministic, spec-derived ACCEPTANCE
+   PROBE added as a REQUIRED epic-level gate, independent of the agents' own unit
+   tests (which can pass a wrong contract). Resolution: project `acceptanceCommand`
+   override → committed `.ateam/acceptance.mjs` (authored from the spec by the
+   QA/architect during epic setup) → else skip. `qaGate.runAcceptanceProbe` runs it
+   in the integrated epic clone at finalize; exit non-zero BLOCKS merge and routes
+   back as fix work (`handleFailedAcceptanceProbe`, shared remediation budget, then
+   escalate). Recorded as an `acceptance-probe` check on the epic GateReport and
+   surfaced in the board verification panel. Tests: qaGate unit (pass/fail/absent),
+   verification unit (required list), delivery integration (blocks on fail / passes
+   on pass / records the check), eval `acceptance-probe --fake`, e2e panel assertion.
 2. **MAJOR-2** — ✅ FIXED (`907878c`): pre-gate `refreshTaskFromEpic` syncs the task
    clone with integrated sibling work before the deterministic gates.
 3. **ISSUE-2** — ✅ MITIGATED (`907878c` refresh + `09ccb4e` budget): re-drives fork
@@ -305,5 +304,14 @@ waves + a 3rd-round budget cap. Final: merged, 64/64 tests, 0 deps, correct cont
    the top of the task brief.
 7. **DRIFT-5** — ✅ MITIGATED (`3814e45`): "implement EXACTLY the checklist, nothing
    more" scope-discipline directive.
-8. **DRIFT-1/3 / ISSUE-1** — ❌ OPEN (minor) — over-fan-out to 8 streams for a toy; build check never
-   runs on build-stream integrating tasks (minor; QA stream is the test backstop).
+8. **DRIFT-1/3 / ISSUE-1** — ✅ WON'T-FIX (intentional, documented) — (a) DRIFT-1
+   over-fan-out: dropping `devops` for a self-contained headless toy was prototyped
+   but REVERTED — `streamScope.test.ts` deliberately asserts devops is KEPT for the
+   in-memory/no-deps case (it can still add run scripts/CI value), so this is a
+   judgment call, not a bug; the headless eval already scopes ux/frontend/researcher
+   out. (b) ISSUE-1: the per-task build gate already runs on builder streams and the
+   integrated-build gate runs at epic finalize, with the QA stream + the new MAJOR-1
+   acceptance-probe as additional epic-level backstops — the remaining nit is covered.
+9. **DRIFT-4** — ❌ OPEN (minor) — reviewer occasionally invents a fix demand that
+   conflicts with a hard constraint; the DRIFT-2 constraint directives + MAJOR-1
+   contract probe reduce the surface, but reviewer-prompt hardening is deferred.

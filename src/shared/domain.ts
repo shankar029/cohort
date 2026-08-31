@@ -45,6 +45,14 @@ export interface ProjectSettings {
    * A build task cannot advance to review if this command fails.
    */
   buildCommand?: string;
+  /**
+   * Command used for the deterministic epic-level ACCEPTANCE PROBE (MAJOR-1). Run
+   * in the integrated epic clone at finalize; exit 0 = accepted, non-zero = blocks
+   * merge. When unset, ateam falls back to a committed `.ateam/acceptance.mjs`
+   * probe (authored from the spec), else the LLM acceptance judge. This is a
+   * spec-derived contract check INDEPENDENT of the agents' own unit tests.
+   */
+  acceptanceCommand?: string;
 }
 
 export interface Project {

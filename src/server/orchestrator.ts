@@ -1,6 +1,11 @@
 import path from 'node:path';
 import fs from 'node:fs';
-import { runProjectBuild, runProjectTests, ensureDependencies } from './qaGate.js';
+import {
+  runProjectBuild,
+  runProjectTests,
+  runAcceptanceProbe,
+  ensureDependencies,
+} from './qaGate.js';
 import { sanitizeDag } from './dag.js';
 import { scopeStreams } from './streamScope.js';
 import {
@@ -1116,6 +1121,10 @@ class ProjectOrchestrator {
         /* annotation is best-effort */
       }
     }
+    // MAJOR-1: author a spec-derived acceptance probe into the epic clone so the
+    // deterministic epic gate can check the delivered CONTRACT independently of the
+    // builders' own unit tests. Best-effort, never blocks dispatch.
+    await this.authorAcceptanceProbe(epic, content, thread);
     try {
       await this.actor(lead).ask(
         `The tasks for epic "${epic.title}" are already created, assigned, and running - one per ` +
@@ -3574,12 +3583,52 @@ class ProjectOrchestrator {
       acceptStatus = 'pass';
     }
 
+    // Deterministic ACCEPTANCE PROBE (MAJOR-1): a spec-derived, machine-checkable
+    // contract check run against the integrated tree, INDEPENDENT of the builders'
+    // own unit tests (which can pass a wrong contract). Exit 0 = accepted; non-zero
+    // BLOCKS the merge. Absent (no acceptanceCommand + no committed
+    // `.ateam/acceptance.mjs`) => `skip`, so a probe-less epic merges as before.
+    let probeStatus: CheckStatus = 'skip';
+    if (wt) {
+      const probe = await runAcceptanceProbe(
+        wt.path,
+        this.project().settings.acceptanceCommand,
+        Number(process.env.ATEAM_QA_TEST_TIMEOUT_MS ?? 240_000),
+      );
+      if (probe.ran && !probe.passed) {
+        this.recordEpicReport(epic, lead, [
+          { id: 'integrated-build', status: buildStatus, detail: '' },
+          { id: 'integrated-constraints', status: constraintStatus, detail: '' },
+          { id: 'acceptance', status: acceptStatus, detail: '' },
+          {
+            id: 'acceptance-probe',
+            status: 'fail',
+            detail: probe.command,
+            evidence: { output: probe.output.split('\n').slice(-25).join('\n').slice(-2000) },
+          },
+        ]);
+        await this.handleFailedAcceptanceProbe(epic, probe, lead);
+        return;
+      }
+      if (probe.ran) {
+        probeStatus = 'pass';
+        this.emitEvent(
+          lead.id,
+          'system',
+          `Acceptance probe passed: \`${probe.command}\``,
+          null,
+          epic.id,
+        );
+      }
+    }
+
     // All merge-authority gates cleared - record the passing epic report (the
     // durable proof behind this merge) before approving.
     this.recordEpicReport(epic, lead, [
       { id: 'integrated-build', status: buildStatus, detail: '' },
       { id: 'integrated-constraints', status: constraintStatus, detail: '' },
       { id: 'acceptance', status: acceptStatus, detail: '' },
+      { id: 'acceptance-probe', status: probeStatus, detail: '' },
     ]);
     this.epicRemediationIter.delete(epic.id);
     await this.approveAndMerge(epic, prId, lead, repoDir, branch);
@@ -3838,6 +3887,138 @@ class ProjectOrchestrator {
       `The integrated epic build \`${built.command}\` is failing. Diagnose and fix so it passes:\n\n${tail}`,
       lead,
     );
+    this.pokeLead();
+  }
+
+  /**
+   * MAJOR-1: have a verifier (QA > architect > Lead) author a spec-derived
+   * acceptance probe at `.ateam/acceptance.mjs` in the epic clone, committed to the
+   * epic branch so it is present when the epic gate runs at finalize. The probe is
+   * derived from the REQUEST/contract (endpoints, response shapes, status codes,
+   * behavior), NOT the implementation, so it is independent of the builders' own
+   * unit tests. Entirely best-effort: skipped when an explicit `acceptanceCommand`
+   * override exists, when there is no epic worktree, or on any error - it must never
+   * block dispatch.
+   */
+  private async authorAcceptanceProbe(
+    epic: WorkItem,
+    content: string,
+    thread: { id: string },
+  ): Promise<void> {
+    if (this.project().settings.acceptanceCommand?.trim()) return;
+    const wt = this.epicWorktrees.get(epic.id);
+    if (!wt) return;
+    const author =
+      this.findAgentByStream('qa') ??
+      this.specialists().find((s) => s.name === 'architect') ??
+      this.lead();
+    try {
+      await this.actor(author).ask(
+        `Author an executable ACCEPTANCE PROBE for epic "${epic.title}" at the path ` +
+          `\`.ateam/acceptance.mjs\` in this repository. It is a spec-derived, black-box ` +
+          `contract check that the team's delivery will be gated against before merge.\n\n` +
+          `Request (source of truth for the contract):\n${content.slice(0, 2000)}\n\n` +
+          `Requirements for the probe:\n` +
+          `- A standalone Node script (\`node .ateam/acceptance.mjs\`) using ONLY Node built-ins ` +
+          `(node:test/node:assert/node:http/child_process are fine); it must NOT add dependencies.\n` +
+          `- Assert the EXTERNAL, observable contract from the request: required endpoints/commands, ` +
+          `request/response shapes, status codes, and key behaviors - NOT internal implementation ` +
+          `details, and NOT a copy of the builders' unit tests.\n` +
+          `- Boot or import the delivered system itself (start the server / spawn the CLI / import ` +
+          `the public entry point) and exercise it end-to-end. Fail fast with a clear message.\n` +
+          `- Exit 0 when every contract assertion passes; exit non-zero otherwise.\n` +
+          `- Be resilient to the exact file layout (discover the entry point) so it runs against the ` +
+          `integrated tree.\n\n` +
+          `Write ONLY that one file. Do not implement the product, create tasks, or ask questions.`,
+        thread.id,
+        epic.id,
+        wt.path,
+      );
+      const probePath = path.join(wt.path, '.ateam', 'acceptance.mjs');
+      if (fs.existsSync(probePath)) {
+        await this.deps.git.commitWork(
+          wt.path,
+          `test: add spec-derived acceptance probe for ${epic.title}`,
+        );
+        this.emitEvent(
+          author.id,
+          'system',
+          `Authored acceptance probe \`.ateam/acceptance.mjs\` (spec-derived contract gate)`,
+          null,
+          epic.id,
+        );
+      }
+    } catch {
+      /* probe authoring is best-effort */
+    }
+  }
+
+  /**
+   * The deterministic ACCEPTANCE PROBE (MAJOR-1) failed against the integrated
+   * tree: the delivery does not satisfy the spec-derived contract, even though the
+   * builders' own tests/gates passed. Route it back as fix work (capped by the
+   * shared remediation budget); after MAX_REMEDIATION_ITER rounds, park the epic
+   * and ask the user to merge anyway or keep working. Same shape as the integrated
+   * build failure, but the fix brief points at the CONTRACT, not a compile error.
+   */
+  private async handleFailedAcceptanceProbe(
+    epic: WorkItem,
+    probe: { command: string; output: string },
+    lead: Agent,
+  ): Promise<void> {
+    const iter = (this.epicRemediationIter.get(epic.id) ?? 0) + 1;
+    this.epicRemediationIter.set(epic.id, iter);
+    const tail = probe.output.split('\n').slice(-25).join('\n').slice(-2000);
+    this.emitEvent(
+      lead.id,
+      'system',
+      `Acceptance probe FAILED: \`${probe.command}\` - delivery does not meet the spec contract, blocking merge`,
+      tail ? { output: tail } : null,
+      epic.id,
+    );
+    const fixBrief = (): void => {
+      this.createFixTask(
+        epic,
+        `fix: acceptance probe failing (${probe.command})`,
+        `The deterministic acceptance probe \`${probe.command}\` is FAILING against the ` +
+          `integrated build. This is a spec-derived contract check that is independent of the ` +
+          `unit tests, so the delivery deviates from the REQUIRED external contract (endpoints, ` +
+          `response shapes, status codes, or behavior). Diagnose from the probe output and fix ` +
+          `the IMPLEMENTATION to satisfy the contract - do NOT weaken or edit the probe:\n\n${tail}`,
+        lead,
+      );
+    };
+
+    if (iter >= ProjectOrchestrator.MAX_REMEDIATION_ITER) {
+      this.awaitingInput.add(epic.id);
+      this.notify(
+        'question',
+        `Acceptance probe blocked: ${epic.title}`,
+        `The acceptance probe (\`${probe.command}\`) still fails after ${iter} rounds.`,
+        'board',
+        epic.id,
+        lead.id,
+      );
+      void this.raiseQuestion(
+        lead.id,
+        `Epic "${epic.title}" still fails its acceptance probe (\`${probe.command}\`) after ${iter} ` +
+          `rounds - the delivery does not meet the spec contract. Merge anyway, or keep working on it?`,
+        ['Keep working', 'Merge anyway'],
+      ).then((ans) => {
+        this.awaitingInput.delete(epic.id);
+        if (ans.toLowerCase().startsWith('merge')) {
+          this.forcedAccept.add(epic.id);
+          this.epicRemediationIter.delete(epic.id);
+        } else {
+          this.epicRemediationIter.set(epic.id, 0);
+          fixBrief();
+        }
+        this.pokeLead();
+      });
+      return;
+    }
+
+    fixBrief();
     this.pokeLead();
   }
 

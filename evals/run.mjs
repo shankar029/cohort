@@ -60,6 +60,38 @@ const SCENARIOS = {
     ],
   },
 
+  // MAJOR-1: proves the deterministic spec-derived ACCEPTANCE PROBE gate end to
+  // end. A passing project `acceptanceCommand` is set, so the epic gate must run
+  // it against the integrated tree and record an `acceptance-probe: pass` check on
+  // the epic-scoped report before merge. Fake-friendly: the probe is an explicit
+  // command, so it is deterministic without relying on the model authoring one.
+  'acceptance-probe': {
+    name: 'acceptance-probe',
+    kind: 'greenfield',
+    team: ['frontend-engineer', 'qa-engineer'],
+    defaultTimeoutMin: 20,
+    settings: { acceptanceCommand: 'node -e "process.exit(0)"' },
+    async drive(h) {
+      await h.sendChat(
+        'Build a tiny dependency-free greeting module in Node: export greet(name) ' +
+          'returning "Hello, <name>!" with a unit test. Keep it minimal.',
+      );
+    },
+    until: (s) => s.epics.length > 0 && s.epics.every((e) => e.status === 'done'),
+    acceptance: [
+      { label: 'At least one epic reached done', check: (o) => o.epicsDone >= 1 },
+      { label: 'At least one PR merged', check: (o) => o.prsMerged >= 1 },
+      {
+        label: 'Acceptance probe ran as a REQUIRED epic gate (pass)',
+        check: (o) => o.acceptanceProbe === 'pass',
+      },
+      {
+        label: 'No task terminal with a failing gate',
+        check: (o) => o.tasksDoneWithFailingGate === 0,
+      },
+    ],
+  },
+
   // Reproduces live run #2's failure mode and guards the fixes: a headless,
   // in-memory, dependency-free API request. Asserts the SYSTEM scopes streams
   // (no ux/frontend/researcher) and the delivery stays faithful to the hard
@@ -267,7 +299,7 @@ async function main() {
   let result;
   try {
     await h.start();
-    await h.createProject(`eval-${scenario.name}`, repoDir);
+    await h.createProject(`eval-${scenario.name}`, repoDir, scenario.settings ?? {});
     await h.addTeam(scenario.team);
     await scenario.drive(h);
     result = await h.monitorUntil(scenario.until, { timeoutMs: timeoutMin * 60_000 });
