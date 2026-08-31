@@ -44,6 +44,7 @@ export function ChatPage(): React.JSX.Element {
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeThread, setActiveThread] = useState<string | null>(null);
+  const [showNewMenu, setShowNewMenu] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -75,26 +76,33 @@ export function ChatPage(): React.JSX.Element {
     [bundle.threads],
   );
 
-  // User↔Lead side conversations (kept alongside the main channel at the top).
+  const epics = useMemo(
+    () => bundle.workItems.filter((w) => w.kind === 'epic'),
+    [bundle.workItems],
+  );
+
+  // User↔Lead side conversations with no epic (kept alongside main at the top).
+  // Epic-linked conversations nest under their epic in `grouped` instead.
   const conversations = useMemo(
     () =>
       bundle.threads
-        .filter((t) => t.kind === 'dm')
+        .filter((t) => t.kind === 'dm' && !epicOf(t))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
-    [bundle.threads],
+    [bundle.threads, epicOf],
   );
 
-  // Discussions grouped by epic, plus a 'General' bucket for unlinked threads.
+  // Discussions + epic-linked conversations grouped by epic, plus a 'General'
+  // bucket for unlinked group threads.
   const grouped = useMemo(() => {
     const epics = new Map<string, { id: string; title: string; threads: Thread[] }>();
     const general: Thread[] = [];
     const rest = bundle.threads
-      .filter((t) => t.kind === 'group')
+      .filter((t) => t.kind === 'group' || t.kind === 'dm')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     for (const t of rest) {
       const e = epicOf(t);
       if (!e) {
-        general.push(t);
+        if (t.kind === 'group') general.push(t);
         continue;
       }
       let g = epics.get(e.id);
@@ -217,11 +225,12 @@ export function ChatPage(): React.JSX.Element {
     }
   };
 
-  const onNewThread = async (): Promise<void> => {
+  const onNewThread = async (epicId?: string): Promise<void> => {
     if (!projectId) return;
     setError(null);
+    setShowNewMenu(false);
     try {
-      const thread = await createThread(projectId);
+      const thread = await createThread(projectId, undefined, epicId);
       setActiveThread(thread.id);
       setInput('');
     } catch (err) {
@@ -247,16 +256,56 @@ export function ChatPage(): React.JSX.Element {
           <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
             Threads
           </h2>
-          <button
-            type="button"
-            onClick={() => void onNewThread()}
-            title="Start a new conversation with the Team Lead"
-            data-testid="new-thread"
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-semibold text-white shadow-card transition-colors hover:bg-accent-500 active:scale-[0.98]"
-          >
-            <Plus className="h-4 w-4" strokeWidth={2.5} />
-            New conversation
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => (epics.length > 0 ? setShowNewMenu((v) => !v) : void onNewThread())}
+              title="Start a new conversation with the Team Lead"
+              data-testid="new-thread"
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-semibold text-white shadow-card transition-colors hover:bg-accent-500 active:scale-[0.98]"
+            >
+              <Plus className="h-4 w-4" strokeWidth={2.5} />
+              New conversation
+            </button>
+            {showNewMenu && epics.length > 0 && (
+              <div
+                className="absolute left-0 right-0 top-full z-10 mt-1 max-h-72 overflow-auto rounded-lg border border-surface-border bg-surface-2 p-1 shadow-pop"
+                data-testid="new-thread-menu"
+              >
+                <button
+                  type="button"
+                  onClick={() => void onNewThread()}
+                  className="flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-sm text-slate-200 hover:bg-surface-3"
+                  data-testid="new-thread-general"
+                >
+                  <span aria-hidden="true">✨</span>
+                  <span>
+                    Start something new
+                    <span className="block text-[0.7rem] text-slate-500">
+                      Describe it — the Lead spins up a new epic
+                    </span>
+                  </span>
+                </button>
+                <div className="mt-1 border-t border-surface-border px-2 pb-1 pt-2 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500">
+                  Under an existing epic
+                </div>
+                {epics.map((ep) => (
+                  <button
+                    key={ep.id}
+                    type="button"
+                    onClick={() => void onNewThread(ep.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-slate-300 hover:bg-surface-3"
+                    data-testid="new-thread-epic"
+                  >
+                    <span aria-hidden="true">🎯</span>
+                    <span className="min-w-0 flex-1 truncate" title={ep.title}>
+                      {ep.title}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className="flex-1 space-y-1 overflow-auto p-2" data-testid="thread-list">
           {!hasThreads && (

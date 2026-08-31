@@ -302,7 +302,7 @@ interface AppContextValue {
   loadAgentTasks: (projectId: string, agentId: string) => Promise<void>;
   loadAgentNotes: (projectId: string, agentId: string) => Promise<void>;
   sendChat: (projectId: string, content: string, threadId?: string) => Promise<void>;
-  createThread: (projectId: string, topic?: string) => Promise<Thread>;
+  createThread: (projectId: string, topic?: string, workItemId?: string) => Promise<Thread>;
   createWorkItem: (
     projectId: string,
     input: {
@@ -510,8 +510,8 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       sendChat: async (projectId, content, threadId) => {
         await api.sendChat(projectId, content, threadId);
       },
-      createThread: async (projectId, topic) => {
-        const { thread } = await api.createThread(projectId, topic);
+      createThread: async (projectId, topic, workItemId) => {
+        const { thread } = await api.createThread(projectId, topic, workItemId);
         return thread;
       },
       createWorkItem: async (projectId, input) => {

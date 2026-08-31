@@ -80,6 +80,7 @@ export const sendChatSchema = z.object({
 
 export const createThreadSchema = z.object({
   topic: z.string().trim().max(120).optional(),
+  workItemId: z.string().optional(),
 });
 export type SendChatInput = z.infer<typeof sendChatSchema>;
 

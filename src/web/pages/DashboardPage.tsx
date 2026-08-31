@@ -1,21 +1,9 @@
 import React from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { Agent, AgentEvent, WorkItem, WorkItemStatus } from '@shared/index';
+import type { Agent, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, EmptyState, StatusPill, agentAvatar } from '../components/ui';
 import { formatDuration, formatTokens, usageTotals } from '../usage';
-
-// Milestone-worthy activity for the dashboard — excludes noisy tool_call/
-// tool_result/reasoning/status_change chatter (the full stream lives in Activity).
-const IMPORTANT_EVENT_TYPES = new Set<AgentEvent['type']>([
-  'message',
-  'discussion',
-  'escalation',
-  'git',
-  'pull_request',
-  'subagent_completed',
-  'subagent_failed',
-]);
 
 const STATUS_LABELS: Record<WorkItemStatus, string> = {
   backlog: 'Backlog',
@@ -61,10 +49,14 @@ export function DashboardPage(): React.JSX.Element {
   const taskCounts = byStatus(tasks);
   const totalTasks = tasks.length;
 
-  const recentEvents = bundle.events
-    .filter((e) => IMPORTANT_EVENT_TYPES.has(e.type))
-    .slice(-8)
-    .reverse();
+  // What each agent is doing right now (their in-progress item), and the full
+  // set of in-progress work for the “In progress now” board below.
+  const epicById = new Map(epics.map((e) => [e.id, e] as const));
+  const currentItemFor = (agentId: string): WorkItem | null =>
+    tasks.find((t) => t.assigneeAgentId === agentId && t.status === 'in_progress') ?? null;
+  const inProgress = tasks
+    .filter((t) => t.status === 'in_progress')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   return (
     <div className="h-full overflow-auto animate-fadeIn">
@@ -179,49 +171,69 @@ export function DashboardPage(): React.JSX.Element {
             ) : (
               <div className="space-y-2">
                 {activeAgents.map((a) => (
-                  <AgentRow key={a.id} agent={a} projectId={projectId} />
+                  <AgentRow
+                    key={a.id}
+                    agent={a}
+                    current={currentItemFor(a.id)}
+                    projectId={projectId}
+                  />
                 ))}
               </div>
             )}
           </section>
         </div>
 
-        {/* Recent activity */}
+        {/* In progress now */}
         <section>
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-200">Highlights</h2>
-            <Link className="text-xs text-accent-400" to={`/p/${projectId}/activity`}>
-              View all activity →
+            <h2 className="text-sm font-semibold text-slate-200">
+              In progress now
+              {inProgress.length > 0 && (
+                <span className="ml-1.5 text-slate-500">{inProgress.length}</span>
+              )}
+            </h2>
+            <Link className="text-xs text-accent-400" to={`/p/${projectId}/board`}>
+              View board →
             </Link>
           </div>
-          {recentEvents.length === 0 ? (
+          {inProgress.length === 0 ? (
             <EmptyState
-              title="No highlights yet"
-              hint="Key milestones — commits, PRs, escalations — show up here."
+              title="Nothing in progress"
+              hint="Active work items picked up by agents show up here in real time."
             />
           ) : (
-            <ul className="card divide-y divide-surface-border p-0 text-sm">
-              {recentEvents.map((e) => {
-                const author = bundle.agents.find((a) => a.id === e.agentId);
+            <ul
+              className="card divide-y divide-surface-border p-0 text-sm"
+              data-testid="in-progress-list"
+            >
+              {inProgress.map((t) => {
+                const author = bundle.agents.find((a) => a.id === t.assigneeAgentId);
+                const epic = t.parentId ? epicById.get(t.parentId) : undefined;
                 return (
-                  <li key={e.id} className="flex items-center gap-3 px-4 py-2">
+                  <li key={t.id} className="flex items-center gap-3 px-4 py-2.5">
                     {author ? (
                       <Avatar
                         emoji={author.emoji}
                         color={author.color}
                         src={agentAvatar(author.catalogId, author.kind)}
-                        size={22}
+                        size={26}
                       />
                     ) : (
-                      <span className="h-[22px] w-[22px] rounded bg-surface-3" />
+                      <span className="h-[26px] w-[26px] rounded bg-surface-3" />
                     )}
-                    <span className="w-28 shrink-0 truncate text-xs text-slate-500">
-                      {author?.displayName ?? 'System'}
-                    </span>
-                    <span className="flex-1 truncate text-slate-300">{e.summary}</span>
-                    <span className="shrink-0 text-xs text-slate-600">
-                      {new Date(e.createdAt).toLocaleTimeString()}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-slate-200">{t.title}</p>
+                      <p className="truncate text-xs text-slate-500">
+                        {author?.displayName ?? 'Unassigned'}
+                        {epic && <span className="text-slate-600"> · {epic.title}</span>}
+                      </p>
+                    </div>
+                    {t.stream && (
+                      <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[0.7rem] text-slate-400">
+                        {t.stream}
+                      </span>
+                    )}
+                    <span className="shrink-0 text-xs text-status-working">Working…</span>
                   </li>
                 );
               })}
@@ -294,7 +306,15 @@ function EpicRow({
   );
 }
 
-function AgentRow({ agent, projectId }: { agent: Agent; projectId?: string }): React.JSX.Element {
+function AgentRow({
+  agent,
+  current,
+  projectId,
+}: {
+  agent: Agent;
+  current: WorkItem | null;
+  projectId?: string;
+}): React.JSX.Element {
   return (
     <Link
       to={`/p/${projectId}/agents/${agent.id}`}
@@ -311,7 +331,16 @@ function AgentRow({ agent, projectId }: { agent: Agent; projectId?: string }): R
           {agent.displayName}
           {agent.kind === 'lead' && <span className="ml-1 text-xs text-slate-500">· Lead</span>}
         </p>
-        <p className="truncate text-xs text-slate-500">{agent.description}</p>
+        <p className="truncate text-xs text-slate-500">
+          {current ? (
+            <>
+              <span className="text-status-working">▸ </span>
+              {current.title}
+            </>
+          ) : (
+            agent.description
+          )}
+        </p>
       </div>
       <StatusPill status={agent.status} />
     </Link>

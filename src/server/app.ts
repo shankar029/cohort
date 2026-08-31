@@ -573,7 +573,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
     const { id } = req.params as { id: string };
     requireProject(id);
     const input = createThreadSchema.parse(req.body ?? {});
-    const thread = orchestrators.get(id).createLeadThread(input.topic);
+    const thread = orchestrators.get(id).createLeadThread(input.topic, input.workItemId);
     reply.status(201);
     return { thread };
   });

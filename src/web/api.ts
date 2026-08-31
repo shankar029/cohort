@@ -157,10 +157,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, dataBase64 }),
     }),
-  createThread: (projectId: string, topic?: string) =>
+  createThread: (projectId: string, topic?: string, workItemId?: string) =>
     request<{ thread: Thread }>(`/api/projects/${projectId}/threads`, {
       method: 'POST',
-      body: JSON.stringify({ topic }),
+      body: JSON.stringify({ topic, workItemId }),
     }),
 
   events: (projectId: string) =>

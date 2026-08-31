@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import type { AgentEvent, AgentEventType } from '@shared/index';
 import { useBundle } from '../state';
 import { EmptyState } from '../components/ui';
+import { epicOfWorkItem, listEpics } from '../epics';
 
 const TYPE_STYLE: Record<AgentEventType, { icon: string; color: string }> = {
   message: { icon: '💬', color: 'text-slate-300' },
@@ -27,7 +28,11 @@ export function ActivityPage(): React.JSX.Element {
   const bundle = useBundle(projectId);
   const filterAgent = searchParams.get('agent') ?? '';
   const [typeFilter, setTypeFilter] = useState<string>('');
+  const [epicFilter, setEpicFilter] = useState<string>('');
   const [groupBy, setGroupBy] = useState<'none' | 'agent' | 'type'>('none');
+
+  const wiById = useMemo(() => new Map(bundle.workItems.map((w) => [w.id, w])), [bundle.workItems]);
+  const epics = useMemo(() => listEpics(bundle.workItems), [bundle.workItems]);
 
   const nameById = useMemo(() => {
     const map = new Map<string, { name: string; emoji: string; color: string }>();
@@ -38,7 +43,12 @@ export function ActivityPage(): React.JSX.Element {
 
   const events = bundle.events
     .filter((e) => (filterAgent ? e.agentId === filterAgent : true))
-    .filter((e) => (typeFilter ? e.type === typeFilter : true));
+    .filter((e) => (typeFilter ? e.type === typeFilter : true))
+    .filter((e) => {
+      if (!epicFilter) return true;
+      const epic = epicOfWorkItem(wiById, e.workItemId);
+      return epicFilter === 'none' ? !epic : epic?.id === epicFilter;
+    });
 
   return (
     <div className="flex h-full flex-col">
@@ -84,6 +94,28 @@ export function ActivityPage(): React.JSX.Element {
             </option>
           ))}
         </select>
+        {epics.length > 0 && (
+          <>
+            <label className="text-xs text-slate-500" htmlFor="filter-epic">
+              Epic
+            </label>
+            <select
+              id="filter-epic"
+              className="input !min-h-0 w-48 py-1 text-xs"
+              data-testid="activity-epic-filter"
+              value={epicFilter}
+              onChange={(e) => setEpicFilter(e.target.value)}
+            >
+              <option value="">All epics</option>
+              {epics.map((ep) => (
+                <option key={ep.id} value={ep.id}>
+                  {ep.title}
+                </option>
+              ))}
+              <option value="none">No epic</option>
+            </select>
+          </>
+        )}
         <label className="text-xs text-slate-500" htmlFor="group-by">
           Group by
         </label>

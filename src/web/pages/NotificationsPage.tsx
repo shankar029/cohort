@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Notification, NotificationType } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { EmptyState } from '../components/ui';
+import { epicOfWorkItem, listEpics } from '../epics';
 
 const TYPE_META: Record<NotificationType, { icon: string; tint: string }> = {
   epic: { icon: '🎯', tint: 'text-accent-400' },
@@ -21,16 +22,24 @@ export function NotificationsPage(): React.JSX.Element {
   const navigate = useNavigate();
   const { markNotificationRead, markAllNotificationsRead } = useApp();
   const bundle = useBundle(projectId);
-  const notifications = bundle.notifications;
-  const unread = notifications.filter((n) => !n.read).length;
+  const allNotifications = bundle.notifications;
+  const unread = allNotifications.filter((n) => !n.read).length;
+  const [epicFilter, setEpicFilter] = useState<string>('');
+  const wiById = useMemo(() => new Map(bundle.workItems.map((w) => [w.id, w])), [bundle.workItems]);
+  const epics = useMemo(() => listEpics(bundle.workItems), [bundle.workItems]);
+  const notifications = allNotifications.filter((n) => {
+    if (!epicFilter) return true;
+    const epic = epicOfWorkItem(wiById, n.workItemId);
+    return epicFilter === 'none' ? !epic : epic?.id === epicFilter;
+  });
 
   // Visiting this page clears the unread count.
   useEffect(() => {
-    if (projectId && notifications.some((n) => !n.read)) {
+    if (projectId && allNotifications.some((n) => !n.read)) {
       void markAllNotificationsRead(projectId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, notifications.length]);
+  }, [projectId, allNotifications.length]);
 
   const open = (n: Notification): void => {
     if (!n.read) void markNotificationRead(n.id);
@@ -46,21 +55,39 @@ export function NotificationsPage(): React.JSX.Element {
             {unread > 0 ? `${unread} unread` : 'All caught up'}
           </p>
         </div>
-        {notifications.length > 0 && (
-          <button
-            className="btn-ghost"
-            data-testid="mark-all-read"
-            onClick={() => projectId && void markAllNotificationsRead(projectId)}
-          >
-            Mark all read
-          </button>
+        {allNotifications.length > 0 && (
+          <div className="flex items-center gap-2">
+            {epics.length > 0 && (
+              <select
+                className="input !min-h-0 w-44 py-1 text-xs"
+                data-testid="notification-epic-filter"
+                value={epicFilter}
+                onChange={(e) => setEpicFilter(e.target.value)}
+              >
+                <option value="">All epics</option>
+                {epics.map((ep) => (
+                  <option key={ep.id} value={ep.id}>
+                    {ep.title}
+                  </option>
+                ))}
+                <option value="none">No epic</option>
+              </select>
+            )}
+            <button
+              className="btn-ghost"
+              data-testid="mark-all-read"
+              onClick={() => projectId && void markAllNotificationsRead(projectId)}
+            >
+              Mark all read
+            </button>
+          </div>
         )}
       </header>
 
       <div className="p-6">
         {notifications.length === 0 ? (
           <EmptyState
-            title="No notifications yet"
+            title={epicFilter ? 'No notifications for this epic' : 'No notifications yet'}
             hint="Major progress updates — epics, plans, completed tasks, PRs, and merges — show up here."
           />
         ) : (

@@ -343,11 +343,16 @@ class ProjectOrchestrator {
    * a new epic without piling onto the single main channel. Auto-titled from the
    * first message the user sends (see `chat`).
    */
-  createLeadThread(topic?: string): Thread {
+  createLeadThread(topic?: string, workItemId?: string): Thread {
+    // A conversation can be filed under an existing epic (organizational grouping
+    // in the Threads rail); otherwise it's a general user↔Lead side channel.
+    const linkedEpic =
+      workItemId && this.deps.store.getWorkItem(workItemId)?.kind === 'epic' ? workItemId : null;
     const thread = this.deps.store.createThread({
       projectId: this.projectId,
       kind: 'dm',
       topic: topic?.trim() || 'New conversation',
+      workItemId: linkedEpic,
       participantAgentIds: [this.lead().id],
       includesUser: true,
     });
@@ -1213,7 +1218,25 @@ class ProjectOrchestrator {
       type: 'discussion',
       summary: `${requester.displayName} requested a group chat: ${topic}`,
     });
-    await this.runGroupChat(topic, participants, workItemId);
+    await this.runGroupChat(topic, participants, this.resolveDiscussionEpic(requester, workItemId));
+  }
+
+  /**
+   * Which epic an ad-hoc discussion belongs to. Group chats requested during early
+   * inspection turns have a null `workItemId`, which used to dump them into the
+   * rail's “General” bucket. Recover the epic from, in order: the turn's work item,
+   * the requester's active item, or (when unambiguous) the single in-progress epic.
+   */
+  private resolveDiscussionEpic(requester: Agent, workItemId: string | null): string | null {
+    if (workItemId) return workItemId;
+    const items = this.deps.store.listWorkItems(this.projectId);
+    const mine = items.find(
+      (w) =>
+        w.assigneeAgentId === requester.id && (w.status === 'in_progress' || w.status === 'todo'),
+    );
+    if (mine) return mine.id;
+    const activeEpics = items.filter((w) => w.kind === 'epic' && w.status === 'in_progress');
+    return activeEpics.length === 1 ? activeEpics[0]!.id : null;
   }
 
   private pickDiscussants(): string[] {
