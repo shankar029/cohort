@@ -3325,10 +3325,16 @@ class ProjectOrchestrator {
         reviewCriteria.map((c, i) => `${i + 1}. ${c.text}`).join('\n') +
         `\n\n`
       : '';
+    // DRIFT-4: surface the request's HARD CONSTRAINTS so the reviewer conforms to
+    // them AND never demands a "fix" that would BREAK one (e.g. asking for a
+    // dependency, a datastore, or a UI the request forbids).
+    const reviewConstraints = describeConstraints(this.epicConstraints(epic.id));
+    const constraintBlock = reviewConstraints ? `${reviewConstraints}\n` : '';
     const prompt =
       `Please review the pull request for epic "${epic.title}".\n\n` +
       `ORIGINAL REQUEST (the source of truth - review against THIS, not against ` +
       `whatever the team happened to build):\n${(epic.description ?? '').slice(0, 2000)}\n\n` +
+      constraintBlock +
       critBlock +
       `Diff:\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
       `Check CONFORMANCE to the request FIRST, before any code-quality nits. File a ` +
@@ -3338,6 +3344,10 @@ class ProjectOrchestrator {
       `and the exact required interface/endpoints. Building something the request did ` +
       `not ask for (e.g. a UI or a datastore it forbade) is itself a blocking defect. ` +
       `Then review the design and quality bar.\n\n` +
+      `Do NOT request changes that would VIOLATE a hard constraint above (e.g. do not ` +
+      `ask for a new dependency, a database/disk persistence, or a UI when the request ` +
+      `forbids them) - if a quality improvement would require breaking a stated ` +
+      `constraint, do not demand it.\n\n` +
       `For every issue, call add_review_comment(body, targetStream) routed to the responsible ` +
       `stream. If it meets the bar AND conforms to the request, leave no comments and it ` +
       `will be approved.`;

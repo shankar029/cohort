@@ -312,6 +312,7 @@ waves + a 3rd-round budget cap. Final: merged, 64/64 tests, 0 deps, correct cont
    out. (b) ISSUE-1: the per-task build gate already runs on builder streams and the
    integrated-build gate runs at epic finalize, with the QA stream + the new MAJOR-1
    acceptance-probe as additional epic-level backstops — the remaining nit is covered.
-9. **DRIFT-4** — ❌ OPEN (minor) — reviewer occasionally invents a fix demand that
-   conflicts with a hard constraint; the DRIFT-2 constraint directives + MAJOR-1
-   contract probe reduce the surface, but reviewer-prompt hardening is deferred.
+9. **DRIFT-4** — ✅ MITIGATED (this batch): the reviewer prompt now surfaces the
+   epic's hard constraints (via `describeConstraints`) and explicitly forbids
+   requesting changes that would VIOLATE one (no demanding a dependency, a
+   datastore, or a UI the request forbids).
