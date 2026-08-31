@@ -71,4 +71,38 @@ describe('verification report persistence (slice 2)', () => {
     const proj = projRes.json() as { reports: unknown[] };
     expect(proj.reports.length).toBe(2);
   });
+
+  it('persists a passing epic-scoped (merge-authority) report when an epic merges', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { name: 'EpicAuthority', repoDir },
+    });
+    const projectId = (res.json() as { project: { id: string } }).project.id;
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/agents`,
+      payload: { catalogId: 'backend-engineer' },
+    });
+    await ctx.app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/chat`,
+      payload: { content: 'Please build a small tested service.' },
+    });
+
+    await ctx.waitFor((m) => m.type === 'pull_request.updated' && m.pr.status === 'merged', 20000);
+
+    const proj = (await ctx.app
+      .inject({ method: 'GET', url: `/api/projects/${projectId}/verification` })
+      .then((r) => r.json())) as {
+      reports: { scope: string; outcome: string; passed: boolean; checks: { id: string }[] }[];
+    };
+    const epicReport = proj.reports.find((r) => r.scope === 'epic');
+    expect(epicReport).toBeTruthy();
+    expect(epicReport!.passed).toBe(true);
+    expect(epicReport!.outcome).toBe('passed');
+    // The merge-authority report carries the epic-scope checks.
+    expect(epicReport!.checks.some((c) => c.id === 'integrated-build')).toBe(true);
+    expect(epicReport!.checks.some((c) => c.id === 'acceptance')).toBe(true);
+  });
 });

@@ -222,24 +222,26 @@ class ProjectOrchestrator {
   private readonly epicIntegrateChain = new Map<string, Promise<unknown>>();
   /** Per-task integration-conflict counter, so a persistent conflict escalates. */
   private readonly taskConflicts = new Map<string, number>();
-  /** Per-epic integrated-build failure rounds, capped so it escalates. */
-  private readonly epicBuildIter = new Map<string, number>();
   /** Live parallelism telemetry per epic (peak concurrency + conflicts), flushed
    *  to epic_metrics when the epic merges. */
   private readonly epicMetrics = new Map<string, { maxConcurrent: number; conflicts: number }>();
   /** PR/review state per epic for the iterate-to-quality loop. */
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
-  /** Per-epic acceptance-evaluation rounds, capped so an unmet criterion escalates. */
-  private readonly epicAcceptIter = new Map<string, number>();
+  /**
+   * Per-epic remediation-round budget SHARED across the integrated-build and
+   * acceptance gates. One counter (not two) so a churning epic can't burn
+   * 2x the rounds by alternating build-fix and acceptance-fix before escalating.
+   */
+  private readonly epicRemediationIter = new Map<string, number>();
   private readonly epicReviewing = new Set<string>();
   /** In-flight background reviews, awaited on dispose so nothing touches a closed DB. */
   private readonly pendingReviews = new Set<Promise<unknown>>();
   /** Per-message accumulated streamed text, so deltas survive a re-sync. */
   private readonly streamBuffers = new Map<string, string>();
   private static readonly MAX_REVIEW_ITER = 3;
-  private static readonly MAX_ACCEPT_ITER = 3;
-  private static readonly MAX_BUILD_ITER = 3;
+  /** Shared cap for integrated-build + acceptance remediation rounds per epic. */
+  private static readonly MAX_REMEDIATION_ITER = 3;
   /** Per-epic review-round budget (I8): configurable so ops can tighten/loosen it. */
   private get maxReviewIter(): number {
     const v = Number(process.env.ATEAM_MAX_REVIEW_ITER);
@@ -763,8 +765,7 @@ class ProjectOrchestrator {
     this.epicWorktrees.delete(epicId);
     this.epicPr.delete(epicId);
     this.epicReviewIter.delete(epicId);
-    this.epicAcceptIter.delete(epicId);
-    this.epicBuildIter.delete(epicId);
+    this.epicRemediationIter.delete(epicId);
     this.epicMetrics.delete(epicId);
     this.epicIntegrateChain.delete(epicId);
     this.epicReviewing.delete(epicId);
@@ -3426,11 +3427,22 @@ class ProjectOrchestrator {
     wt: { branch: string; path: string } | undefined,
     diff: string,
   ): Promise<void> {
+    // A user "merge anyway" override skips the remaining gates - but is RECORDED
+    // as an audited epic-scoped override, never silent.
+    if (this.forcedAccept.has(epic.id)) {
+      this.recordOverride(epic, lead, 'epic', 'user chose to merge despite unmet epic gates');
+      this.forcedAccept.delete(epic.id);
+      this.epicRemediationIter.delete(epic.id);
+      await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+      return;
+    }
+
     // Integrated build gate: the fully-integrated epic clone must compile before
     // we judge acceptance or merge. Concurrent siblings can each build in
     // isolation yet break once merged together - this is the catch. A script-less
     // project is a graceful no-op.
-    if (wt && !this.forcedAccept.has(epic.id)) {
+    let buildStatus: CheckStatus = 'skip';
+    if (wt) {
       await this.ensureGateDeps(wt.path, lead.id, epic.id);
       const built = await runProjectBuild(
         wt.path,
@@ -3438,10 +3450,14 @@ class ProjectOrchestrator {
         Number(process.env.ATEAM_QA_TEST_TIMEOUT_MS ?? 240_000),
       );
       if (built.ran && !built.passed) {
+        this.recordEpicReport(epic, lead, [
+          { id: 'integrated-build', status: 'fail', detail: built.command },
+        ]);
         await this.handleIntegratedBuildFailure(epic, built, lead);
         return;
       }
-      if (built.ran)
+      if (built.ran) {
+        buildStatus = 'pass';
         this.emitEvent(
           lead.id,
           'system',
@@ -3449,20 +3465,126 @@ class ProjectOrchestrator {
           null,
           epic.id,
         );
+      }
     }
 
+    // Integrated CONSTRAINT gate (MERGE AUTHORITY): the task-clone constraint gate
+    // is a pre-filter; the integrated epic tree is the authority. Re-scan it so a
+    // violation that survived integration (or emerged from merging siblings) can
+    // never merge on agent narration alone.
+    let constraintStatus: CheckStatus = 'skip';
+    const cons = wt ? this.epicConstraints(epic.id) : [];
+    if (wt && cons.length > 0) {
+      const violations = checkClone(wt.path, cons);
+      if (violations.length > 0) {
+        const summary = summarizeViolations(violations);
+        this.recordEpicReport(epic, lead, [
+          { id: 'integrated-build', status: buildStatus, detail: '' },
+          { id: 'integrated-constraints', status: 'fail', detail: summary },
+        ]);
+        await this.handleIntegratedConstraintFailure(epic, summary, lead);
+        return;
+      }
+      constraintStatus = 'pass';
+    }
+
+    let acceptStatus: CheckStatus = 'skip';
     const criteria = this.deps.store.listCriteria(epic.id);
-    if (criteria.length > 0 && !this.forcedAccept.has(epic.id)) {
+    if (criteria.length > 0) {
       const gate = await this.evaluateAcceptance(epic, criteria, wt, diff);
       if (!gate.ok) {
+        this.recordEpicReport(epic, lead, [
+          { id: 'integrated-build', status: buildStatus, detail: '' },
+          { id: 'integrated-constraints', status: constraintStatus, detail: '' },
+          { id: 'acceptance', status: 'fail', detail: `${gate.unmet.length} unmet` },
+        ]);
         await this.handleUnmetCriteria(epic, gate.unmet, lead);
         return;
       }
+      acceptStatus = 'pass';
     }
-    this.forcedAccept.delete(epic.id);
-    this.epicAcceptIter.delete(epic.id);
-    this.epicBuildIter.delete(epic.id);
+
+    // All merge-authority gates cleared - record the passing epic report (the
+    // durable proof behind this merge) before approving.
+    this.recordEpicReport(epic, lead, [
+      { id: 'integrated-build', status: buildStatus, detail: '' },
+      { id: 'integrated-constraints', status: constraintStatus, detail: '' },
+      { id: 'acceptance', status: acceptStatus, detail: '' },
+    ]);
+    this.epicRemediationIter.delete(epic.id);
     await this.approveAndMerge(epic, prId, lead, repoDir, branch);
+  }
+
+  /**
+   * Assemble, persist, and emit an epic-scoped (MERGE-AUTHORITY) verification
+   * report - the durable record behind a merge decision, distinct from the
+   * per-task pre-filter reports. `integrated-tests` is left `skip` (n/a): tests
+   * run in the per-task QA gate; this scope owns build + constraints + acceptance.
+   */
+  private recordEpicReport(
+    epic: WorkItem,
+    lead: Agent,
+    raw: Array<{ id: string; status: CheckStatus; detail: string; evidence?: unknown }>,
+  ): void {
+    const checks = assembleChecks(null, 'epic', raw);
+    this.persistReport(
+      makeReport({ workItemId: epic.id, agentId: lead.id, stream: null, scope: 'epic' }, checks),
+    );
+  }
+
+  /**
+   * The integrated epic tree violates a hard constraint at the merge authority.
+   * Route a fix (sharing the remediation budget); after the cap, park and ask the
+   * user to merge anyway or keep working.
+   */
+  private async handleIntegratedConstraintFailure(
+    epic: WorkItem,
+    summary: string,
+    lead: Agent,
+  ): Promise<void> {
+    const iter = (this.epicRemediationIter.get(epic.id) ?? 0) + 1;
+    this.epicRemediationIter.set(epic.id, iter);
+    this.emitEvent(
+      lead.id,
+      'system',
+      `Integrated constraint gate FAILED: ${summary} - blocking merge`,
+      null,
+      epic.id,
+    );
+    const fixTitle = 'fix: integrated constraint violation';
+    const fixBody =
+      `The integrated epic violates a hard constraint: ${summary}. Fix the delivery so it ` +
+      `honors the constraint (do not merely suppress the check).`;
+    if (iter >= ProjectOrchestrator.MAX_REMEDIATION_ITER) {
+      this.awaitingInput.add(epic.id);
+      this.notify(
+        'question',
+        `Constraint blocked: ${epic.title}`,
+        summary,
+        'board',
+        epic.id,
+        lead.id,
+      );
+      void this.raiseQuestion(
+        lead.id,
+        `The integrated epic "${epic.title}" still VIOLATES a hard constraint (${summary}) after ` +
+          `${iter} rounds. Merge anyway, or keep working on it?`,
+        ['Keep working', 'Merge anyway'],
+      ).then((ans) => {
+        this.awaitingInput.delete(epic.id);
+        if (ans.toLowerCase().startsWith('merge')) {
+          this.forcedAccept.add(epic.id);
+          this.epicRemediationIter.delete(epic.id);
+        } else {
+          this.epicRemediationIter.set(epic.id, 0);
+          this.createFixTask(epic, fixTitle, fixBody, lead);
+        }
+        this.pokeLead();
+      });
+      return;
+    }
+    this.createFixTask(epic, fixTitle, fixBody, lead);
+    this.pokeLead();
   }
 
   /**
@@ -3585,7 +3707,8 @@ class ProjectOrchestrator {
 
   /**
    * The integrated epic clone failed to build. Route a high-priority fix task
-   * (capped); after MAX_BUILD_ITER rounds, park the epic and ask the user to
+   * (capped by the shared remediation budget); after MAX_REMEDIATION_ITER rounds,
+   * park the epic and ask the user to
    * merge anyway or keep working.
    */
   private async handleIntegratedBuildFailure(
@@ -3593,8 +3716,8 @@ class ProjectOrchestrator {
     built: { command: string; output: string },
     lead: Agent,
   ): Promise<void> {
-    const iter = (this.epicBuildIter.get(epic.id) ?? 0) + 1;
-    this.epicBuildIter.set(epic.id, iter);
+    const iter = (this.epicRemediationIter.get(epic.id) ?? 0) + 1;
+    this.epicRemediationIter.set(epic.id, iter);
     const tail = built.output.split('\n').slice(-25).join('\n').slice(-2000);
     this.emitEvent(
       lead.id,
@@ -3604,7 +3727,7 @@ class ProjectOrchestrator {
       epic.id,
     );
 
-    if (iter >= ProjectOrchestrator.MAX_BUILD_ITER) {
+    if (iter >= ProjectOrchestrator.MAX_REMEDIATION_ITER) {
       this.awaitingInput.add(epic.id);
       this.notify(
         'question',
@@ -3623,9 +3746,9 @@ class ProjectOrchestrator {
         this.awaitingInput.delete(epic.id);
         if (ans.toLowerCase().startsWith('merge')) {
           this.forcedAccept.add(epic.id);
-          this.epicBuildIter.delete(epic.id);
+          this.epicRemediationIter.delete(epic.id);
         } else {
-          this.epicBuildIter.set(epic.id, 0);
+          this.epicRemediationIter.set(epic.id, 0);
           this.createFixTask(
             epic,
             `fix: integrated build failing (${built.command})`,
@@ -3710,7 +3833,8 @@ class ProjectOrchestrator {
 
   /**
    * Route unmet acceptance criteria back as a high-priority fix task. After
-   * MAX_ACCEPT_ITER rounds, stop looping and ask the user to merge anyway or
+   * MAX_REMEDIATION_ITER rounds (shared with the build gate), stop looping and
+   * ask the user to merge anyway or
    * keep working (parking the epic so review doesn't re-trigger meanwhile).
    */
   private async handleUnmetCriteria(
@@ -3718,11 +3842,11 @@ class ProjectOrchestrator {
     unmet: AcceptanceCriterion[],
     lead: Agent,
   ): Promise<void> {
-    const iter = (this.epicAcceptIter.get(epic.id) ?? 0) + 1;
-    this.epicAcceptIter.set(epic.id, iter);
+    const iter = (this.epicRemediationIter.get(epic.id) ?? 0) + 1;
+    this.epicRemediationIter.set(epic.id, iter);
     const list = unmet.map((c) => `- ${c.text}`).join('\n');
 
-    if (iter >= ProjectOrchestrator.MAX_ACCEPT_ITER) {
+    if (iter >= ProjectOrchestrator.MAX_REMEDIATION_ITER) {
       this.awaitingInput.add(epic.id);
       this.notify(
         'question',
@@ -3742,9 +3866,9 @@ class ProjectOrchestrator {
         if (ans.toLowerCase().startsWith('merge')) {
           // Force the merge; leave the criteria marked failed for the record.
           this.forcedAccept.add(epic.id);
-          this.epicAcceptIter.delete(epic.id);
+          this.epicRemediationIter.delete(epic.id);
         } else {
-          this.epicAcceptIter.set(epic.id, 0);
+          this.epicRemediationIter.set(epic.id, 0);
           this.createAcceptanceFix(epic, unmet, lead);
         }
         this.pokeLead();

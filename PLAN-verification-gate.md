@@ -249,3 +249,21 @@ orchestrator bug the gate correctly surfaced:
 - **Note:** the recovered commit used `express` - so once it integrates, the
   constraint gate will (correctly) catch the dep violation on the real content,
   which is the intended layered behavior.
+
+### Deferred slices Q2 + Q3 IMPLEMENTED (2026-08-31)
+- **Q3 (budget collapse):** merged `epicBuildIter` + `epicAcceptIter` into ONE
+  shared `epicRemediationIter` (cap `MAX_REMEDIATION_ITER=3`). A churning epic can
+  no longer burn 2x the rounds by alternating build-fix and acceptance-fix before
+  escalating. All delete/reset sites updated.
+- **Q2 (epic-level integrated authority):** `finalizeEpic` now persists an
+  epic-scoped GateReport (`scope:'epic'`, checks integrated-build /
+  integrated-constraints / integrated-tests / acceptance) at every terminal merge
+  decision - build-fail, constraint-fail, acceptance-fail, and the passing merge -
+  plus an audited `overrideReport` on user "merge anyway". Added a NEW
+  merge-authority **integrated-constraint gate**: `checkClone` re-scans the fully
+  integrated epic tree (the authority; task-clone gate is only a pre-filter) so a
+  violation that survived integration can't merge on narration - routed via
+  `handleIntegratedConstraintFailure` (shares the remediation budget, then
+  escalates). `integrated-tests` stays `skip` (owned by the per-task QA gate).
+- **Tests:** +1 integration (a merged epic persists a passing epic-scoped report
+  carrying integrated-build + acceptance). Suite 172 (171 pass, 1 skip).
