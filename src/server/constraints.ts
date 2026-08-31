@@ -232,3 +232,28 @@ export function summarizeViolations(violations: ConstraintViolation[]): string {
     })
     .join('; ');
 }
+
+const CONSTRAINT_DIRECTIVE: Record<ConstraintKind, string> = {
+  'no-external-deps':
+    'Use ONLY the language/runtime standard library. Do NOT add any third-party ' +
+    'dependency, framework, or package (no new entries in package.json/requirements, ' +
+    'no `npm install`). e.g. use the built-in HTTP server, not Express.',
+  'in-memory':
+    'Keep ALL state in memory only. Do NOT use a database, disk persistence, or any ' +
+    'external datastore; data may be lost on restart.',
+  'no-ui': 'This is headless / API-only. Do NOT build a UI, frontend, or browser-based interface.',
+};
+
+/**
+ * Render detected hard constraints as imperative, top-of-brief directives so the
+ * agent honors them on the FIRST pass (DRIFT-2), instead of the deterministic gate
+ * catching a violation and forcing a costly re-drive.
+ */
+export function describeConstraints(constraints: Constraint[]): string {
+  if (constraints.length === 0) return '';
+  const lines = constraints.map((c) => `- ${CONSTRAINT_DIRECTIVE[c.kind]}`);
+  return (
+    `HARD CONSTRAINTS (non-negotiable - a deterministic gate WILL reject violations, ` +
+    `so honoring these is part of "done"):\n${lines.join('\n')}\n`
+  );
+}

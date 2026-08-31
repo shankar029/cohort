@@ -48,7 +48,7 @@ Legend: 🐛 bug · ⚠️ issue · 🌀 drift · ✅ working-as-intended observ
   React+Express app that ignored every hard constraint.
 
 ## Confirmed issues
-- 🌀 **DRIFT-2 (real, upstream):** specialist agents **ignore explicit hard constraints
+- 🌀 **DRIFT-2 [MITIGATED 2026-08-31]:** specialist agents **ignore explicit hard constraints
   on the first attempt**, defaulting to their familiar stacks (Frontend→React/Vite,
   Backend→Express/Zod/Vitest, disk persistence) even though the prompt said vanilla
   JS / stdlib-only / in-memory. The gate catches it, but each miss costs a full
@@ -211,7 +211,7 @@ Legend: 🐛 bug · ⚠️ issue · 🌀 drift · ✅ working-as-intended observ
   - Scope-policing: remove unrequested `PUT /api/snippets` mutation endpoint; remove
     unrequested edit + clipboard-copy UI from the frontend.
 
-- 🌀 **DRIFT-5 (gold-plating → churn):** agents built MORE than requested (a `PUT`
+- 🌀 **DRIFT-5 [MITIGATED 2026-08-31]:** agents built MORE than requested (a `PUT`
   update endpoint, inline edit, clipboard-copy) beyond the spec's list/create/search/
   delete. The reviewer then demands removal, so the team pays twice (build extra →
   flag → remove extra). Both the builder (adds scope) and reviewer (polices scope) are

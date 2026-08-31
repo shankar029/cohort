@@ -6,6 +6,7 @@ import {
   detectConstraints,
   checkClone,
   summarizeViolations,
+  describeConstraints,
 } from '../../src/server/constraints.js';
 
 describe('deterministic delivery constraints', () => {
@@ -130,6 +131,27 @@ describe('deterministic delivery constraints', () => {
     it('does nothing when there are no constraints', () => {
       write('package.json', JSON.stringify({ dependencies: { express: '^4' } }));
       expect(checkClone(dir, [])).toEqual([]);
+    });
+  });
+
+  describe('describeConstraints (DRIFT-2 brief directives)', () => {
+    it('renders imperative directives for each detected constraint', () => {
+      const cons = detectConstraints([
+        "Build an in-memory API using ONLY Node's built-in http - no external dependencies. " +
+          'This is headless, there is no UI.',
+      ]);
+      const text = describeConstraints(cons);
+      expect(text).toMatch(/HARD CONSTRAINTS/);
+      expect(text).toMatch(/standard library/i);
+      expect(text).toMatch(/in memory/i);
+      expect(text).toMatch(/headless|API-only/i);
+      // Imperative "do NOT" phrasing so the agent honors it up front.
+      expect(text).toMatch(/Do NOT/);
+    });
+
+    it('is empty when no hard constraints were stated', () => {
+      expect(describeConstraints([])).toBe('');
+      expect(describeConstraints(detectConstraints(['Build a normal web app']))).toBe('');
     });
   });
 });

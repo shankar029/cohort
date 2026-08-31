@@ -7,6 +7,7 @@ import {
   detectConstraints,
   checkClone,
   summarizeViolations,
+  describeConstraints,
   type Constraint,
 } from './constraints.js';
 import {
@@ -2327,6 +2328,10 @@ class ProjectOrchestrator {
 
     // PHASE 2 - execute against that checklist.
     const qaStream = /^qa$/.test(item.stream ?? '');
+    // Verifier streams (qa/reviewer/security) legitimately may only sign off, so
+    // they are not build-gated. Declared here so the brief clauses can use it.
+    const isVerifier = /^(qa|reviewer|security)$/.test(item.stream ?? '');
+    const gate = !isVerifier;
     const testingClause = qaStream
       ? `This is a QA sign-off task: write end-to-end tests that exercise the feature the way an ` +
         `end user does, using the repository's existing E2E tooling (or add one if none exists). ` +
@@ -2360,13 +2365,27 @@ class ProjectOrchestrator {
     const designClause = design
       ? `\n# Epic technical design (follow it - honor these shared interfaces/contracts)\n${design}\n\n`
       : '';
+    // DRIFT-2: surface the request's HARD constraints imperatively at the top of the
+    // brief so the agent honors them on the first pass, instead of the deterministic
+    // gate rejecting a violation and forcing a re-drive.
+    const constraintClause = gate ? describeConstraints(this.epicConstraints(item.parentId)) : '';
+    // DRIFT-5: scope discipline - implement EXACTLY the assigned task, no gold-plating
+    // (extra endpoints, speculative features), which the reviewer would only demand be
+    // removed later (build-then-remove churn).
+    const scopeClause = gate
+      ? `Implement EXACTLY what this task asks - the checklist scope and nothing more. Do NOT ` +
+        `add endpoints, options, or features that weren't requested; extra scope will be sent ` +
+        `back for removal.\n`
+      : '';
     const basePrompt =
       `The Team Lead assigned you this task. Work through the checklist you defined and report ` +
       `progress to the team.\n\n` +
+      constraintClause +
       `Task: ${item.title}\nDetails: ${item.description || '(none)'}\n` +
       designClause +
       `Your sub-task checklist (complete every item):\n${checklist}\n` +
       testingClause +
+      scopeClause +
       (worktree
         ? `You are on branch ${worktree.branch} in an isolated worktree. Create/edit real files ` +
           `here using relative paths.\n`
@@ -2380,8 +2399,6 @@ class ProjectOrchestrator {
     // narrates has not done the work. This holds whether the task runs in an
     // isolated epic clone or directly in the project checkout. Verifier streams
     // (qa/reviewer/security) legitimately may only sign off, so they are not gated.
-    const isVerifier = /^(qa|reviewer|security)$/.test(item.stream ?? '');
-    const gate = !isVerifier;
     const MAX_ATTEMPTS = 2;
     // For non-worktree runs, snapshot the checkout so we can tell whether the
     // agent actually created/edited files (the clone starts clean, so it uses
