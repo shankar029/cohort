@@ -282,20 +282,28 @@ waves + a 3rd-round budget cap. Final: merged, 64/64 tests, 0 deps, correct cont
 | — | Review→comments→remediation | 12 cited defects wave-1 caught a spec-noncompliant delivery |
 
 ### 🐛 / 🌀 Issues to fix (priority order)
-1. **MAJOR-1** — green tests+gates NOT sufficient: agents test their own wrong contract.
-   → add a spec-derived acceptance probe as a REQUIRED epic-level check.
-2. **MAJOR-2** — task-clone gate FALSE-NEGATIVE for interdependent fix-tasks (stale
-   clone lacks sibling fix). → verify failing fix-tasks against the INTEGRATED tree
-   (authority) before re-drive/escalate; or sequence dependent fixes.
-3. **ISSUE-2** — concurrent fixes on overlapping files → integration-conflict
-   escalations. → group same-file fixes / serialize / auto-rebase before escalating.
-4. **BUG-2** — `/projects/:id/events` returns OLDEST 500 + ignores `limit` (ASC).
-   → `ORDER BY created_at DESC LIMIT ?` + forward `limit`. (Activity feed freezes.)
-5. **BUG-3** — "Need Your Input" has no custom-answer field (only Retry/Skip).
-   → add free-text answer box POSTing to `/questions/:id/answer`.
-6. **DRIFT-2** — agents ignore hard constraints/contract on first pass. → inject
-   constraints as imperative top-of-brief directives + bake into acceptance criteria.
-7. **DRIFT-5** — gold-plating (PUT, edit, copy) beyond spec → build-then-remove churn.
-   → "implement EXACTLY the listed features, nothing more" directive.
-8. **DRIFT-1/3 / ISSUE-1** — over-fan-out to 8 streams for a toy; build check never
+1. **MAJOR-1** — ❌ OPEN (deferred; needs design + real-SDK validation) — green
+   tests+gates NOT sufficient: agents test their own wrong contract. The epic
+   acceptance gate is itself LLM-narrated (`evaluateAcceptance` asks the QA/reviewer
+   agent to judge the diff), so it shares the blind spot. → add a spec-derived,
+   machine-checkable acceptance probe as a REQUIRED epic-level check independent of
+   agent-authored tests. **Design sketch:** (a) Architect emits, as part of the epic
+   design, an executable `acceptance-probe` (e.g. a `node --test` file or a shell
+   script that boots the integrated build and asserts the contract: `POST {body}→201`,
+   `GET→array`); (b) a new deterministic epic gate runs it in the integrated worktree
+   and BLOCKS merge on failure, recorded as an `acceptance-probe` check in the epic
+   GateReport; (c) fall back to the LLM judge only when no probe is derivable. Needs a
+   real-SDK run to validate probe generation + harness, so it's its own effort.
+2. **MAJOR-2** — ✅ FIXED (`907878c`): pre-gate `refreshTaskFromEpic` syncs the task
+   clone with integrated sibling work before the deterministic gates.
+3. **ISSUE-2** — ✅ MITIGATED (`907878c` refresh + `09ccb4e` budget): re-drives fork
+   off the fresh tip and sync siblings in; conflict budget raised so only genuine
+   same-region conflicts escalate.
+4. **BUG-2** — ✅ FIXED (`6723682`): newest-window + `?limit=` forwarded.
+5. **BUG-3** — ✅ FIXED (`6723682`): free-text answer box on every question card.
+6. **DRIFT-2** — ✅ MITIGATED (`3814e45`): imperative hard-constraint directives at
+   the top of the task brief.
+7. **DRIFT-5** — ✅ MITIGATED (`3814e45`): "implement EXACTLY the checklist, nothing
+   more" scope-discipline directive.
+8. **DRIFT-1/3 / ISSUE-1** — ❌ OPEN (minor) — over-fan-out to 8 streams for a toy; build check never
    runs on build-stream integrating tasks (minor; QA stream is the test backstop).
