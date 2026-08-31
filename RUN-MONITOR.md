@@ -226,7 +226,7 @@ Legend: 🐛 bug · ⚠️ issue · 🌀 drift · ✅ working-as-intended observ
   epic (60/60 tests, contract correct) in review. Potential unbounded-nit risk.
 
 ### 09:57 — wave-2 converging; recurring integration-conflict escalations
-- 🌀 **ISSUE-2 (recurring): concurrent fix-tasks on overlapping files → integration
+- 🌀 **ISSUE-2 [MITIGATED 2026-08-31]: concurrent fix-tasks on overlapping files → integration
   conflicts → human escalation.** Twice now (`wi_rCDRVtUuBVCF` in wave-1,
   `wi_ZEvrgKcXNmLt` in wave-2) a fix conflicted with a sibling "even after a retry"
   because both edited the same backend files (`snippet-service.js`/`snippet-http.js`).

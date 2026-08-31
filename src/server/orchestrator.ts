@@ -2927,10 +2927,14 @@ class ProjectOrchestrator {
         this.epicMetrics.set(parentId, met);
         // Re-queue so the agent redoes the work in a fresh clone forked off the
         // now-integrated epic tip (where the conflicting sibling already landed).
+        // ISSUE-2: give auto-recovery up to TWO re-drives before escalating - the
+        // re-drive forks off the fresh tip AND the pre-gate refresh syncs integrated
+        // siblings in, so most transient overlaps resolve without a human; only a
+        // genuine same-region semantic conflict reaches the user.
         const n = (this.taskConflicts.get(item.id) ?? 0) + 1;
         this.taskConflicts.set(item.id, n);
         this.setSubtaskStatus(subtasks, 'todo');
-        if (n >= 2) {
+        if (n >= 3) {
           this.setStatus(agent.id, 'needs_input');
           this.awaitingInput.add(item.id);
           this.notify(
