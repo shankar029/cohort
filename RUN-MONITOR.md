@@ -358,17 +358,20 @@ builders' tests/review, BLOCKS merge, routes a fix, and gates the merge on pass.
   entry so the probe spawned `node <entry>` directly). Hardened the **probe-authoring
   prompt** to require cross-platform launch (prefer `node <entryFile>`; use
   `{ shell:true }` if spawning npm/.cmd) so future probes are Windows-safe first time.
-- ⚠️ **OVERRIDE-1 (design, OPEN — needs decision):** `forcedAccept` ("Merge anyway"
-  after the **review-comment** escalation) short-circuits the ENTIRE `finalizeEpic`
-  (orchestrator.ts ~3521), so it also **skips the deterministic acceptance probe** —
-  re-opening the MAJOR-1 blind spot via the force-merge door. The subjective gates
-  (LLM review/criteria) and the objective gates (integrated build/constraints/probe)
-  should be treated differently: waiving review NITS should NOT waive an unrun,
-  objective contract probe. **Recommendation:** in the review-escalation "merge anyway"
-  path, resolve the review comments but fall through the normal finalize gates (so the
-  probe still runs); keep `forcedAccept` bypass only for the escalation that is ABOUT
-  that specific objective gate (where the user was explicitly shown it failing). Needs
-  its own focused change + tests (+ ideally a re-run), so parked for a decision.
+- ⚠️ **OVERRIDE-1 (design, ✅ FIXED this batch):** `forcedAccept` ("Merge anyway"
+  after the **review-comment** escalation) short-circuited the ENTIRE `finalizeEpic`
+  (orchestrator.ts ~3521), so it also **skipped the deterministic acceptance probe** —
+  re-opening the MAJOR-1 blind spot via the force-merge door. **Fix:** the review
+  escalation "merge anyway" now resolves the leftover SUBJECTIVE comments and falls
+  through the normal finalize gates WITHOUT setting `forcedAccept`, so the OBJECTIVE
+  gates (integrated build / constraints / contract probe) still run; a probe failure
+  then raises its OWN probe-specific escalation. The blanket `forcedAccept` bypass is
+  retained only for the escalations that are ABOUT a specific objective/criteria gate
+  the user was explicitly shown failing. The waiver is audited via `recordOverride`,
+  and the question text now states the objective gates still run. Tests: two new
+  `pr.test.ts` regression cases — a failing probe BLOCKS a review force-merge (probe
+  runs, records `acceptance-probe: fail`, no merge); a passing probe lets it through
+  recording `acceptance-probe: pass`.
 - ℹ️ **MAJOR-2 / ISSUE-2 NOT exercised:** single implementing stream (backend) ⇒ no
   concurrent same-file writes, so 0 sync/conflict events. A multi-builder epic with
   overlapping files is still needed to exercise the stale-clone refresh + conflict

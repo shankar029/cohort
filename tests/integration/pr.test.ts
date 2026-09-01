@@ -38,6 +38,56 @@ async function addSpecialist(projectId: string, catalogId: string): Promise<void
   });
 }
 
+/**
+ * Drive a fresh app to the review-budget escalation: a reviewer that files an
+ * unresolved comment every round + `ATEAM_MAX_REVIEW_ITER=1` forces the
+ * "merge anyway / keep working" question on round one. The caller sets the
+ * `acceptanceCommand` so the OVERRIDE-1 tests can prove the objective probe still
+ * runs when the user waives the leftover review comments. Returns the app (caller
+ * closes it) + the raised question id.
+ */
+async function driveReviewEscalation(
+  acceptanceCommand: string,
+): Promise<{ app2: TestApp; projectId: string; questionId: string }> {
+  const app2 = createTestApp();
+  const res = await app2.app.inject({
+    method: 'POST',
+    url: '/api/projects',
+    payload: { name: 'Override1', repoDir },
+  });
+  const projectId = (res.json() as { project: { id: string } }).project.id;
+  await app2.app.inject({
+    method: 'PATCH',
+    url: `/api/projects/${projectId}`,
+    payload: { acceptanceCommand },
+  });
+  await app2.app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/agents`,
+    payload: { catalogId: 'frontend-engineer' },
+  });
+  await app2.app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/agents`,
+    payload: {
+      name: 'reviewer',
+      displayName: 'Code Reviewer',
+      prompt: 'You review PRs. [[REVIEW_COMMENT: frontend | needs more test coverage]]',
+    },
+  });
+  await app2.app.inject({
+    method: 'POST',
+    url: `/api/projects/${projectId}/chat`,
+    payload: { content: 'Build a profile page.' },
+  });
+  const q = await app2.waitFor(
+    (m) => m.type === 'question.updated' && /open review comment/i.test(m.question.question),
+    15000,
+  );
+  const questionId = (q as { type: 'question.updated'; question: { id: string } }).question.id;
+  return { app2, projectId, questionId };
+}
+
 describe('PR + review + iterate-to-quality (Phase 4)', () => {
   it('files review comments, assigns fixes, then approves and merges once resolved', async () => {
     const projectId = await createProject('PR Flow');
@@ -212,6 +262,86 @@ describe('PR + review + iterate-to-quality (Phase 4)', () => {
       if (prev === undefined) delete process.env.ATEAM_MAX_REVIEW_ITER;
       else process.env.ATEAM_MAX_REVIEW_ITER = prev;
       await app2.close();
+    }
+  });
+
+  // OVERRIDE-1: waiving leftover SUBJECTIVE review comments must NOT skip the
+  // OBJECTIVE deterministic gates. A "merge anyway" past the review budget still
+  // runs the acceptance probe - a broken contract cannot slip through the review
+  // escape hatch (the MAJOR-1 blind spot via the back door).
+  it('OVERRIDE-1: a failing acceptance probe still BLOCKS a review force-merge', async () => {
+    const prev = process.env.ATEAM_MAX_REVIEW_ITER;
+    process.env.ATEAM_MAX_REVIEW_ITER = '1';
+    let app2: TestApp | undefined;
+    try {
+      const d = await driveReviewEscalation('node -e "process.exit(1)"');
+      app2 = d.app2;
+      // The user waives the review comments...
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/questions/${d.questionId}/answer`,
+        payload: { answer: 'Merge anyway' },
+      });
+      // ...but the deterministic probe STILL runs and fails, blocking the merge.
+      const ev = await app2.waitFor(
+        (m) => m.type === 'event.appended' && /Acceptance probe FAILED/i.test(m.event.summary),
+        20000,
+      );
+      expect(ev.type).toBe('event.appended');
+
+      const body = (await app2.app
+        .inject({ method: 'GET', url: `/api/projects/${d.projectId}/verification?limit=500` })
+        .then((r) => r.json())) as {
+        reports: Array<{ scope: string; checks: Array<{ id: string; status: string }> }>;
+      };
+      const failing = body.reports.find(
+        (r) =>
+          r.scope === 'epic' &&
+          r.checks.some((c) => c.id === 'acceptance-probe' && c.status === 'fail'),
+      );
+      expect(failing).toBeTruthy();
+
+      // The PR was NOT allowed to merge on a failing contract.
+      const pulls = app2.store.listPRs(d.projectId);
+      expect(pulls[0]!.status).not.toBe('merged');
+    } finally {
+      if (prev === undefined) delete process.env.ATEAM_MAX_REVIEW_ITER;
+      else process.env.ATEAM_MAX_REVIEW_ITER = prev;
+      if (app2) await app2.close();
+    }
+  });
+
+  it('OVERRIDE-1: a passing probe lets a review force-merge through, recording acceptance-probe:pass', async () => {
+    const prev = process.env.ATEAM_MAX_REVIEW_ITER;
+    process.env.ATEAM_MAX_REVIEW_ITER = '1';
+    let app2: TestApp | undefined;
+    try {
+      const d = await driveReviewEscalation('node -e "process.exit(0)"');
+      app2 = d.app2;
+      await app2.app.inject({
+        method: 'POST',
+        url: `/api/questions/${d.questionId}/answer`,
+        payload: { answer: 'Merge anyway' },
+      });
+      // The probe runs, passes, and the merge proceeds.
+      await app2.waitFor(
+        (m) => m.type === 'pull_request.updated' && m.pr.status === 'merged',
+        20000,
+      );
+      const body = (await app2.app
+        .inject({ method: 'GET', url: `/api/projects/${d.projectId}/verification?limit=500` })
+        .then((r) => r.json())) as {
+        reports: Array<{ scope: string; checks: Array<{ id: string; status: string }> }>;
+      };
+      const epicReport = body.reports.find(
+        (r) => r.scope === 'epic' && r.checks.some((c) => c.id === 'acceptance-probe'),
+      );
+      expect(epicReport).toBeTruthy();
+      expect(epicReport!.checks.find((c) => c.id === 'acceptance-probe')!.status).toBe('pass');
+    } finally {
+      if (prev === undefined) delete process.env.ATEAM_MAX_REVIEW_ITER;
+      else process.env.ATEAM_MAX_REVIEW_ITER = prev;
+      if (app2) await app2.close();
     }
   });
 });

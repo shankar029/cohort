@@ -3405,18 +3405,33 @@ class ProjectOrchestrator {
       void this.raiseQuestion(
         lead.id,
         `Epic "${epic.title}" still has ${open.length} open review comment(s) after ${iter} ` +
-          `rounds:\n${list}\n\nMerge anyway, or keep working on them?`,
+          `rounds:\n${list}\n\nMerge anyway, or keep working on them? (Merging waives these ` +
+          `review comments, but the deterministic build / constraint / contract-probe gates ` +
+          `still run before the merge.)`,
         ['Keep working', 'Merge anyway'],
       ).then(async (ans) => {
         this.awaitingInput.delete(epic.id);
         if (ans.toLowerCase().startsWith('merge')) {
+          // OVERRIDE-1: the user waives the leftover SUBJECTIVE review comments, but
+          // this must NOT skip the OBJECTIVE gates (integrated build / constraints /
+          // acceptance probe) - otherwise a broken contract could slip through the
+          // review escape hatch (the MAJOR-1 blind spot via the back door). So we
+          // resolve the comments and fall through the normal finalize gates WITHOUT
+          // setting `forcedAccept`. If an objective gate then fails, its own
+          // escalation asks the user again, specifically about that gate.
           for (const c of open) this.resolveComment(c.id);
-          this.forcedAccept.add(epic.id);
           this.epicReviewIter.delete(epic.id);
+          this.recordOverride(
+            epic,
+            lead,
+            'epic',
+            `user waived ${open.length} open review comment(s) after ${iter} rounds; objective gates still enforced`,
+          );
           this.emitEvent(
             lead.id,
             'pull_request',
-            `Merging after ${iter} review rounds (user approved)`,
+            `Waived ${open.length} review comment(s) after ${iter} rounds (user approved); ` +
+              `running build / constraint / contract-probe gates before merge`,
             null,
             epic.id,
           );
