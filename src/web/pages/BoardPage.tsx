@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import type { Agent, VerificationReportRecord, WorkItem, WorkItemStatus } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { Avatar, Banner, Modal, UsageChip, agentAvatar } from '../components/ui';
@@ -192,6 +192,26 @@ export function BoardPage(): React.JSX.Element {
               );
             })}
           </select>
+        </div>
+      )}
+
+      {bundle.workItems.length === 0 && (
+        <div className="px-6 pt-5" data-testid="board-empty-hint">
+          <div className="card p-5">
+            <h2 className="text-base font-semibold text-slate-100">No work yet</h2>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-400">
+              The board fills up as the team works. The usual way to start:{' '}
+              <Link
+                to={`/p/${projectId}/chat`}
+                className="font-medium text-accent-400 hover:underline"
+              >
+                open Chat
+              </Link>{' '}
+              and tell the Team Lead what you want to build — it plans the work, creates the items
+              here, and delegates them to the specialists. You can also add an item yourself with{' '}
+              <span className="font-medium text-slate-300">New work item</span>.
+            </p>
+          </div>
         </div>
       )}
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { NavLink, Navigate, Outlet, Route, Routes, useParams } from 'react-router-dom';
+import { NavLink, Navigate, Outlet, Route, Routes, useParams, Link } from 'react-router-dom';
 import {
   LayoutDashboard,
   MessagesSquare,
@@ -12,6 +12,7 @@ import {
   Settings,
   Pause,
   Play,
+  HelpCircle,
   PanelLeftClose,
   PanelLeft,
   type LucideIcon,
@@ -216,6 +217,16 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
         ))}
       </nav>
       <div className="border-t border-surface-border p-3 text-xs text-slate-500">
+        <Link
+          to="/?about=1"
+          data-testid="how-it-works-link"
+          className={`mb-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-slate-400 transition-colors hover:bg-surface-2 hover:text-slate-200 ${
+            collapsed ? 'justify-center' : ''
+          }`}
+          title="How Cohort works"
+        >
+          <HelpCircle className="h-3.5 w-3.5 shrink-0" /> {!collapsed && 'How it works'}
+        </Link>
         <button
           type="button"
           onClick={() => void togglePause()}

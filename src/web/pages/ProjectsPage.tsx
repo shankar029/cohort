@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp } from '../state';
 import { api } from '../api';
 import {
@@ -91,16 +91,35 @@ function AboutCohort(): React.JSX.Element {
       return false;
     }
   });
-  const toggle = (): void => {
-    setCollapsed((c) => {
-      const next = !c;
-      try {
-        localStorage.setItem(KEY, next ? '1' : '0');
-      } catch {
-        /* ignore storage failures (private mode) */
-      }
-      return next;
-    });
+  const [params, setParams] = useSearchParams();
+  const ref = useRef<HTMLDivElement>(null);
+
+  // A `?about=1` link (e.g. the sidebar "How it works") force-opens the panel and
+  // scrolls it into view, even if the user had previously collapsed it.
+  useEffect(() => {
+    if (params.get('about') !== '1') return;
+    setCollapsed(false);
+    try {
+      localStorage.setItem(KEY, '0');
+    } catch {
+      /* ignore */
+    }
+    const next = new URLSearchParams(params);
+    next.delete('about');
+    setParams(next, { replace: true });
+    requestAnimationFrame(() =>
+      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setCollapsedPersisted = (next: boolean): void => {
+    try {
+      localStorage.setItem(KEY, next ? '1' : '0');
+    } catch {
+      /* ignore storage failures (private mode) */
+    }
+    setCollapsed(next);
   };
 
   const steps = [
@@ -122,18 +141,24 @@ function AboutCohort(): React.JSX.Element {
   ];
 
   return (
-    <section className="card mb-6 p-5" data-testid="about-cohort">
+    <section className="card mb-6 p-5" data-testid="about-cohort" ref={ref}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-base font-semibold text-slate-100">What is Cohort?</h2>
-          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-400">
-            Cohort is a local orchestrator for a team of specialized GitHub Copilot agents. You talk
-            to a single <strong className="font-semibold text-slate-300">Team Lead</strong>; behind
-            the scenes a full crew plans, builds, tests and reviews changes in your repo — then
-            hands you a pull request to merge.
-          </p>
+          {!collapsed && (
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-400">
+              Cohort is a local orchestrator for a team of specialized GitHub Copilot agents. You
+              talk to a single <strong className="font-semibold text-slate-300">Team Lead</strong>;
+              behind the scenes a full crew plans, builds, tests and reviews changes in your repo —
+              then hands you a pull request to merge.
+            </p>
+          )}
         </div>
-        <button className="btn-ghost shrink-0" onClick={toggle} data-testid="about-toggle">
+        <button
+          className="btn-ghost shrink-0"
+          onClick={() => setCollapsedPersisted(!collapsed)}
+          data-testid="about-toggle"
+        >
           {collapsed ? 'How it works' : 'Hide'}
         </button>
       </div>
