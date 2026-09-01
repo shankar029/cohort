@@ -158,7 +158,7 @@ export function buildApp(ctx: AppContext): FastifyInstance {
 
   app.post('/api/projects', async (req, reply) => {
     const input = createProjectSchema.parse(req.body);
-    const check = validateRepoDir(input.repoDir);
+    const check = validateRepoDir(input.repoDir, input.createDir === true);
     if (!check.ok) throw new HttpError(400, check.error);
     const project = createProjectWithLead(store, config, input, check.resolved);
     bus.publish({ type: 'project.updated', project });

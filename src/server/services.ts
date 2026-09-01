@@ -12,14 +12,26 @@ export interface ServiceConfig {
 /** Validate that a path exists and is a directory (the repo to work in). */
 export function validateRepoDir(
   repoDir: string,
-): { ok: true; resolved: string } | { ok: false; error: string } {
+  createIfMissing = false,
+): { ok: true; resolved: string; created?: boolean } | { ok: false; error: string } {
   const resolved = path.resolve(repoDir);
   try {
     const stat = fs.statSync(resolved);
     if (!stat.isDirectory()) return { ok: false, error: 'Path is not a directory' };
     return { ok: true, resolved };
   } catch {
-    return { ok: false, error: 'Directory does not exist' };
+    if (!createIfMissing) return { ok: false, error: 'Directory does not exist' };
+    try {
+      fs.mkdirSync(resolved, { recursive: true });
+      return { ok: true, resolved, created: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Could not create directory: ${
+          err instanceof Error ? err.message : 'unknown error'
+        }`,
+      };
+    }
   }
 }
 

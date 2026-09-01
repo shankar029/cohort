@@ -296,6 +296,7 @@ interface AppContextValue {
     name: string;
     repoDir: string;
     defaultModel?: string;
+    createDir?: boolean;
   }) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   ensureBundle: (projectId: string) => Promise<void>;

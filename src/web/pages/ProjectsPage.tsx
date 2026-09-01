@@ -199,12 +199,18 @@ function CreateProjectModal({
   onCreate,
 }: {
   onClose: () => void;
-  onCreate: (input: { name: string; repoDir: string; defaultModel?: string }) => Promise<unknown>;
+  onCreate: (input: {
+    name: string;
+    repoDir: string;
+    defaultModel?: string;
+    createDir?: boolean;
+  }) => Promise<unknown>;
 }): React.JSX.Element {
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [repoDir, setRepoDir] = useState('');
   const [model, setModel] = useState('auto');
+  const [createDir, setCreateDir] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [browsing, setBrowsing] = useState(false);
@@ -214,10 +220,20 @@ function CreateProjectModal({
     setBusy(true);
     setError(null);
     try {
-      const project = (await onCreate({ name, repoDir, defaultModel: model })) as { id: string };
+      const project = (await onCreate({ name, repoDir, defaultModel: model, createDir })) as {
+        id: string;
+      };
       navigate(`/p/${project.id}/agents`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create project');
+      const msg = err instanceof Error ? err.message : 'Failed to create project';
+      if (/does not exist/i.test(msg) && !createDir) {
+        setCreateDir(true);
+        setError(
+          'That folder doesn’t exist yet — ticked “Create this directory” for you. Click Create project again to make it.',
+        );
+      } else {
+        setError(msg);
+      }
       setBusy(false);
     }
   };
@@ -274,6 +290,16 @@ function CreateProjectModal({
             <p className="mt-1 text-xs text-slate-500">
               Pick a locally checked-out repository, or paste an absolute path.
             </p>
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-accent-500"
+                data-testid="project-createdir"
+                checked={createDir}
+                onChange={(e) => setCreateDir(e.target.checked)}
+              />
+              Create this directory if it doesn&rsquo;t exist
+            </label>
           </div>
           <div>
             <label className="label" htmlFor="p-model">

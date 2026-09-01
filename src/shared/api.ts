@@ -12,6 +12,8 @@ export const createProjectSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(80),
   repoDir: z.string().trim().min(1, 'Repository directory is required'),
   defaultModel: z.string().trim().min(1).optional(),
+  /** When true, create the repository directory (recursively) if it doesn't exist. */
+  createDir: z.boolean().optional(),
 });
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 
