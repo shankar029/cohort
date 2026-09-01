@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useApp, useBundle } from './state';
 import { api } from './api';
-import { ThemeToggle } from './components/ui';
+import { ThemeToggle, PaletteToggle } from './components/ui';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { ChatPage } from './pages/ChatPage';
@@ -92,7 +92,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
         <NavLink
           to="/"
           className="flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-100"
-          title="A Team"
+          title="Cohort"
         >
           <span
             className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-lg"
@@ -101,7 +101,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
           >
             <img src="/brand/mark.png" alt="" className="h-full w-full object-contain" />
           </span>
-          {!collapsed && <span>A Team</span>}
+          {!collapsed && <span>Cohort</span>}
         </NavLink>
         {!collapsed && (
           <button
@@ -244,6 +244,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
               title={state.wsConnected ? 'Live' : 'Reconnecting…'}
               className={`h-2 w-2 rounded-full ${state.wsConnected ? 'bg-status-done' : 'bg-status-blocked'}`}
             />
+            <PaletteToggle />
             <ThemeToggle />
           </div>
         ) : (
@@ -268,6 +269,7 @@ function Sidebar({ projectId }: { projectId: string }): React.JSX.Element {
                 )}
               </div>
             </div>
+            <PaletteToggle />
             <ThemeToggle />
           </div>
         )}

@@ -94,7 +94,7 @@ async function main(): Promise<void> {
   });
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
-  const banner = `\n  ateam server ready\n  → http://localhost:${config.port}  (adapter: ${adapter.name})\n`;
+  const banner = `\n  Cohort server ready\n  → http://localhost:${config.port}  (adapter: ${adapter.name})\n`;
   process.stdout.write(banner);
 
   // Warm the models cache in the background so the first model picker in the UI

@@ -74,6 +74,78 @@
     --ct-shadow-sm: rgba(60, 70, 100, 0.1);
     --ct-shadow-lg: rgba(60, 70, 100, 0.22);
   }
+  /*
+   * COMIC palette — a second axis layered over dark/light via the `comic` class on
+   * <html> (two-class selectors win over the base `.dark`/`.light`). Bold pop-art
+   * primaries, inked outlines, hard offset shadows and a comic font (see the
+   * decoration block below). Comic Light = newsprint; Comic Dark = neon ink.
+   */
+  .comic.light {
+    color-scheme: light;
+    --ct-bg: 245 236 214; /* newsprint cream #f5ecd6 */
+    --ct-panel: 255 252 245; /* paper #fffcf5 */
+    --ct-raised: 245 235 210; /* #f5ebd2 */
+    --ct-hover: 236 222 189; /* #ecdebd */
+    --ct-border: 26 22 18; /* INK black outline #1a1612 */
+
+    --ct-t1: 20 16 12; /* ink #14100c */
+    --ct-t2: 40 33 26;
+    --ct-t3: 64 54 44;
+    --ct-t4: 92 80 66;
+    --ct-t5: 122 108 92;
+    --ct-t6: 150 134 116;
+
+    --ct-accent-text: 200 18 40; /* comic red #c81228 */
+    --ct-accent-ring: 200 18 40;
+    --ct-accent-fill: 206 18 40; /* #ce1228 (white text passes AA) */
+    --ct-accent-deep: 164 10 30;
+
+    --ct-idle: 140 128 112;
+    --ct-blue: 22 86 210; /* comic blue #1656d2 */
+    --ct-sky: 8 138 200;
+    --ct-teal: 10 148 118;
+    --ct-green: 28 146 44; /* comic green #1c922c */
+    --ct-yellow: 224 158 8; /* comic gold #e09e08 */
+    --ct-peach: 234 104 18;
+    --ct-red: 206 18 40;
+    --ct-red-fill: 196 16 36;
+
+    --ct-shadow-sm: rgba(26, 22, 18, 0.95);
+    --ct-shadow-lg: rgba(26, 22, 18, 0.55);
+  }
+  .comic.dark {
+    color-scheme: dark;
+    --ct-bg: 16 14 24; /* deep ink #100e18 */
+    --ct-panel: 27 23 40; /* #1b1728 */
+    --ct-raised: 41 35 59; /* #29233b */
+    --ct-hover: 56 48 80; /* #383050 */
+    --ct-border: 6 5 12; /* crisp near-black edge; hard shadows carry the look */
+
+    --ct-t1: 245 238 220; /* warm off-white #f5eedc */
+    --ct-t2: 223 214 196;
+    --ct-t3: 192 183 168;
+    --ct-t4: 160 151 140;
+    --ct-t5: 130 122 114;
+    --ct-t6: 104 97 91;
+
+    --ct-accent-text: 255 94 104; /* comic red #ff5e68 */
+    --ct-accent-ring: 255 94 104;
+    --ct-accent-fill: 230 40 55; /* #e62837 (white text passes AA) */
+    --ct-accent-deep: 190 24 40;
+
+    --ct-idle: 122 115 108;
+    --ct-blue: 92 152 255; /* #5c98ff */
+    --ct-sky: 72 200 245;
+    --ct-teal: 58 222 190;
+    --ct-green: 96 222 116; /* #60de74 */
+    --ct-yellow: 255 210 64; /* #ffd240 */
+    --ct-peach: 255 150 72;
+    --ct-red: 255 94 104;
+    --ct-red-fill: 230 40 55;
+
+    --ct-shadow-sm: rgba(0, 0, 0, 0.92);
+    --ct-shadow-lg: rgba(0, 0, 0, 0.85);
+  }
   html,
   body,
   #root {
@@ -94,6 +166,51 @@
       radial-gradient(1100px 620px at 100% -5%, rgba(136, 57, 239, 0.08), transparent 60%),
       radial-gradient(900px 520px at -5% 105%, rgba(4, 165, 229, 0.08), transparent 55%);
     background-attachment: fixed;
+  }
+  /* ---- COMIC palette decoration (applies over both dark & light) ---- */
+  .comic body {
+    font-family:
+      'Comic Sans MS', 'Comic Neue', 'Chalkboard SE', 'Segoe Print', system-ui, sans-serif;
+    /* halftone dot texture for pop-art flavour */
+    background-image: radial-gradient(rgb(var(--ct-t1) / 0.06) 1.1px, transparent 1.4px);
+    background-size: 13px 13px;
+    background-attachment: fixed;
+  }
+  .comic.dark body {
+    background-image: radial-gradient(rgb(255 255 255 / 0.05) 1.1px, transparent 1.4px);
+    background-size: 13px 13px;
+  }
+  /* Bolder, inked headings + brand wordmark. */
+  .comic h1,
+  .comic h2,
+  .comic h3 {
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+  /* Inked panels with hard, offset "comic" shadows instead of soft blur. */
+  .comic .card {
+    border-width: 2px;
+    box-shadow: 4px 4px 0 0 var(--ct-shadow-sm);
+  }
+  .comic .btn-primary,
+  .comic .btn-ghost,
+  .comic .btn-danger {
+    border: 2px solid rgb(var(--ct-border));
+    box-shadow: 3px 3px 0 0 var(--ct-shadow-sm);
+    font-weight: 700;
+  }
+  .comic .btn-primary:active,
+  .comic .btn-ghost:active,
+  .comic .btn-danger:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 0 var(--ct-shadow-sm);
+  }
+  .comic .badge {
+    border: 1.5px solid rgb(var(--ct-border));
+    font-weight: 700;
+  }
+  .comic .input {
+    border-width: 2px;
   }
   *:focus-visible {
     @apply outline-none ring-2 ring-accent-500/70 ring-offset-2 ring-offset-surface-0;

@@ -2,7 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../state';
 import { api } from '../api';
-import { Banner, EmptyState, ModelSelect, Spinner, ThemeToggle } from '../components/ui';
+import {
+  Banner,
+  EmptyState,
+  ModelSelect,
+  Spinner,
+  ThemeToggle,
+  PaletteToggle,
+} from '../components/ui';
 
 export function ProjectsPage(): React.JSX.Element {
   const { state, createProject } = useApp();
@@ -21,13 +28,14 @@ export function ProjectsPage(): React.JSX.Element {
               >
                 <img src="/brand/mark.png" alt="" className="h-full w-full object-contain" />
               </span>
-              A Team
+              Cohort
             </h1>
             <p className="mt-1 text-sm text-slate-400">
               Orchestrate GitHub Copilot agents across your local repositories.
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <PaletteToggle />
             <ThemeToggle />
             <button
               className="btn-primary"

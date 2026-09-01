@@ -1,4 +1,4 @@
-# ateam — Agents Team
+# Cohort — Agents Team
 
 A **local web app** that orchestrates [GitHub Copilot SDK](https://github.com/github/copilot-sdk)
 agents to get real work done in your repositories. You talk to a single **Team Lead** agent; it turns

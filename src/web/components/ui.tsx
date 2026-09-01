@@ -2,7 +2,7 @@ import React from 'react';
 import { Clock, Coins } from 'lucide-react';
 import type { AgentStatus } from '@shared/index';
 import { api } from '../api';
-import { useTheme } from '../theme';
+import { useTheme, usePalette } from '../theme';
 import { formatDuration, formatTokens } from '../usage';
 
 /** Compact light/dark switch backed by the persisted Catppuccin theme. */
@@ -20,6 +20,27 @@ export function ThemeToggle({ className = '' }: { className?: string }): React.J
     >
       <span aria-hidden="true" className="text-base leading-none">
         {theme === 'dark' ? '☀️' : '🌙'}
+      </span>
+    </button>
+  );
+}
+
+/** Toggles the Comic palette (an independent axis layered over dark/light). */
+export function PaletteToggle({ className = '' }: { className?: string }): React.JSX.Element {
+  const { palette, toggle } = usePalette();
+  const isComic = palette === 'comic';
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      className={`btn-ghost h-9 w-9 !px-0 ${isComic ? '!border-accent-500 !text-accent-400' : ''} ${className}`}
+      title={isComic ? 'Switch to the standard theme' : 'Switch to the Comic theme'}
+      aria-label={isComic ? 'Disable comic theme' : 'Enable comic theme'}
+      aria-pressed={isComic}
+      data-testid="palette-toggle"
+    >
+      <span aria-hidden="true" className="text-base leading-none">
+        💥
       </span>
     </button>
   );
@@ -113,8 +134,9 @@ export function Avatar({
   src?: string | null;
 }): React.JSX.Element {
   if (src) {
-    // Illustrated avatars are transparent PNGs — render them bare so they blend
-    // with whatever surface is behind them (no tinted badge).
+    // Illustrated comic avatars come with mixed backgrounds (some transparent, most
+    // with a baked comic-burst). Render them inside a uniform rounded frame with
+    // object-cover so every agent reads as a consistent comic badge.
     return (
       <img
         src={src}
@@ -122,7 +144,7 @@ export function Avatar({
         draggable={false}
         width={size}
         height={size}
-        className="shrink-0 object-contain"
+        className="shrink-0 rounded-[28%] object-cover ring-1 ring-black/25"
         style={{ width: size, height: size }}
         aria-hidden="true"
       />
