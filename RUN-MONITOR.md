@@ -316,3 +316,60 @@ waves + a 3rd-round budget cap. Final: merged, 64/64 tests, 0 deps, correct cont
    epic's hard constraints (via `describeConstraints`) and explicitly forbids
    requesting changes that would VIOLATE one (no demanding a dependency, a
    datastore, or a UI the request forbids).
+
+---
+
+## Real-SDK validation run #2 — MAJOR-1 acceptance probe (`prj_jL1bsNFFDDHH`, 2026-09-01)
+
+**Brief:** headless in-memory URL shortener, Node built-in `http` only, no external
+deps, exact contract (`POST /shorten`→201 `{code,shortUrl}`, `GET /:code`→302,
+`GET /api/stats/:code`→200 `{code,url,hits}`, 400/404 paths). Team:
+architect/backend/qa/reviewer. `acceptanceCommand` deliberately UNSET so the system
+authored the probe from the spec (the real MAJOR-1 path).
+
+**What happened (end to end):**
+- Decomposition right-sized to **backend / qa / reviewer** (headless ⇒ no UI streams;
+  architect scoped out as non-implementing). ✅
+- QA **authored a spec-derived probe** `.ateam/acceptance.mjs` (16 black-box contract
+  assertions), self-verified it "15/15 against a reference impl", committed it to the
+  epic branch (`b00ce03`). ✅ Independent of the builders' own unit tests.
+- Reviewer (Architect) caught **5 real contract deviations** across 3 review rounds
+  (creation contract, stats/hit counting, redirect/stats preservation, an extra API
+  surface it forbade, code/route collision), then hit the review-round cap and
+  **escalated** ("Keep working / Merge anyway"). Answered **Keep working**.
+- After the fixes, **finalize ran the deterministic probe** on the integrated tree:
+  - **08:59:54 → epic report `acceptance-probe: fail`** — BLOCKED the merge, routed a
+    `fix: acceptance probe failing` task. (Independent of green review + green tests.)
+  - Backend fixed the **deliverable** (added `"main": "src/server.js"`), NOT the probe
+    (`.ateam/acceptance.mjs` untouched — the "do not weaken the probe" directive held).
+  - **09:01:25 → epic report `acceptance-probe: pass`** → merged (`f3ca8df`).
+- Independent re-run of the committed probe on the merged tree: **16/16 pass, exit 0**
+  (POST→201, 400s, GET→302 w/ correct Location, stats hits=2, 404s, in-memory-on-restart,
+  zero deps). ✅
+
+**Verdict:** MAJOR-1 fully validated in real SDK — the probe is a REQUIRED epic gate
+that is authored from the spec, survives integration, FAILS independently of the
+builders' tests/review, BLOCKS merge, routes a fix, and gates the merge on pass.
+
+### New findings from run #2
+- 🌀 **PROBE-1 (minor, FIXED this batch):** the QA-authored probe first failed with
+  Windows `spawn EINVAL` because it launched the app via the npm "start" script
+  (`spawn('npm', …)` is not Windows-safe). The fix loop self-corrected (added a `main`
+  entry so the probe spawned `node <entry>` directly). Hardened the **probe-authoring
+  prompt** to require cross-platform launch (prefer `node <entryFile>`; use
+  `{ shell:true }` if spawning npm/.cmd) so future probes are Windows-safe first time.
+- ⚠️ **OVERRIDE-1 (design, OPEN — needs decision):** `forcedAccept` ("Merge anyway"
+  after the **review-comment** escalation) short-circuits the ENTIRE `finalizeEpic`
+  (orchestrator.ts ~3521), so it also **skips the deterministic acceptance probe** —
+  re-opening the MAJOR-1 blind spot via the force-merge door. The subjective gates
+  (LLM review/criteria) and the objective gates (integrated build/constraints/probe)
+  should be treated differently: waiving review NITS should NOT waive an unrun,
+  objective contract probe. **Recommendation:** in the review-escalation "merge anyway"
+  path, resolve the review comments but fall through the normal finalize gates (so the
+  probe still runs); keep `forcedAccept` bypass only for the escalation that is ABOUT
+  that specific objective gate (where the user was explicitly shown it failing). Needs
+  its own focused change + tests (+ ideally a re-run), so parked for a decision.
+- ℹ️ **MAJOR-2 / ISSUE-2 NOT exercised:** single implementing stream (backend) ⇒ no
+  concurrent same-file writes, so 0 sync/conflict events. A multi-builder epic with
+  overlapping files is still needed to exercise the stale-clone refresh + conflict
+  budget under a genuine race.

@@ -3936,6 +3936,10 @@ class ProjectOrchestrator {
           `details, and NOT a copy of the builders' unit tests.\n` +
           `- Boot or import the delivered system itself (start the server / spawn the CLI / import ` +
           `the public entry point) and exercise it end-to-end. Fail fast with a clear message.\n` +
+          `- Be CROSS-PLATFORM (this gate also runs on Windows): to launch the app, prefer spawning ` +
+          `\`node <entryFile>\` directly (discover the entry from package.json "main"/"bin" or a ` +
+          `\`server.js\`/\`index.js\`), NOT \`npm start\`. If you must spawn \`npm\`/a \`.cmd\`, pass ` +
+          `\`{ shell: true }\` to child_process.spawn - otherwise Windows throws \`spawn EINVAL\`.\n` +
           `- Exit 0 when every contract assertion passes; exit non-zero otherwise.\n` +
           `- Be resilient to the exact file layout (discover the entry point) so it runs against the ` +
           `integrated tree.\n\n` +
