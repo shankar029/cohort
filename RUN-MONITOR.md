@@ -372,7 +372,40 @@ builders' tests/review, BLOCKS merge, routes a fix, and gates the merge on pass.
   `pr.test.ts` regression cases — a failing probe BLOCKS a review force-merge (probe
   runs, records `acceptance-probe: fail`, no merge); a passing probe lets it through
   recording `acceptance-probe: pass`.
-- ℹ️ **MAJOR-2 / ISSUE-2 NOT exercised:** single implementing stream (backend) ⇒ no
-  concurrent same-file writes, so 0 sync/conflict events. A multi-builder epic with
-  overlapping files is still needed to exercise the stale-clone refresh + conflict
-  budget under a genuine race.
+- ✅ **MAJOR-2 / ISSUE-2 EXERCISED in run #3** (see below): a multi-builder full-stack
+  epic with shared files produced 4 pre-gate refreshes + 3 auto-recovered integration
+  conflicts, 0 user escalations. The run #2 single-stream caveat is retired.
+
+---
+
+## Real-SDK validation run #3 — MAJOR-2 / ISSUE-2 concurrency (`prj_zEIqpnpUQpSy`, 2026-09-01)
+
+**Brief:** small dependency-free, in-memory "Kudos Board" **full-stack** app with
+DELIBERATELY SHARED files (`src/config.js`, `package.json`, `README.md`) that BOTH the
+backend and frontend streams must edit — engineered to force concurrent same-file
+contention. Team: architect/backend/frontend/qa/reviewer. `acceptanceCommand` unset
+(system authored the probe → also re-validates PROBE-1).
+
+**Concurrency mechanisms — fired for real under a genuine race:**
+- **MAJOR-2 (pre-gate stale-clone refresh): acted 4×** — 3 conflict-fallbacks
+  (`"Could not pre-sync … (conflict) — gates run on the current tree"`) + 1 clean
+  sync. The frontend clone predated the backend's integrated shared-file edits; the
+  refresh detected the clone was behind and either synced it or fell back safely
+  (never a stale-clone false-negative, never worse than prior behavior). ✅
+- **ISSUE-2 (conflict re-drive budget): 3 integration conflicts auto-recovered** —
+  add/add on `package.json` (×2) and a content conflict on `test/server.test.js`. Each
+  re-drove off the fresh epic tip and integrated cleanly (8 successful integrations
+  total). **0 user escalations** for any conflict — the raised budget absorbed every
+  transient overlap. ✅
+
+**Also re-confirmed this run:**
+- **PROBE-1 fix:** the QA-authored `.ateam/acceptance.mjs` **passed on the first try**
+  (`Acceptance probe passed: node .ateam/acceptance.mjs`) — no Windows `spawn EINVAL`,
+  because the hardened authoring prompt made it launch the app portably. ✅
+- **MAJOR-1 end to end (2nd time):** integrated-build gate passed, acceptance probe
+  passed, epic report PASS, PR approved + merged into master. The committed probe re-run
+  on the merged tree: **"Kudos Board external contract is satisfied", exit 0.** ✅
+
+**Verdict:** MAJOR-2 + ISSUE-2 validated in real SDK under a genuine multi-stream race
+on shared files, with zero spurious human escalations; MAJOR-1/PROBE-1 re-confirmed.
+This retires the run #2 "MAJOR-2 / ISSUE-2 NOT exercised" caveat.
