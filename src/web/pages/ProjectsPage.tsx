@@ -30,9 +30,7 @@ export function ProjectsPage(): React.JSX.Element {
               </span>
               Cohort
             </h1>
-            <p className="mt-1 text-sm text-slate-400">
-              Orchestrate GitHub Copilot agents across your local repositories.
-            </p>
+            <p className="mt-1 text-sm text-slate-400">AI dev team</p>
           </div>
           <div className="flex items-center gap-2">
             <PaletteToggle />
@@ -49,6 +47,7 @@ export function ProjectsPage(): React.JSX.Element {
       </header>
 
       <div className="mx-auto max-w-5xl p-8">
+        <AboutCohort />
         {!state.projectsLoaded ? (
           <Spinner label="Loading projects…" />
         ) : state.projects.length === 0 ? (
@@ -80,6 +79,89 @@ export function ProjectsPage(): React.JSX.Element {
         <CreateProjectModal onClose={() => setShowCreate(false)} onCreate={createProject} />
       )}
     </div>
+  );
+}
+
+function AboutCohort(): React.JSX.Element {
+  const KEY = 'cohort-about-collapsed';
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggle = (): void => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(KEY, next ? '1' : '0');
+      } catch {
+        /* ignore storage failures (private mode) */
+      }
+      return next;
+    });
+  };
+
+  const steps = [
+    {
+      n: 1,
+      title: 'Create a project',
+      body: 'Point Cohort at a locally checked-out git repository. Each project gets its own team of agents that work in that directory.',
+    },
+    {
+      n: 2,
+      title: 'Assemble your team',
+      body: 'Add specialists from the catalog — product, architect, frontend, backend, QA, reviewer and more — or craft your own custom agents.',
+    },
+    {
+      n: 3,
+      title: 'Brief the Team Lead',
+      body: 'Describe your goal in chat. The Lead plans it, delegates to specialists who build on an isolated branch, runs the gates, reviews, and opens a pull request for you to merge.',
+    },
+  ];
+
+  return (
+    <section className="card mb-6 p-5" data-testid="about-cohort">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-100">What is Cohort?</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-400">
+            Cohort is a local orchestrator for a team of specialized GitHub Copilot agents. You talk
+            to a single <strong className="font-semibold text-slate-300">Team Lead</strong>; behind
+            the scenes a full crew plans, builds, tests and reviews changes in your repo — then
+            hands you a pull request to merge.
+          </p>
+        </div>
+        <button className="btn-ghost shrink-0" onClick={toggle} data-testid="about-toggle">
+          {collapsed ? 'How it works' : 'Hide'}
+        </button>
+      </div>
+      {!collapsed && (
+        <>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {steps.map((s) => (
+              <div key={s.n} className="rounded-lg border border-surface-border bg-surface-2 p-4">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-accent-500/15 text-sm font-bold text-accent-400">
+                  {s.n}
+                </span>
+                <h3 className="mt-2 font-semibold text-slate-100">{s.title}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-400">{s.body}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 border-t border-surface-border pt-3 text-xs leading-relaxed text-slate-500">
+            <span className="font-medium text-slate-400">Once you&rsquo;re in:</span> chat your goal
+            to the Team Lead, track work on the{' '}
+            <strong className="font-medium text-slate-400">Board</strong>, watch agents live in{' '}
+            <strong className="font-medium text-slate-400">Activity</strong>, and review &amp; merge
+            in <strong className="font-medium text-slate-400">Pull Requests</strong>. Everything
+            runs locally against your checked-out repo — your main branch stays untouched until you
+            approve the merge.
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
