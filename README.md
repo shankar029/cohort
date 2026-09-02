@@ -25,7 +25,7 @@ living scratchpads, and drive the work through a real **pull-request → review 
   before a real `git merge --no-ff`.
 - **Async, grounded agents** — each specialist is its own SDK session/actor that really talks:
   group **brainstorm threads**, escalation, and multi-author chat.
-- **Agent catalog** — 11 highly-specialized agents ready to add, plus create your own custom agent
+- **Agent catalog** — 12 highly-specialized agents ready to add, plus create your own custom agent
   (name, description, prompt, tools, **skills**, and **per-agent model**).
 - **Kanban board** — create work items (or agents create them), assign to an agent → the agent
   **auto-picks-up** the item, works it, moves it across columns, then **pulls the next** item.
@@ -120,6 +120,16 @@ src/server/   Fastify API, WebSocket, SQLite store, orchestrator, GitService, sc
 src/web/      React app (Projects, Chat, Board, Agents, Activity, Pull Requests, Settings)
 tests/        unit · integration · e2e · live
 ```
+
+## Documentation
+
+Full docs live in [`docs/`](./docs):
+
+- [User Guide](./docs/USER-GUIDE.md) — create a project, build a team, give work, review & merge.
+- [Architecture](./docs/ARCHITECTURE.md) — runtime shape, components, data model, request → merge lifecycle.
+- [Configuration](./docs/CONFIGURATION.md) — every `ATEAM_*` env var and per-project setting.
+- [Agent Catalog](./docs/AGENTS.md) — the Team Lead + 12 specialist templates and custom agents.
+- [Development](./docs/DEVELOPMENT.md) — setup, scripts, testing model, and conventions.
 
 ## Known follow-ups (out of scope for this build)
 
