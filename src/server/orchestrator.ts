@@ -7,6 +7,7 @@ import {
   ensureDependencies,
 } from './qaGate.js';
 import { sanitizeDag } from './dag.js';
+import { planStallRecovery } from './stallRecovery.js';
 import { scopeStreams } from './streamScope.js';
 import {
   detectConstraints,
@@ -294,6 +295,10 @@ class ProjectOrchestrator {
   private lastBoardActivityAt = Date.now();
   private lastStallSig = '';
   private readonly stallMs = Number(process.env.ATEAM_STALL_MS ?? 120000);
+  /** workItemId -> epoch-ms it entered `running`, for the stall watchdog. */
+  private readonly runningSince = new Map<string, number>();
+  /** How long a `running` guard may persist with an idle agent before it's deemed leaked. */
+  private readonly runWatchdogMs = Number(process.env.ATEAM_RUN_WATCHDOG_MS ?? 300000);
   /** reviewerAgentId -> the PR they are actively reviewing (for add_review_comment). */
   private readonly reviewContext = new Map<string, { epicId: string; prId: string }>();
   /** Cached brownfield signal (repo already has substantial source). */
@@ -707,6 +712,7 @@ class ProjectOrchestrator {
     this.discardedEpics.add(epicId);
     for (const c of children) {
       this.running.delete(c.id);
+      this.runningSince.delete(c.id);
       this.awaitingInput.delete(c.id);
       this.armed.delete(c.id);
     }
@@ -1579,6 +1585,48 @@ class ProjectOrchestrator {
     }
     if (Date.now() - this.lastBoardActivityAt < this.stallMs) return;
 
+    // Provably idle-stalled. Before diagnosing, try to SELF-HEAL: a hung or crashed
+    // turn can leave a leaked `running`/`awaitingInput` guard that wedges a task
+    // (and, via the per-epic concurrency cap, its siblings) forever. Clearing those
+    // stale guards + re-driving is what turns "assigned todo task, all agents idle"
+    // from a permanent silent stall into forward progress.
+    const plan = planStallRecovery({
+      items: items.map((i) => ({
+        id: i.id,
+        kind: i.kind,
+        status: i.status,
+        assigneeAgentId: i.assigneeAgentId ?? null,
+      })),
+      agentStatusById: Object.fromEntries(this.specialists().map((a) => [a.id, a.status])),
+      running: [...this.running],
+      awaitingInput: [...this.awaitingInput],
+      runningSince: Object.fromEntries(this.runningSince),
+      now: Date.now(),
+      runWatchdogMs: this.runWatchdogMs,
+    });
+    if (plan.redrive) {
+      for (const id of plan.clearRunning) {
+        this.running.delete(id);
+        this.runningSince.delete(id);
+      }
+      for (const id of plan.clearAwaiting) this.awaitingInput.delete(id);
+      for (const aid of plan.restartAgentIds)
+        void this.restartAgentSession(aid, 'stalled/hung turn').catch(() => undefined);
+      const freed = plan.clearRunning.length + plan.clearAwaiting.length;
+      this.emitEvent(
+        this.lead().id,
+        'system',
+        `Auto-recovered ${freed} stuck task guard(s) after a stall — re-driving work.`,
+        { clearRunning: plan.clearRunning, clearAwaiting: plan.clearAwaiting },
+        null,
+      );
+      this.assignUnassignedWork();
+      this.driveAssignedWork();
+      this.lastBoardActivityAt = Date.now();
+      this.lastStallSig = '';
+      return;
+    }
+
     // Stalled. Diagnose so the user isn't left guessing whether the team is alive.
     const specs = this.assignableSpecialists();
     const leadId = this.lead().id;
@@ -2272,12 +2320,14 @@ class ProjectOrchestrator {
     // Deferred here; the manager loop re-drives once a slot frees.
     if (item.parentId && this.epicRunning(item.parentId) >= this.epicConcurrency) return;
     this.running.add(workItemId);
+    this.runningSince.set(workItemId, Date.now());
     this.lastBoardActivityAt = Date.now();
     if (item.parentId) this.recordEpicConcurrency(item.parentId);
     try {
       await this.runWorkItemInner(item.id, agent);
     } finally {
       this.running.delete(workItemId);
+      this.runningSince.delete(workItemId);
       // The epic slot is now free — re-drive so the next serialized sibling (or a
       // task deferred while this one ran) starts promptly instead of waiting for
       // the periodic manager tick.
