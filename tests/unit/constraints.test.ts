@@ -51,6 +51,31 @@ describe('deterministic delivery constraints', () => {
       expect(v[0]!.files).toContain(path.join('src', 'app.js'));
     });
 
+    it('does NOT flag internal workspace packages (@repo/*) as external deps', () => {
+      // Monorepo root + two workspace packages; a consumer imports one of them.
+      write('package.json', JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+      write('packages/core/package.json', JSON.stringify({ name: '@repo/core' }));
+      write('packages/dataio/package.json', JSON.stringify({ name: '@repo/dataio' }));
+      write(
+        'packages/dataio/src/importer.js',
+        "import { pure } from '@repo/core';\nimport http from 'node:http';\nexport const x = pure(http);\n",
+      );
+      expect(checkClone(dir, detectConstraints(['no external dependencies']))).toEqual([]);
+    });
+
+    it('still flags a real external dep alongside internal workspace imports', () => {
+      write('package.json', JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+      write('packages/dataio/package.json', JSON.stringify({ name: '@repo/dataio' }));
+      write(
+        'packages/dataio/src/x.js',
+        "import { a } from '@repo/dataio';\nimport express from 'express';\nexport const y = a(express);\n",
+      );
+      const v = checkClone(dir, detectConstraints(['no external dependencies']));
+      expect(v.map((x) => x.kind)).toContain('no-external-deps');
+      expect(v[0]!.detail).toMatch(/express/);
+      expect(v[0]!.detail).not.toMatch(/@repo/);
+    });
+
     it('flags a bare import even when it is not in the manifest', () => {
       write('src/server.js', "import fastify from 'fastify';\nexport const app = fastify();\n");
       const v = checkClone(dir, detectConstraints(['no external dependencies']));

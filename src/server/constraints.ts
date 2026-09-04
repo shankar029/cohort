@@ -139,6 +139,44 @@ function runtimeDeps(dir: string): string[] {
 }
 
 /**
+ * Collect the `name` of every workspace package in the repo (root + nested
+ * `package.json`s). These are INTERNAL monorepo packages (e.g. `@repo/dataio`,
+ * `@repo/core`) — importing them is not an external dependency, so the
+ * no-external-deps guard must never flag them. Without this, a legitimately
+ * dependency-free monorepo task trips a phantom violation and spirals into endless
+ * rework (observed live: t3's data task imports `@repo/dataio`).
+ */
+function workspacePackageNames(dir: string): Set<string> {
+  const names = new Set<string>();
+  const walk = (d: string, depth: number): void => {
+    if (depth > 6) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue;
+        walk(path.join(d, e.name), depth + 1);
+      } else if (e.name === 'package.json') {
+        try {
+          const pkg = JSON.parse(fs.readFileSync(path.join(d, e.name), 'utf8')) as {
+            name?: string;
+          };
+          if (typeof pkg.name === 'string' && pkg.name) names.add(pkg.name);
+        } catch {
+          /* ignore unparseable package.json */
+        }
+      }
+    }
+  };
+  walk(dir, 0);
+  return names;
+}
+
+/**
  * Verify a working clone against the detected constraints. Pure filesystem scan;
  * returns one violation per breached constraint with the offending files.
  */
@@ -150,7 +188,9 @@ export function checkClone(dir: string, constraints: Constraint[]): ConstraintVi
   const shipped = sources.filter((f) => !TEST_RE.test(path.relative(dir, f)));
 
   if (kinds.has('no-external-deps')) {
-    const deps = runtimeDeps(dir);
+    // Internal workspace packages (@repo/*) are NOT external dependencies.
+    const internal = workspacePackageNames(dir);
+    const deps = runtimeDeps(dir).filter((d) => !internal.has(d));
     const badImports = new Map<string, Set<string>>(); // module -> files
     for (const f of shipped) {
       let src: string;
@@ -168,6 +208,7 @@ export function checkClone(dir: string, constraints: Constraint[]): ConstraintVi
             const pkg = spec.startsWith('@')
               ? spec.split('/').slice(0, 2).join('/')
               : spec.split('/')[0]!;
+            if (internal.has(pkg)) continue; // internal workspace package
             if (!badImports.has(pkg)) badImports.set(pkg, new Set());
             badImports.get(pkg)!.add(path.relative(dir, f));
           }
