@@ -92,6 +92,38 @@ ETL, not the API or the SQL query.
   values, docs sections present, rename completeness (no stale `dau`).
 - Nested-rule probe: was `packages/core/AGENTS.md` rule honored? (expected: no.)
 
+## Interlude — Full-stack CROSS-LAYER debugging + collaboration test (real copilot-sdk)
+Project `prj_r4PhmYjBz4dz` on fixture tag `baseline-fs` (adds a browser dashboard `packages/web` +
+`/metrics/range`). Seeded a bug whose SYMPTOM is in the UI but whose root causes span two layers,
+with the backend as an honest pass-through to be ruled out:
+- **Data** (`dataio/src/queries.ts`): `activeInRange` used `day < to` (exclusive) → dropped the last day.
+- **Frontend** (`web/public/format.js`): `computeTotal` seeded `reduce(…, '')` → string-concat total ("232").
+
+**Outcome:** epic merged (1 PR, 11 commits, 8 files). Scorecard: **Gates 3/3**, **Cross-layer fixes 3/3** —
+data now `day <= to` (range=3 days, total **7**), frontend `reduce(…, 0)` (numeric **7**). Layers touched:
+web+api+dataio. Added `web/tests/dashboard.e2e.test.ts` + extended tests + CHANGELOG/docs.
+
+### How the agents collaborated (observed via /threads, /messages, board, /pr-comments)
+- **3 threads** used: `main` (user↔team; status updates + the architect's design post), a primary
+  **`group:Team discussion`** (21 msgs — the coordination backbone), and a topic-scoped
+  **`group:Daily Active Users full-stack`** (localization discussion that concluded with an explicit **Decision**).
+- **Lead** (agt_GTXG, 11 msgs) orchestrated: plan → status updates → moderated decision. Message counts:
+  qa 6, backend 5, architect 5, frontend 4, reviewer 3, user 1.
+- **Cross-layer localization worked**: the architect posted “two independent root causes, two different
+  layers — the backend is innocent,” correctly naming RC-1 (data `day < to`) and RC-2 (frontend concat)
+  BEFORE coding. The Lead’s Decision: “fix both together.”
+- **Decomposition pattern**: Cohort assigned the *implementation* to ONE owner (backend) rather than
+  splitting per-layer; collaboration happened in the group thread + review, not via parallel per-layer tasks.
+- **Quality gate caught shallow work** — the review pass raised **2 BLOCKING** findings that spawned two
+  corrective tasks, both merged: (1) QA: “the frontend regression test does not actually verify the fix”;
+  (2) reviewer: “the CHANGELOG documents only the range fix” (missing the frontend fix). Board grew
+  3 → 5 tasks, all `done`; **2 PR comments** filed.
+
+**Takeaways:** (a) role agents genuinely collaborate through Lead-moderated group threads + a shared board,
+and the review loop meaningfully hardens output (rejected an inadequate test + incomplete changelog).
+(b) For a cross-layer bug, Cohort localizes collaboratively but tends to hand the fix to a single engineer.
+Artifacts: `ateam-live/bf-fs-collab.log` (transcript), `bf-fs-check.mjs` (scorecard), `bf-fs-run.mjs` (observer).
+
 ## Phasing (cost control)
 - [x] Phase 0 — build fixture + prove the seeded bug reproduces (free). **DONE.**
       Fixture at `C:\Code\Projects\ateam-bf` (git `baseline` tag). Baseline verified:
