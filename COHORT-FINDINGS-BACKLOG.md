@@ -50,25 +50,29 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
   scratch files, disabled `ban-ts-comment` for plain-JS scripts, removed one dead import.
 
 ## Group F — Epic convergence / orchestration robustness (`orchestrator.ts` manager loop + review)
-- [ ] **F1. Epics can stall without converging to merge.** In Phase 2 t3 (test-data feeds), a
-  heavily-specified brief led the reviewer to file 5+ BLOCKER subtasks; the epic spiraled into
-  ever-more tasks, a `todo` fix-task was left **unstarted**, and ALL agents (including the Team
-  Lead) went **idle** with the PR stuck in `changes_requested` — no merge, no failure, just a
-  stall. A user chat nudge triggered MORE planning (spiral), not convergence. **Sev: Med–High.**
-  *Evidence:* project `prj_BHp-G89Lj3wL`. *Fix ideas:* (a) manager loop must detect
-  "assigned task in todo + all idle" and start/escalate it; (b) bound review re-decomposition and
-  force a final converge-or-fail decision; (c) surface a terminal `stalled`/`failed` epic status
-  instead of silent idle; (d) make nudges resume the existing plan rather than re-plan.
+- [x] **F1a. Idle-wedge stall — leaked run/park guards.** ✅ FIXED — `stallRecovery.ts`
+  `planStallRecovery()` (pure, 8 unit tests incl. the exact t3 repro) + `watchForStall` now
+  clears stale TASK `running`/`awaitingInput` guards when provably idle-stalled (agent idle past a
+  5-min watchdog => hung/crashed turn), restarts the hung agent session, and re-drives — instead of
+  only posting a diagnosis. **Live-verified negative:** during a 1h25m real-SDK t3 run with the
+  agent legitimately `working`, recovery correctly did NOT false-fire (0 spurious events). On
+  server restart the *originally-stalled* t3 project resumed to done/merged.
+- [ ] **F1b. Live-grind non-convergence (NEW, from the F1 re-run).** A DIFFERENT mode than F1a:
+  a single owner stays `working` indefinitely on an unbounded review loop — the reviewer keeps
+  filing BLOCKERs, the board freezes (e.g. `review:4,in_progress:3,todo:2`, PR `changes_requested`)
+  and the epic never merges. F1a deliberately doesn't touch this (agent is genuinely working).
+  **Sev: Med–High.** *Fix (folded into Group C):* bound review re-decomposition — cap rework rounds
+  per PR/epic, then force a converge-or-escalate decision; split genuinely large work across owners;
+  make a user nudge RESUME the plan rather than spawn more tasks.
 
 ---
 
 ## Fix plan (after Phase 2)
-1. **Group A together** (A1 nested discovery + A2 truncation) — one focused change to
-   `context.ts` + a unit test with a nested fixture.
-2. **B1** — small, self-contained; add a commit-message policy + config.
-3. **F1** — orchestration robustness (convergence/stall). Medium; pairs with C1/C2 since both
-   touch the manager loop + review decomposition. Re-run t3 to verify.
-4. **C1/C2** — decomposition heuristics + role-permission prompts. Re-run the cross-layer scenario.
-5. **D1, E1** — low-effort cleanups, batch with (1)/(2).
+1. **Group A together** (A1 nested discovery + A2 truncation) ✅ DONE.
+2. **B1** ✅ DONE.  **D1, E1** ✅ DONE.  **F1a** (idle-wedge stall) ✅ DONE.
+3. **F1b + C1/C2 together** — the remaining structural work, all in the manager loop + review
+   decomposition + role prompts: cap review re-decomposition (converge-or-escalate), split
+   multi-layer work across owners, tighten verify/review role permissions, and make nudges resume
+   the plan. Re-run t3 AND the cross-layer scenario to verify.
 
-Phase 2 added **F1** (convergence/stall). Groups A–F are the fix set.
+Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
