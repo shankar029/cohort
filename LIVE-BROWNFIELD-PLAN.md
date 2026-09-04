@@ -4,7 +4,31 @@
 multi-package** repo with **custom rules** (AGENTS.md/README/etc.) — across deep
 root-cause debugging, SQL/data work, test-data feeds, build/release pipeline,
 documentation, unit/integration tests, and ad-hoc chores. Not greenfield.
-**Status:** Phase 0 DONE ✅ — fixture built + verified, seeded bug reproduces. Awaiting GO for Phase 1 live run.
+**Status:** Phase 1 DONE ✅ — both epics merged, scorecard captured. Awaiting GO for Phase 2.
+
+## Phase 1 RESULTS (real copilot-sdk, project `prj_-h_RZvZe_LTf`, 2 concurrent epics)
+Both epics merged (peak 2 concurrent epics). Scorecard vs `baseline` on the merged repo:
+- **Gates 4/4**: npm install, typecheck, `npm test` **24 pass** (was 5 — agents added ~19 tests), C# `--selftest` OK.
+- **Tasks 3/3**: deep bug FIXED — API dau(2026-03-02) now **3** (matches C# reporter); root cause correctly
+  identified as the over-strict `VALID_TS` regex in `packages/dataio/src/importer.ts` (fixed to accept
+  optional seconds/fractional + `Z`|`+00:00`) — **not** a date-specific hack. Core tests cover all 6 exports.
+- **Rules 8/9 honored** (root AGENTS.md injected): R1 no-throw ✓, R2 entrypoints ✓, R3 node --test/BCL ✓,
+  R4 named exports ✓, R5 generated untouched ✓, R7 CHANGELOG+docs updated ✓, R8 migrations append-only ✓,
+  R9(core pure) ✓.
+
+### Findings
+1. **Brownfield parallelism re-confirmed** — 2 epics concurrent in one project, both merged clean.
+2. **Deep root-cause debugging works** — agent used the cross-language API-vs-reporter clue, traced 3 hops to
+   the ETL, fixed the real cause, added a regression test. Gate stayed green.
+3. **R6 (Conventional Commits) “fails” — but it's the HARNESS, not the agents.** All non-conforming commits are
+   Cohort-generated (`ateam: merge`, `ateam: integrate`, `task(role): …`). ⇒ a repo mandating Conventional
+   Commits is violated by Cohort's own commit style regardless of agents. **Actionable:** make commit messages
+   configurable / CC-compliant.
+4. **Nested per-package instruction files are NOT ingested (confirmed in `context.ts`).** Discovery = fixed root
+   `INSTRUCTION_FILES` + dirs `.cursor/rules`, `.github/instructions`, no recursion. `packages/core/AGENTS.md`
+   (R9) was never injected; compliance was coincidental. 16 KB total / 6 KB per-file cap confirmed.
+5. **Recordings not written under the real adapter (`bf-rec` empty)** — enable for Phase 2 to prove which rules
+   were injected vs dropped by the 16 KB cap.
 
 ## Verified toolchain (this machine, offline / no network installs)
 - Node **v24** (built-in `node:sqlite` works ✅) + npm.
@@ -74,7 +98,7 @@ ETL, not the API or the SQL query.
       `npm run typecheck` green, `npm test` 5/5 pass, `dotnet ... --selftest` OK,
       full pwsh build pipeline `BUILD OK`. Bug reproduces: `feed:import` drops 2 rows;
       API dau(2026-03-02)=**1** vs C# reporter(raw feed)=**3**.
-- [ ] Phase 1 — live run tasks **1 (deep bug) + 4 (unit tests)** to validate the rig cheaply.
+- [x] Phase 1 — live run tasks **1 (deep bug) + 4 (unit tests)**. **DONE** — both merged, 3/3 tasks, 8/9 rules.
 - [ ] Phase 2 — live run tasks 2,3,5,6,7 (some in parallel; also re-tests brownfield parallelism).
 - [ ] Phase 3 — scorecard (`checker.mjs`, written at start of Phase 1) + findings ledger.
 
