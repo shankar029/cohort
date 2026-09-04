@@ -115,8 +115,13 @@ function isExternalSpecifier(spec: string): boolean {
   return !BUILTINS.has(pkg);
 }
 
-const IMPORT_RE = /\b(?:import\b[^'"]*?from\s*|import\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
-const DYN_IMPORT_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+// Import/require specifiers. The leading negative lookbehind stops a quoted STRING
+// LITERAL that merely contains the word `import` (e.g. a discriminant `kind: 'import'`)
+// from being read as a side-effect import - that mis-parse flagged phantom external
+// deps and blocked review. The specifier itself may not span a newline.
+const IMPORT_RE =
+  /(?<!['"\w.])(?:import\b[^'"]*?from\s*|import\s+|require\s*\(\s*)['"]([^'"\n]+)['"]/g;
+const DYN_IMPORT_RE = /(?<!['"\w.])import\s*\(\s*['"]([^'"\n]+)['"]\s*\)/g;
 const DISK_WRITE_RE =
   /\b(writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|promises\.writeFile|promises\.appendFile)\b/;
 const DB_LIB_RE =

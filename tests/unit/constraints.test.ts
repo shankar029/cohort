@@ -63,6 +63,27 @@ describe('deterministic delivery constraints', () => {
       expect(checkClone(dir, detectConstraints(['no external dependencies']))).toEqual([]);
     });
 
+    it('does NOT mis-read a quoted string literal containing the word import', () => {
+      // A discriminant `kind: 'import'` must not be parsed as a side-effect import.
+      write('package.json', JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
+      write('packages/core/package.json', JSON.stringify({ name: '@repo/core' }));
+      write('packages/dataio/package.json', JSON.stringify({ name: '@repo/dataio' }));
+      write(
+        'packages/dataio/src/importer.ts',
+        "import { ok } from '@repo/core';\n" +
+          'export type ImportError = { kind: \'import\'; message: string };\n' +
+          'export const e: ImportError = { kind: \'import\', message: \'x\' };\n',
+      );
+      expect(checkClone(dir, detectConstraints(['no external dependencies']))).toEqual([]);
+    });
+
+    it('still flags a real side-effect import of an external module', () => {
+      write('src/app.ts', "import 'leftpad';\nexport const x = 1;\n");
+      const v = checkClone(dir, detectConstraints(['no external dependencies']));
+      expect(v.map((x) => x.kind)).toContain('no-external-deps');
+      expect(v[0]!.detail).toMatch(/leftpad/);
+    });
+
     it('still flags a real external dep alongside internal workspace imports', () => {
       write('package.json', JSON.stringify({ name: 'root', workspaces: ['packages/*'] }));
       write('packages/dataio/package.json', JSON.stringify({ name: '@repo/dataio' }));
