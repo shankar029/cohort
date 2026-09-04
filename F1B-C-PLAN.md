@@ -2,7 +2,38 @@
 
 **Goal:** Make epics converge (bound the review grind) and cover cross-layer work
 correctly (fan out per layer; keep verify roles from silently editing prod code).
-**Status:** in progress
+**Status:** done (unit-proven; t3 live-converged). Cross-layer C1 live run: optional/pending.
+
+## RESULTS (2026-09-02)
+**t3 live re-verify: PASS — converged & merged.** The task that STALLED then GROUND for
+80+ min last session now merges cleanly: epic done, 12 tasks done, PR merged into master,
+acceptance met (`gen-feed --users 5 --from 2026-05-01 --days 3` → exactly 15 rows), and
+`npm test` green (8/8, deps installed). Getting there required fixing three real blockers
+that were the ACTUAL cause of t3's non-convergence (not F1b itself):
+- **Constraint checker false positives (2 bugs, fixed + unit-tested + live-validated):**
+  (a) `no-external-deps` flagged internal `@repo/*` workspace packages as external deps;
+  (b) `IMPORT_RE` mis-read a quoted string literal `kind: 'import'` as a side-effect import,
+  capturing garbage as a module specifier. Both produced phantom violations → endless
+  rework. Live confirmation after the fix: `Constraint gate: honored no-external-deps`.
+- **Stall mask (fixed + unit-tested):** `watchForStall` reset the stall clock whenever
+  `running.size>0`, so ONE leaked run guard made the manager think work was progressing
+  forever and recovery never fired (observed live: t3 wedged 7+ min, an assigned todo task,
+  all agents idle, zero stall events). New pure `boardHasLiveWork()` ignores runs past the
+  watchdog. This is the F1a blind spot.
+- **F1b (review budget):** implemented + unit-proven, but NOT triggered live — once the real
+  blockers above were fixed, review converged via normal APPROVAL before hitting the budget.
+  F1b remains the correct safety net for genuinely non-convergent review; it just wasn't
+  needed here. Honest: unit-proven, not live-exercised.
+- **C1 (fan-out):** unit-proven. t3 is single-layer (data) so fan-out correctly did NOT
+  apply. Live cross-layer exercise still pending (optional given cost).
+- **C2 (verify boundary):** live-observed QA review-fixes targeting TEST files (consistent).
+
+**New findings surfaced (backlog Group G):**
+- QA "fix" task sign-off loop: a review-fix routed to QA is treated with verify/sign-off
+  semantics ("QA cannot sign off"), looping on Retry and never reaching `review` — blocks the
+  epic from re-reviewing. Worked around live via "Skip". Role-confusion, related to C2.
+- An agent dropped `packages/web` from root `workspaces` (out-of-scope config edit) and it
+  merged (gates didn't catch it — web has no failing tests).
 
 ## Root-cause recap (empirical)
 - **F1a (shipped):** idle-wedge stall from leaked run/park guards → `stallRecovery.ts`.
@@ -37,15 +68,18 @@ correctly (fan out per layer; keep verify roles from silently editing prod code)
    Safe now that C1 assigns each code layer to a builder.
 
 ## Steps
-- [ ] `reviewBudget.ts` + unit tests
-- [ ] `pickBrownfieldBuilders` in `streamScope.ts` + unit tests
-- [ ] Wire C1 into `decomposeEpic` (brownfield branch)
-- [ ] Wire C2 verify-description constraint
-- [ ] Wire F1b into `runEpicReview` + cumulative counter in `assignReviewFixes`
-- [ ] `.env.example` (`ATEAM_MAX_REVIEW_FIXES`)
-- [ ] Full suite + tsc + lint green
-- [ ] One combined live re-verify: t3 (convergence) + cross-layer scenario
-- [ ] Update backlog + this plan
+- [x] `reviewBudget.ts` + unit tests (6)
+- [x] `pickBrownfieldBuilders` in `streamScope.ts` + unit tests (5)
+- [x] Wire C1 into `decomposeEpic` (brownfield branch)
+- [x] Wire C2 verify-description constraint
+- [x] Wire F1b into `runEpicReview` + cumulative counter in `assignReviewFixes`
+- [x] `.env.example` (`ATEAM_MAX_REVIEW_FIXES`, `ATEAM_STALL_MS`, `ATEAM_RUN_WATCHDOG_MS`)
+- [x] BONUS constraint fixes (workspace pkgs + IMPORT_RE) + tests (4)
+- [x] BONUS stall-mask fix (`boardHasLiveWork`) + tests (4)
+- [x] Full suite + tsc + lint green (236 pass / 1 skip)
+- [x] Live re-verify: t3 → converged & merged, acceptance met
+- [ ] Live re-verify: cross-layer C1 fan-out (optional; unit-proven)
+- [x] Update backlog + this plan
 
 ## Risks & rollback
 - C1 fan-out could regress single-layer brownfield convergence → mitigated by a

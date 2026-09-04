@@ -26,16 +26,17 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
   Tests in `tests/unit/commitStyle.test.ts`.
 
 ## Group C — Decomposition & role boundaries (`orchestrator.ts` decomposeEpic + prompts)
-- [ ] **C1. Cross-layer bugs get a single-owner task that under-covers.** For an existing
-  codebase, decomposition converges on ONE owner (`:1003`). In the cross-layer run the
-  backend engineer's task fixed only the data layer; the frontend fix was made by QA
-  during "verify", and full coverage only emerged because review caught the gap.
-  **Sev: Med.** *Fix idea:* detect multi-package/multi-layer scope and fan out per-layer
-  subtasks (or require the owner to enumerate all affected layers).
-- [ ] **C2. Fuzzy role boundaries.** The QA agent edited production frontend code
-  (`packages/web/public/format.js`) during a verify task instead of routing back to an
-  engineer. Right outcome, unclear ownership. **Sev: Low–Med.** *Fix idea:* constrain
-  verify/review roles to tests+comments, or make cross-role edits explicit hand-offs.
+- [x] **C1. Cross-layer bugs get a single-owner task that under-covers.** ✅ FIXED — new pure
+  `pickBrownfieldBuilders()` in `streamScope.ts`: single-owner for single-layer work
+  (unchanged), but fans out per code layer when a request clearly spans ≥2 of
+  {backend,frontend,ux,data}, each getting a `concrete: true` real-change task. Wired into
+  the brownfield branch of `decomposeEpic` (emits a `Cross-layer scope — fanned out` event).
+  +5 unit tests. Unit-proven; t3 was single-layer so it correctly did NOT fan out. Live
+  cross-layer exercise still optional/pending.
+- [x] **C2. Fuzzy role boundaries.** ✅ MITIGATED — verify task description now forbids editing
+  production source (verify & report; tests/docs only; hand defects back). Safe now that C1
+  assigns each code layer to a real owner. Live-observed QA review-fixes targeting TEST files
+  (consistent). Residual: see Group G (QA "fix" task sign-off loop).
 
 ## Group D — Observability / auditability
 - [x] **D1. Recordings not written under the real adapter.** ✅ RESOLVED — root cause was a
@@ -57,13 +58,17 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
   only posting a diagnosis. **Live-verified negative:** during a 1h25m real-SDK t3 run with the
   agent legitimately `working`, recovery correctly did NOT false-fire (0 spurious events). On
   server restart the *originally-stalled* t3 project resumed to done/merged.
-- [ ] **F1b. Live-grind non-convergence (NEW, from the F1 re-run).** A DIFFERENT mode than F1a:
-  a single owner stays `working` indefinitely on an unbounded review loop — the reviewer keeps
-  filing BLOCKERs, the board freezes (e.g. `review:4,in_progress:3,todo:2`, PR `changes_requested`)
-  and the epic never merges. F1a deliberately doesn't touch this (agent is genuinely working).
-  **Sev: Med–High.** *Fix (folded into Group C):* bound review re-decomposition — cap rework rounds
-  per PR/epic, then force a converge-or-escalate decision; split genuinely large work across owners;
-  make a user nudge RESUME the plan rather than spawn more tasks.
+- [x] **F1b. Live-grind / non-convergence.** ✅ ADDRESSED. Two-part outcome:
+  (1) **Review budget (converge-or-escalate)** — new pure `reviewBudgetDecision()`
+  (`reviewBudget.ts`) bounds BOTH review rounds and cumulative fix volume; `runEpicReview`
+  parks+asks the user when either is exceeded. `ATEAM_MAX_REVIEW_FIXES` (default 12).
+  Unit-proven (6 tests); NOT triggered live because — see (2) — review converged via normal
+  approval once the real blockers were fixed. It remains the safety net for genuinely
+  non-convergent review.
+  (2) **The ACTUAL cause of t3's non-convergence** was three separate bugs, now fixed (see
+  Group G): two constraint-checker false positives that manufactured endless phantom rework,
+  and a stall-mask that let one leaked run guard hide a permanent wedge. **t3 live re-verify
+  now PASSES: converged, merged, acceptance met (15 rows), tests green.**
 
 ---
 
@@ -76,3 +81,30 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
    the plan. Re-run t3 AND the cross-layer scenario to verify.
 
 Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
+
+---
+
+## Group G — Surfaced during the F1b/C live re-verify (2026-09-02)
+- [x] **G1. `no-external-deps` flags internal workspace packages.** ✅ FIXED. The constraint
+  checker treated `@repo/*` monorepo imports as external deps → phantom violation → endless
+  rework (blocked t3 live). Now collects every workspace package `name` (root + nested
+  `package.json`) and excludes them from both manifest-deps and bare-import checks.
+  `constraints.ts` + 2 unit tests. Live-validated (`honored no-external-deps`).
+- [x] **G2. `IMPORT_RE` mis-reads quoted `import` string literals.** ✅ FIXED. A discriminant
+  like `kind: 'import'` was parsed as a side-effect import, capturing following type text as a
+  bogus specifier → phantom `no-external-deps` violation. Added a negative lookbehind, required
+  whitespace for the side-effect form, and forbade newlines in a specifier. +2 unit tests.
+- [x] **G3. Leaked run guard masks a stall (F1a blind spot).** ✅ FIXED. `watchForStall` reset
+  the stall clock whenever `running.size>0`, so one hung/leaked guard made the manager believe
+  work was progressing forever and recovery never fired (t3 wedged 7+ min, all agents idle,
+  zero stall events). New pure `boardHasLiveWork()`: a run counts as progress only within its
+  watchdog window. `stallRecovery.ts` + 4 unit tests.
+- [ ] **G4. QA "fix" task sign-off loop (role confusion).** A review-fix task routed to QA is
+  handled with verify/sign-off semantics ("QA cannot sign off") and loops on Retry, never
+  reaching `review` — which blocks the epic from re-reviewing. Worked around live via "Skip".
+  **Sev: Med.** *Fix idea:* frame review-fix tasks as "fix", not "verify", regardless of the
+  target stream; or bound per-task sign-off retries and route to the owning builder.
+- [ ] **G5. Agent made an out-of-scope destructive config edit that merged.** An agent dropped
+  `packages/web` from the root `workspaces` array; it passed gates (web has no failing tests)
+  and merged. **Sev: Low.** *Fix idea:* flag/deny edits to shared root config (`package.json`
+  workspaces, tsconfig) outside a task's declared scope, or gate on a broader build.
