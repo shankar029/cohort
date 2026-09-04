@@ -8,7 +8,8 @@ import {
 } from './qaGate.js';
 import { sanitizeDag } from './dag.js';
 import { planStallRecovery } from './stallRecovery.js';
-import { scopeStreams } from './streamScope.js';
+import { reviewBudgetDecision } from './reviewBudget.js';
+import { scopeStreams, pickBrownfieldBuilders } from './streamScope.js';
 import {
   detectConstraints,
   checkClone,
@@ -235,6 +236,8 @@ class ProjectOrchestrator {
   /** PR/review state per epic for the iterate-to-quality loop. */
   private readonly epicPr = new Map<string, string>();
   private readonly epicReviewIter = new Map<string, number>();
+  /** Per-epic cumulative review-fix tasks created across all rounds (F1b budget). */
+  private readonly epicReviewFixTotal = new Map<string, number>();
   /**
    * Per-epic remediation-round budget SHARED across the integrated-build and
    * acceptance gates. One counter (not two) so a churning epic can't burn
@@ -253,6 +256,12 @@ class ProjectOrchestrator {
   private get maxReviewIter(): number {
     const v = Number(process.env.ATEAM_MAX_REVIEW_ITER);
     return Number.isFinite(v) && v > 0 ? v : ProjectOrchestrator.MAX_REVIEW_ITER;
+  }
+  /** Cumulative review-fix budget per epic before forcing a converge-or-escalate (F1b). */
+  private static readonly MAX_REVIEW_FIXES = 12;
+  private get maxReviewFixes(): number {
+    const v = Number(process.env.ATEAM_MAX_REVIEW_FIXES);
+    return Number.isFinite(v) && v > 0 ? v : ProjectOrchestrator.MAX_REVIEW_FIXES;
   }
 
   /** Work items with an in-flight runWorkItem, so the manager never double-starts one. */
@@ -782,6 +791,7 @@ class ProjectOrchestrator {
     this.epicWorktrees.delete(epicId);
     this.epicPr.delete(epicId);
     this.epicReviewIter.delete(epicId);
+    this.epicReviewFixTotal.delete(epicId);
     this.epicRemediationIter.delete(epicId);
     this.epicMetrics.delete(epicId);
     this.epicIntegrateChain.delete(epicId);
@@ -969,7 +979,11 @@ class ProjectOrchestrator {
         title: opts.verify ? `[${s.name}] verify ${goal}` : `[${s.name}] ${goal}`,
         description: opts.verify
           ? `Part of epic "${epic.title}".\n\nAcceptance criteria: ${s.displayName} sign-off - ` +
-            `verify the build tasks meet the quality bar before the epic is done.`
+            `verify the build tasks meet the quality bar before the epic is done.\n\n` +
+            `ROLE BOUNDARY: you VERIFY and REPORT. Do NOT modify production source files. ` +
+            `You may add/adjust ONLY test or documentation files. If you find a defect, hand it ` +
+            `back as a specific finding (what's wrong, where, and the fix) for the responsible ` +
+            `builder to correct - do not silently fix production code yourself.`
           : opts.concrete
             ? `Part of epic "${epic.title}".\n\nThis is an EXISTING codebase. First STUDY the ` +
               `relevant code, structure, and conventions. Then make ONE small, well-scoped, ` +
@@ -1014,12 +1028,23 @@ class ProjectOrchestrator {
     let builderTaskIds: string[];
     let builders: Agent[];
     if (brownfield && coreBuilders.length) {
-      const order = ['backend', 'frontend', 'ux', 'data', 'devops', 'docs'];
-      const primary =
-        order.map((n) => coreBuilders.find((s) => s.name === n)).find((s): s is Agent => !!s) ??
-        coreBuilders[0]!;
-      builderTaskIds = [makeTask(primary, { concrete: true })];
-      builders = [primary];
+      // C1: single owner for single-layer work (preserves brownfield convergence),
+      // but fan out per code layer when the request clearly spans multiple layers so
+      // cross-layer bugs each get a real owner (not silently fixed during "verify").
+      const pick = pickBrownfieldBuilders(content, coreBuilders.map((s) => s.name));
+      const chosen = pick.primaries
+        .map((n) => coreBuilders.find((s) => s.name === n))
+        .filter((s): s is Agent => !!s);
+      builders = chosen.length ? chosen : [coreBuilders[0]!];
+      builderTaskIds = builders.map((s) => makeTask(s, { concrete: true }));
+      if (pick.multiLayer)
+        this.emitEvent(
+          lead.id,
+          'system',
+          `Cross-layer scope — fanned out to ${builders.map((b) => b.name).join(', ')}`,
+          null,
+          epic.id,
+        );
     } else {
       const coreTaskIds = coreBuilders.map((s) => makeTask(s, {}));
       const postTaskIds = postBuilders.map((s) => makeTask(s, { dependsOn: coreTaskIds }));
@@ -3438,10 +3463,17 @@ class ProjectOrchestrator {
       reviewer.id,
     );
 
-    // I8: after the review-round cap, do NOT silently resolve open comments and
-    // merge - that is exactly the "ship the wrong thing" compromise we set out to
-    // stop. Park the epic and ask the USER to decide (merge anyway / keep working).
-    if (iter >= this.maxReviewIter) {
+    // F1b: converge-or-escalate. Park + ask the user when the round cap is hit OR
+    // the cumulative review-fix budget would be exceeded - so a heavily-reviewed
+    // epic can't grind forever (rounds rarely complete under a single serial owner).
+    const budget = reviewBudgetDecision({
+      iter,
+      maxIter: this.maxReviewIter,
+      cumulativeFixes: this.epicReviewFixTotal.get(epic.id) ?? 0,
+      maxFixes: this.maxReviewFixes,
+      openCount: open.length,
+    });
+    if (budget.action === 'escalate') {
       const list = open.map((c) => `- ${c.body.slice(0, 140)}`).join('\n');
       this.awaitingInput.add(epic.id);
       this.notify(
@@ -3455,7 +3487,7 @@ class ProjectOrchestrator {
       void this.raiseQuestion(
         lead.id,
         `Epic "${epic.title}" still has ${open.length} open review comment(s) after ${iter} ` +
-          `rounds:\n${list}\n\nMerge anyway, or keep working on them? (Merging waives these ` +
+          `round(s) [${budget.reason}]:\n${list}\n\nMerge anyway, or keep working on them? (Merging waives these ` +
           `review comments, but the deterministic build / constraint / contract-probe gates ` +
           `still run before the merge.)`,
         ['Keep working', 'Merge anyway'],
@@ -3471,6 +3503,7 @@ class ProjectOrchestrator {
           // escalation asks the user again, specifically about that gate.
           for (const c of open) this.resolveComment(c.id);
           this.epicReviewIter.delete(epic.id);
+          this.epicReviewFixTotal.delete(epic.id);
           this.recordOverride(
             epic,
             lead,
@@ -3489,6 +3522,7 @@ class ProjectOrchestrator {
         } else {
           // Give the team another budget of rounds to actually address the comments.
           this.epicReviewIter.set(epic.id, 0);
+          this.epicReviewFixTotal.set(epic.id, 0);
           this.assignReviewFixes(epic, open, lead);
           this.pokeLead();
         }
@@ -3508,6 +3542,7 @@ class ProjectOrchestrator {
    * re-runs automatically.
    */
   private assignReviewFixes(epic: WorkItem, open: PrComment[], lead: Agent): void {
+    let created = 0;
     for (const c of open) {
       if (c.workItemId) continue;
       const target =
@@ -3544,7 +3579,13 @@ class ProjectOrchestrator {
       );
       if (target) void this.onItemAssigned(fix.id).catch(() => undefined);
       else this.pokeLead();
+      created += 1;
     }
+    if (created > 0)
+      this.epicReviewFixTotal.set(
+        epic.id,
+        (this.epicReviewFixTotal.get(epic.id) ?? 0) + created,
+      );
   }
 
   /** Mark a review comment resolved and broadcast it. */

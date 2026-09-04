@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scopeStreams } from '../../src/server/streamScope.js';
+import { scopeStreams, pickBrownfieldBuilders } from '../../src/server/streamScope.js';
 
 const BUILDERS = ['backend', 'frontend', 'ux', 'researcher', 'data', 'docs', 'devops'];
 
@@ -62,5 +62,47 @@ describe('scopeStreams', () => {
   it('records a reason for every drop', () => {
     const r = scopeStreams('a headless CLI library', BUILDERS);
     for (const d of r.drops) expect(d.reason.length).toBeGreaterThan(0);
+  });
+});
+
+describe('pickBrownfieldBuilders', () => {
+  it('returns the single builder when only one is in scope', () => {
+    const p = pickBrownfieldBuilders('fix the data importer bug', ['data']);
+    expect(p.multiLayer).toBe(false);
+    expect(p.primaries).toEqual(['data']);
+  });
+
+  it('keeps a single primary for single-layer work even with many builders', () => {
+    const p = pickBrownfieldBuilders(
+      'fix the SQL query that drops rows in the importer',
+      ['backend', 'frontend', 'data'],
+    );
+    expect(p.multiLayer).toBe(false);
+    expect(p.primaries.length).toBe(1);
+    expect(p.primaries[0]).toBe('data'); // only the data layer is referenced
+  });
+
+  it('fans out per layer when the request clearly spans multiple layers', () => {
+    const p = pickBrownfieldBuilders(
+      'the dashboard renders a wrong total AND the data query drops the last day',
+      ['backend', 'frontend', 'data'],
+    );
+    expect(p.multiLayer).toBe(true);
+    expect(p.primaries).toEqual(expect.arrayContaining(['frontend', 'data']));
+  });
+
+  it('preserves caller builder order in the fanned-out set', () => {
+    const p = pickBrownfieldBuilders(
+      'update the api endpoint and the frontend page together',
+      ['backend', 'frontend', 'data'],
+    );
+    expect(p.multiLayer).toBe(true);
+    expect(p.primaries).toEqual(['backend', 'frontend']);
+  });
+
+  it('falls back to a single primary when no layer is explicitly referenced', () => {
+    const p = pickBrownfieldBuilders('make a small improvement', ['backend', 'data']);
+    expect(p.multiLayer).toBe(false);
+    expect(p.primaries).toEqual(['backend']); // backend wins the single-owner priority
   });
 });

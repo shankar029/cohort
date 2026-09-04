@@ -86,3 +86,58 @@ export function scopeStreams(request: string, streams: string[]): StreamScopeRes
 
   return { keep, drops };
 }
+
+/**
+ * Choose which builder(s) own a BROWNFIELD epic.
+ *
+ * Brownfield decomposition normally converges on a SINGLE primary builder — fanning
+ * one task per stream tends to make each stream write its own analysis doc and land
+ * no code. But genuinely CROSS-LAYER work (e.g. a data-layer query bug AND a
+ * frontend rendering bug) under-covers with one owner: live evidence showed a
+ * cross-layer frontend fix land via QA's "verify" task instead of a real owner.
+ *
+ * This picks the single primary for single-layer work (unchanged) but fans out to
+ * the in-scope code layers when the request CLEARLY spans two or more of them. Pure
+ * + conservative: a layer must be explicitly referenced to be added, so single-layer
+ * tasks keep their single-owner convergence.
+ *
+ * @param request the raw epic request / user prompt text
+ * @param coreBuilders in-scope core builder stream names (post/verify already excluded)
+ */
+export interface BrownfieldBuilders {
+  /** Stream names to assign concrete "real change + tests" tasks to. */
+  primaries: string[];
+  /** Whether the request was judged to span multiple code layers. */
+  multiLayer: boolean;
+}
+
+// Distinct code layers a brownfield request can touch, with the phrases that
+// signal each. Order also acts as the single-owner priority (backend first).
+const LAYER_SIGNALS: Array<{ stream: string; re: RegExp }> = [
+  { stream: 'frontend', re: /\b(frontend|front[-\s]?end|ui\b|browser|render(ing|ed|s)?|dashboard|\bpage\b|\bview\b|css|html|client[-\s]?side|display(ed|s)?)\b/ },
+  { stream: 'ux', re: /\b(ux|user experience|wireframe|mockup|layout|styling|accessib)/ },
+  { stream: 'data', re: /\b(data|database|\bsql\b|query|queries|schema|migration|importer|feed|dataset|table|rows?)\b/ },
+  { stream: 'backend', re: /\b(backend|back[-\s]?end|api|endpoint|server|service|handler|route|controller)\b/ },
+];
+
+export function pickBrownfieldBuilders(request: string, coreBuilders: string[]): BrownfieldBuilders {
+  const singleOwnerOrder = ['backend', 'frontend', 'ux', 'data', 'devops', 'docs'];
+  const primaryOf = (): string =>
+    singleOwnerOrder.find((n) => coreBuilders.includes(n)) ?? coreBuilders[0]!;
+  if (coreBuilders.length <= 1) {
+    return { primaries: coreBuilders.slice(), multiLayer: false };
+  }
+  const text = (request ?? '').toLowerCase();
+  // Which in-scope layers are EXPLICITLY referenced by the request?
+  const referenced = LAYER_SIGNALS.filter(
+    (l) => coreBuilders.includes(l.stream) && l.re.test(text),
+  ).map((l) => l.stream);
+  if (referenced.length >= 2) {
+    // Preserve the builder order the caller passed in for stable, testable output.
+    const primaries = coreBuilders.filter((s) => referenced.includes(s));
+    return { primaries, multiLayer: true };
+  }
+  // Exactly one layer referenced -> that layer owns it; none referenced -> priority default.
+  if (referenced.length === 1) return { primaries: [referenced[0]!], multiLayer: false };
+  return { primaries: [primaryOf()], multiLayer: false };
+}
