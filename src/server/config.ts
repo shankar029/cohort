@@ -16,6 +16,8 @@ export interface Config {
   worktreeRoot: string;
   /** Base directory for on-disk agent session recordings. */
   recordingsDir: string;
+  /** Default for new projects' session recording (headless/live runs). */
+  recordSessions: boolean;
   /** Git commit-message convention the harness emits: 'ateam' (default) or 'conventional'. */
   commitStyle: CommitStyle;
 }
@@ -52,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     recordingsDir: path.resolve(
       env.ATEAM_RECORDINGS_DIR ?? path.join(process.cwd(), 'data', 'recordings'),
     ),
+    recordSessions: env.ATEAM_RECORD_SESSIONS === '1',
     commitStyle: normalizeCommitStyle(env.ATEAM_COMMIT_STYLE),
   };
 }

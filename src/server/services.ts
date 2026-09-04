@@ -7,6 +7,8 @@ import { AGENT_CATALOG, TEAM_LEAD_TEMPLATE, getCatalogAgent } from './agents/cat
 
 export interface ServiceConfig {
   defaultModel: string;
+  /** Default session-recording flag for newly created projects. */
+  recordSessions?: boolean;
 }
 
 /** Validate that a path exists and is a directory (the repo to work in). */
@@ -46,7 +48,12 @@ export function createProjectWithLead(
   const project = store.createProject({
     name: input.name,
     repoDir: resolvedRepoDir,
-    settings: { defaultModel: model, approvalMode: 'auto-workspace', extraSkillRoots: [] },
+    settings: {
+      defaultModel: model,
+      approvalMode: 'auto-workspace',
+      extraSkillRoots: [],
+      ...(config.recordSessions ? { recordSessions: true } : {}),
+    },
   });
   store.createAgent({
     projectId: project.id,

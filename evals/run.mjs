@@ -20,7 +20,6 @@
  * the real Copilot SDK (must be signed in via `copilot`).
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { EvalHarness, makeGreenfieldRepo, makeBrownfieldRepo } from './harness.mjs';
 

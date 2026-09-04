@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     bus,
     orchestrators,
     recorder,
-    config: { defaultModel: config.defaultModel, skillHomeRoots: config.skillHomeRoots },
+    config: { defaultModel: config.defaultModel, skillHomeRoots: config.skillHomeRoots, recordSessions: config.recordSessions },
     listModels: () => adapter.listModels(),
   });
 

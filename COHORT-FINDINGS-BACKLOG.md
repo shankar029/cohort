@@ -38,15 +38,16 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
   verify/review roles to tests+comments, or make cross-role edits explicit hand-offs.
 
 ## Group D — Observability / auditability
-- [ ] **D1. Recordings not written under the real adapter.** `ATEAM_RECORDINGS_DIR` stayed
-  empty in live runs, so the exact injected prompt (and thus which rules were included vs
-  truncated) can't be audited post-hoc. **Sev: Low.** *Fix idea:* persist per-turn
-  system/context under real adapter (or a debug flag).
+- [x] **D1. Recordings not written under the real adapter.** ✅ RESOLVED — root cause was a
+  harness/config omission, NOT a Cohort defect: the recorder (`runTurn` begin/end) is
+  adapter-agnostic and only gated on `settings.recordSessions`, which the live runs never
+  enabled. Added `ATEAM_RECORD_SESSIONS=1` to default recording ON for new projects
+  (headless/live), threaded config→app→`createProjectWithLead`. Documented in `.env.example`.
 
 ## Group E — Repo hygiene (Cohort itself, pre-existing; not agent-caused)
-- [ ] **E1. `npm run lint` red at baseline** (~104 errors: `console`/`Buffer` no-undef in
-  `.mjs`/`._*` scratch files). Predates this work. **Sev: Low.** *Fix idea:* add env globals
-  / ignore scratch globs so lint is a usable gate.
+- [x] **E1. `npm run lint` red at baseline** ✅ FIXED — was 104 errors, now **0**. Added an
+  eslint override giving `scripts/**` + `evals/**` Node+browser globals, ignored `**/._*`
+  scratch files, disabled `ban-ts-comment` for plain-JS scripts, removed one dead import.
 
 ## Group F — Epic convergence / orchestration robustness (`orchestrator.ts` manager loop + review)
 - [ ] **F1. Epics can stall without converging to merge.** In Phase 2 t3 (test-data feeds), a

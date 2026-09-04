@@ -27,7 +27,7 @@ export interface AppContext {
   bus: Bus;
   orchestrators: OrchestratorManager;
   recorder: SessionRecorder;
-  config: { defaultModel: string; skillHomeRoots: string[] };
+  config: { defaultModel: string; skillHomeRoots: string[]; recordSessions?: boolean };
   listModels: () => Promise<string[]>;
 }
 
