@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { planStallRecovery, type StallRecoveryInput } from '../../src/server/stallRecovery.js';
+import {
+  planStallRecovery,
+  boardHasLiveWork,
+  type StallRecoveryInput,
+} from '../../src/server/stallRecovery.js';
 
 const WATCHDOG = 300000; // 5 min
 
@@ -15,6 +19,45 @@ function base(over: Partial<StallRecoveryInput> = {}): StallRecoveryInput {
     ...over,
   };
 }
+
+describe('boardHasLiveWork', () => {
+  const WD = 120000;
+  it('is true when a specialist is working', () => {
+    expect(
+      boardHasLiveWork({ runningIds: [], runningSince: {}, agentStatuses: ['idle', 'working'], now: 0, runWatchdogMs: WD }),
+    ).toBe(true);
+  });
+
+  it('is true for a running guard still within the watchdog window (legit gate phase)', () => {
+    expect(
+      boardHasLiveWork({
+        runningIds: ['t1'],
+        runningSince: { t1: 1_000_000 - 30_000 },
+        agentStatuses: ['idle'],
+        now: 1_000_000,
+        runWatchdogMs: WD,
+      }),
+    ).toBe(true);
+  });
+
+  it('is FALSE for a stale running guard past the watchdog with no working agent (leak must not mask a stall)', () => {
+    expect(
+      boardHasLiveWork({
+        runningIds: ['t1'],
+        runningSince: { t1: 1_000_000 - WD - 1 },
+        agentStatuses: ['idle', 'idle'],
+        now: 1_000_000,
+        runWatchdogMs: WD,
+      }),
+    ).toBe(false);
+  });
+
+  it('is false when nothing is running and no agent is working', () => {
+    expect(
+      boardHasLiveWork({ runningIds: [], runningSince: {}, agentStatuses: ['idle'], now: 0, runWatchdogMs: WD }),
+    ).toBe(false);
+  });
+});
 
 describe('planStallRecovery', () => {
   it('clears a leaked running guard whose agent is idle and past the watchdog', () => {

@@ -52,6 +52,30 @@ function isIdle(status: string | undefined): boolean {
   return status === undefined || status === 'idle';
 }
 
+/**
+ * Whether the board is genuinely progressing. A specialist mid-turn (`working`)
+ * always counts. A `running` guard counts ONLY while it's still within its watchdog
+ * window (a legitimate in-flight run whose post-turn gate/integration phase leaves
+ * the agent idle). A STALE running guard (past the watchdog with no working agent)
+ * must NOT count as progress — otherwise a single leaked guard masks a permanent
+ * wedge and starves the stall-recovery path forever.
+ */
+export interface LiveWorkInput {
+  runningIds: string[];
+  runningSince: Record<string, number>;
+  /** Current statuses of the specialist agents. */
+  agentStatuses: string[];
+  now: number;
+  runWatchdogMs: number;
+}
+
+export function boardHasLiveWork(input: LiveWorkInput): boolean {
+  if (input.agentStatuses.some((s) => s === 'working')) return true;
+  return input.runningIds.some(
+    (id) => input.now - (input.runningSince[id] ?? input.now) < input.runWatchdogMs,
+  );
+}
+
 export function planStallRecovery(input: StallRecoveryInput): StallRecoveryPlan {
   const byId = new Map(input.items.map((i) => [i.id, i]));
   const runningSet = new Set(input.running);

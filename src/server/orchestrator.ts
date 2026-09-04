@@ -7,7 +7,7 @@ import {
   ensureDependencies,
 } from './qaGate.js';
 import { sanitizeDag } from './dag.js';
-import { planStallRecovery } from './stallRecovery.js';
+import { planStallRecovery, boardHasLiveWork } from './stallRecovery.js';
 import { reviewBudgetDecision } from './reviewBudget.js';
 import { scopeStreams, pickBrownfieldBuilders } from './streamScope.js';
 import {
@@ -1595,8 +1595,19 @@ class ProjectOrchestrator {
       this.lastStallSig = '';
       return;
     }
-    // Actively moving? Not stalled — refresh the activity clock.
-    if (this.running.size > 0 || this.specialists().some((a) => a.status === 'working')) {
+    // Actively moving? Only a LIVE turn or a within-watchdog run counts. A `running`
+    // guard whose run has exceeded the watchdog (agent idle, no fresh progress) is a
+    // suspected leak and must NOT reset the stall clock, or it masks a permanent
+    // wedge from the recovery path below.
+    if (
+      boardHasLiveWork({
+        runningIds: [...this.running],
+        runningSince: Object.fromEntries(this.runningSince),
+        agentStatuses: this.specialists().map((a) => a.status),
+        now: Date.now(),
+        runWatchdogMs: this.runWatchdogMs,
+      })
+    ) {
       this.lastBoardActivityAt = Date.now();
       return;
     }
