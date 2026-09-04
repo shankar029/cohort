@@ -124,6 +124,29 @@ and the review loop meaningfully hardens output (rejected an inadequate test + i
 (b) For a cross-layer bug, Cohort localizes collaboratively but tends to hand the fix to a single engineer.
 Artifacts: `ateam-live/bf-fs-collab.log` (transcript), `bf-fs-check.mjs` (scorecard), `bf-fs-run.mjs` (observer).
 
+- [x] Phase 2 — live run tasks 2,3,5,6,7 (separate clones, 2 waves ≤3 concurrent). **DONE — 4/5 merged.**
+
+## Phase 2 RESULTS (real copilot-sdk; each task in its own clone off `baseline-fs`)
+Wave 1 = t2/t3/t6 concurrent; Wave 2 = t5/t7 concurrent. Every merge went through a strict,
+rule-aware review loop that filed BLOCKER findings and drove rework.
+
+| Task | Type | Result | Evidence |
+|---|---|---|---|
+| **t2** | SQL/data — `weekly-active` | ✅ **merged, PASS** | `weeklyActive('2026-03-01')`→`{to:'2026-03-07',weeklyActive:4}`; new `db/migrations/0002_*.sql` (append-only R8 ✓); generated untouched (R5 ✓); gate 14/14 |
+| **t3** | Test data feeds | ❌ **did NOT converge** | reviewer raised 5+ BLOCKERs; epic spiraled into more subtasks, a `todo` fix-task went unstarted, all agents (incl. Lead) went **idle**; a user nudge re-planned but still didn't merge |
+| **t5** | Build/release pipeline | ✅ **merged, PASS** | `release.sh 0.2.0` bumps root+`Reporter.csproj`+CHANGELOG; `ci.yml` gains dotnet reporter build/selftest; gate 9/9 |
+| **t6** | Documentation | ✅ **merged, PASS** | `docs/pipeline.md` (98 lines) covers `/health`,`/metrics/daily-active`,`/metrics/range` + all 5 packages; gate green |
+| **t7** | Ad-hoc rename `dau`→`dailyActive` | ✅ **merged, PASS** | 0 residual `dau` in src/public/reporter/docs; endpoint field now `dailyActive` (across TS+C#+web+docs); gate 9/9 |
+
+### Phase 2 findings
+- **Review gate is genuinely rigorous** — it caught a wrong response field name + a missing migration (t2),
+  missing CHANGELOG + missing integration test (t3), etc., and blocked merge until fixed. Quality is real.
+- **NEW robustness finding (t3): epics can fail to converge and stall.** Under a heavily-specified brief the
+  reviewer over-decomposed into many BLOCKER subtasks; the epic didn't reach merge, a `todo` fix-task was left
+  unstarted, and the Team Lead's manager loop went **idle** instead of finishing/merging. A user nudge caused
+  MORE tasks (spiral) rather than convergence. → logged as backlog **F1** (Group F).
+- **Cross-clone multi-project parallelism held** — 3 then 2 projects ran concurrently without interference.
+
 ## Phasing (cost control)
 - [x] Phase 0 — build fixture + prove the seeded bug reproduces (free). **DONE.**
       Fixture at `C:\Code\Projects\ateam-bf` (git `baseline` tag). Baseline verified:
@@ -131,8 +154,8 @@ Artifacts: `ateam-live/bf-fs-collab.log` (transcript), `bf-fs-check.mjs` (scorec
       full pwsh build pipeline `BUILD OK`. Bug reproduces: `feed:import` drops 2 rows;
       API dau(2026-03-02)=**1** vs C# reporter(raw feed)=**3**.
 - [x] Phase 1 — live run tasks **1 (deep bug) + 4 (unit tests)**. **DONE** — both merged, 3/3 tasks, 8/9 rules.
-- [ ] Phase 2 — live run tasks 2,3,5,6,7 (some in parallel; also re-tests brownfield parallelism).
-- [ ] Phase 3 — scorecard (`checker.mjs`, written at start of Phase 1) + findings ledger.
+- [x] Phase 2 — live run tasks 2,3,5,6,7 (some in parallel; also re-tests brownfield parallelism). **DONE (4/5 merged; t3 stalled).**
+- [ ] Phase 3 — fix consolidated backlog (Groups A–F), then re-verify.
 
 ## Open defaults (override anytime)
 - Phase 1 subset = tasks 1 + 4. Nested-rule gap probed deliberately = yes.

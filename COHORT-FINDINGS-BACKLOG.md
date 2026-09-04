@@ -50,14 +50,26 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
   `.mjs`/`._*` scratch files). Predates this work. **Sev: Low.** *Fix idea:* add env globals
   / ignore scratch globs so lint is a usable gate.
 
+## Group F — Epic convergence / orchestration robustness (`orchestrator.ts` manager loop + review)
+- [ ] **F1. Epics can stall without converging to merge.** In Phase 2 t3 (test-data feeds), a
+  heavily-specified brief led the reviewer to file 5+ BLOCKER subtasks; the epic spiraled into
+  ever-more tasks, a `todo` fix-task was left **unstarted**, and ALL agents (including the Team
+  Lead) went **idle** with the PR stuck in `changes_requested` — no merge, no failure, just a
+  stall. A user chat nudge triggered MORE planning (spiral), not convergence. **Sev: Med–High.**
+  *Evidence:* project `prj_BHp-G89Lj3wL`. *Fix ideas:* (a) manager loop must detect
+  "assigned task in todo + all idle" and start/escalate it; (b) bound review re-decomposition and
+  force a final converge-or-fail decision; (c) surface a terminal `stalled`/`failed` epic status
+  instead of silent idle; (d) make nudges resume the existing plan rather than re-plan.
+
 ---
 
 ## Fix plan (after Phase 2)
 1. **Group A together** (A1 nested discovery + A2 truncation) — one focused change to
    `context.ts` + a unit test with a nested fixture.
 2. **B1** — small, self-contained; add a commit-message policy + config.
-3. **C1/C2** — larger; needs decomposition heuristics + role-permission prompts. Do last;
-   re-run the cross-layer scenario to verify.
-4. **D1, E1** — low-effort cleanups, batch with (1)/(2).
+3. **F1** — orchestration robustness (convergence/stall). Medium; pairs with C1/C2 since both
+   touch the manager loop + review decomposition. Re-run t3 to verify.
+4. **C1/C2** — decomposition heuristics + role-permission prompts. Re-run the cross-layer scenario.
+5. **D1, E1** — low-effort cleanups, batch with (1)/(2).
 
-Phase 2 may add more items to Groups A–E before we start fixing.
+Phase 2 added **F1** (convergence/stall). Groups A–F are the fix set.
