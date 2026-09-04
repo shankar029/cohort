@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   const store = new Store(db);
   const bus = new Bus();
   const scheduler = new SchedulerService();
-  const git = new GitService(config.worktreeRoot);
+  const git = new GitService(config.worktreeRoot, config.commitStyle);
   const recorder = new SessionRecorder(config.recordingsDir);
   const adapter: CopilotAdapter = config.fakeSdk
     ? new FakeCopilotAdapter()

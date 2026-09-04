@@ -10,22 +10,20 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` fixed.
 ---
 
 ## Group A — Repository-instruction ingestion (`src/server/agents/context.ts`)
-- [ ] **A1. Nested/per-package instruction files are ignored.** Discovery uses a fixed
-  root list + only `.cursor/rules`, `.github/instructions` (no recursion), so
-  `packages/*/AGENTS.md` is never injected. *Evidence:* `packages/core/AGENTS.md` (R9)
-  never appeared in agent context; compliance was coincidental. **Sev: Med.**
-  *Fix idea:* bounded walk for `**/AGENTS.md` (depth/size capped), attribute each to its dir.
-- [ ] **A2. Instruction truncation can silently drop rules.** `MAX_PER_FILE=6000`,
-  `MAX_TOTAL=16000`; later files/rules beyond the cap are cut with `… (truncated)`.
-  **Sev: Low–Med.** *Fix idea:* prioritize/merge rule files; warn when truncation occurs;
-  raise/scope the cap per agent.
+- [x] **A1. Nested/per-package instruction files are ignored.** ✅ FIXED — `collectRepoInstructions()`
+  now walks nested `AGENTS.md`/`CLAUDE.md`/`GEMINI.md`/`CONVENTIONS.md`/`.cursorrules`/`.windsurfrules`
+  (BFS, depth≤6, ≤60 files, ignores node_modules/.git/build/etc.). `packages/*/AGENTS.md` is injected.
+- [x] **A2. Instruction truncation can silently drop rules.** ✅ FIXED — result now reports
+  `truncatedFiles`/`droppedFiles`; the prompt appends a visible `⚠ …exceeded the context budget`
+  note so agents know to open the file directly. Tests in `tests/unit/repoInstructions.test.ts`.
 
 ## Group B — Version control / commit conventions (`src/server/orchestrator.ts`)
-- [ ] **B1. Commit messages aren't Conventional-Commits.** All commits are harness-made
-  (`ateam: merge`, `ateam: integrate`, `ateam: sync`, `task(role): …`), so a repo that
-  mandates Conventional Commits fails regardless of agent behavior. *Evidence:* Phase 1
-  R6 check failed only on tool commits. **Sev: Med.** *Fix idea:* make commit templates
-  configurable / emit `type(scope): …`; map task→`fix|feat|test|docs`.
+- [x] **B1. Commit messages aren't Conventional-Commits.** ✅ FIXED — new
+  `src/server/commitStyle.ts` centralizes every commit message; `ATEAM_COMMIT_STYLE=conventional`
+  makes the harness emit `chore(merge): …`, `chore(sync)/(integrate): …`, and typed task commits
+  (`fix|feat|docs|test|refactor|build(scope): …` inferred from title/stream). Default stays `ateam`
+  (unchanged). `findEpicMergeCommit` grep kept in lockstep (verified git BRE matches literal parens).
+  Tests in `tests/unit/commitStyle.test.ts`.
 
 ## Group C — Decomposition & role boundaries (`orchestrator.ts` decomposeEpic + prompts)
 - [ ] **C1. Cross-layer bugs get a single-owner task that under-covers.** For an existing

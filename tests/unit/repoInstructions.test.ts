@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Agent, Project } from '../../src/shared/index.js';
-import { discoverRepoInstructions, buildSystemPrompt } from '../../src/server/agents/context.js';
+import { discoverRepoInstructions, collectRepoInstructions, buildSystemPrompt } from '../../src/server/agents/context.js';
 
 let repo: string;
 
@@ -78,6 +78,32 @@ describe('discoverRepoInstructions', () => {
     expect(found[0]?.content).toContain('(truncated)');
     expect(found[0]!.content.length).toBeLessThan(9000);
   });
+
+  it('discovers nested per-package instruction files (monorepo AGENTS.md)', () => {
+    fs.writeFileSync(path.join(repo, 'AGENTS.md'), 'Root rules.');
+    fs.mkdirSync(path.join(repo, 'packages', 'core'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'packages', 'core', 'AGENTS.md'), 'Core must stay pure.');
+    const rels = discoverRepoInstructions(repo).map((f) => f.rel);
+    expect(rels).toContain('AGENTS.md');
+    expect(rels).toContain('packages/core/AGENTS.md');
+  });
+
+  it('does not descend into ignored dirs like node_modules/.git', () => {
+    fs.mkdirSync(path.join(repo, 'node_modules', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'node_modules', 'dep', 'AGENTS.md'), 'Should be ignored.');
+    fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.git', 'AGENTS.md'), 'Should be ignored.');
+    const rels = discoverRepoInstructions(repo).map((f) => f.rel);
+    expect(rels).not.toContain('node_modules/dep/AGENTS.md');
+    expect(rels).not.toContain('.git/AGENTS.md');
+  });
+
+  it('reports truncated files so callers can warn', () => {
+    fs.writeFileSync(path.join(repo, 'AGENTS.md'), 'y'.repeat(9000));
+    const res = collectRepoInstructions(repo);
+    expect(res.truncatedFiles).toContain('AGENTS.md');
+    expect(res.files[0]?.truncated).toBe(true);
+  });
 });
 
 describe('buildSystemPrompt honors repo instructions', () => {
@@ -92,6 +118,16 @@ describe('buildSystemPrompt honors repo instructions', () => {
   it('omits the section entirely when the repo has no instruction files', () => {
     const prompt = buildSystemPrompt({ project: project(), self: agent(), team: [agent()] });
     expect(prompt).not.toContain('Repository instructions (MANDATORY');
+  });
+
+  it('injects nested package rules and warns when instructions are truncated', () => {
+    fs.writeFileSync(path.join(repo, 'AGENTS.md'), 'Root rules.');
+    fs.mkdirSync(path.join(repo, 'packages', 'core'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'packages', 'core', 'AGENTS.md'), 'z'.repeat(9000));
+    const prompt = buildSystemPrompt({ project: project(), self: agent(), team: [agent()] });
+    expect(prompt).toContain('## packages/core/AGENTS.md');
+    expect(prompt).toContain('exceeded the context budget');
+    expect(prompt).toContain('packages/core/AGENTS.md');
   });
 });
 

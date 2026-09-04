@@ -1,5 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
+import { normalizeCommitStyle, type CommitStyle } from './commitStyle.js';
 
 /** Resolved runtime configuration, from env with sane defaults. */
 export interface Config {
@@ -15,6 +16,8 @@ export interface Config {
   worktreeRoot: string;
   /** Base directory for on-disk agent session recordings. */
   recordingsDir: string;
+  /** Git commit-message convention the harness emits: 'ateam' (default) or 'conventional'. */
+  commitStyle: CommitStyle;
 }
 
 function splitList(value: string | undefined): string[] {
@@ -49,5 +52,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     recordingsDir: path.resolve(
       env.ATEAM_RECORDINGS_DIR ?? path.join(process.cwd(), 'data', 'recordings'),
     ),
+    commitStyle: normalizeCommitStyle(env.ATEAM_COMMIT_STYLE),
   };
 }

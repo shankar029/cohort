@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { commitMessages, type CommitMessages, type CommitStyle } from './commitStyle.js';
 
 /**
  * Thin wrapper over the git CLI. Isolates each epic in its OWN local clone
@@ -13,9 +14,16 @@ import path from 'node:path';
  */
 export class GitService {
   private readonly worktreeRoot: string;
-  constructor(worktreeRoot: string) {
+  private readonly msg: CommitMessages;
+  constructor(worktreeRoot: string, commitStyle: CommitStyle = 'ateam') {
     // Always absolute so checkout paths can never resolve inside a project/app repo.
     this.worktreeRoot = path.resolve(worktreeRoot);
+    this.msg = commitMessages(commitStyle);
+  }
+
+  /** Format a task work-commit message per the configured convention. */
+  taskMessage(stream: string | null | undefined, title: string): string {
+    return this.msg.task(stream, title);
   }
 
   /** Absolute root under which all managed epic clones live. */
@@ -68,7 +76,7 @@ export class GitService {
         fs.writeFileSync(path.join(dir, '.ateam-keep'), 'ateam workspace\n');
       }
       await this.run(['add', '-A'], dir);
-      await this.commit(dir, 'ateam: initial snapshot');
+      await this.commit(dir, this.msg.snapshot());
     }
   }
 
@@ -250,7 +258,7 @@ export class GitService {
         return { ok: false, conflict: false, changed: false, detail: 'stash failed' };
     }
     const merged = await this.run(
-      ['merge', '--no-ff', '-m', `ateam: sync ${epicBranch}`, 'FETCH_HEAD'],
+      ['merge', '--no-ff', '-m', this.msg.sync(epicBranch), 'FETCH_HEAD'],
       taskClonePath,
     );
     if (!merged.ok) {
@@ -307,7 +315,7 @@ export class GitService {
     if (!fetched.ok)
       return { ok: false, conflict: false, detail: `fetch failed: ${fetched.stderr.trim()}` };
     const merged = await this.run(
-      ['merge', '--no-ff', '-m', `ateam: integrate ${taskBranch}`, taskBranch],
+      ['merge', '--no-ff', '-m', this.msg.integrate(taskBranch), taskBranch],
       epicClonePath,
     );
     if (!merged.ok) {
@@ -508,7 +516,7 @@ export class GitService {
       const fetched = await this.run(['fetch', checkoutPath, `${branch}:${branch}`], repoDir);
       if (!fetched.ok) return { ok: false, detail: `fetch failed: ${fetched.stderr.trim()}` };
     }
-    const r = await this.run(['merge', '--no-ff', '-m', `ateam: merge ${branch}`, branch], repoDir);
+    const r = await this.run(['merge', '--no-ff', '-m', this.msg.merge(branch), branch], repoDir);
     return { ok: r.ok, detail: r.ok ? `merged ${branch} into ${base}` : r.stderr.trim() };
   }
 
@@ -544,7 +552,7 @@ export class GitService {
   async findEpicMergeCommit(repoDir: string, branch: string): Promise<string | null> {
     if (!branch) return null;
     const r = await this.run(
-      ['log', '--all', '--format=%H', '--max-count=1', `--grep=^ateam: merge ${branch}$`],
+      ['log', '--all', '--format=%H', '--max-count=1', `--grep=${this.msg.mergeGrep(branch)}`],
       repoDir,
     );
     const hash = r.stdout.trim().split('\n')[0]?.trim();

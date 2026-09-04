@@ -70,39 +70,100 @@ const INSTRUCTION_FILES = [
 ];
 /** Directories whose markdown files are per-scope instruction rules. */
 const INSTRUCTION_DIRS = ['.cursor/rules', '.github/instructions'];
+/**
+ * Basenames treated as per-directory (nested) instruction files. A monorepo often
+ * ships package-scoped rules (e.g. `packages/core/AGENTS.md`) that MUST be honored
+ * for work in that subtree, so we walk beyond the repo root for these.
+ */
+const NESTED_INSTRUCTION_BASENAMES = new Set([
+  'AGENTS.md',
+  'CLAUDE.md',
+  'GEMINI.md',
+  'CONVENTIONS.md',
+  '.cursorrules',
+  '.windsurfrules',
+]);
+/** Directories never worth walking for nested instructions (heavy or generated). */
+const NESTED_IGNORE_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.next',
+  '.turbo',
+  '.cache',
+  'vendor',
+  'tmp',
+  'target',
+  'bin',
+  'obj',
+]);
+const MAX_NESTED_DEPTH = 6;
+const MAX_NESTED_FILES = 60;
 const MAX_PER_FILE = 6000;
 const MAX_TOTAL = 16000;
+
+export interface RepoInstructionFile {
+  rel: string;
+  content: string;
+  /** True when this file's body was cut to fit MAX_PER_FILE. */
+  truncated?: boolean;
+}
+export interface RepoInstructionsResult {
+  files: RepoInstructionFile[];
+  /** rels whose content was truncated to fit MAX_PER_FILE. */
+  truncatedFiles: string[];
+  /** rels that were discovered but DROPPED because the MAX_TOTAL budget was exhausted. */
+  droppedFiles: string[];
+}
 
 /**
  * Discover the repository's OWN agent/contributor instructions (AGENTS.md,
  * CLAUDE.md, Copilot/Cursor/Windsurf rules, …) so every agent honors the
- * conventions, commands, and constraints the repo defines. Read from the agent's
- * actual working directory (the per-epic clone for epic work), so branch clones
- * pick these up too. Size-capped so a large doc can't blow the prompt.
+ * conventions, commands, and constraints the repo defines — including
+ * package-scoped rules nested under subdirectories (monorepos). Read from the
+ * agent's actual working directory (the per-epic clone for epic work), so branch
+ * clones pick these up too. Size-capped so a large doc can't blow the prompt; when
+ * the cap forces truncation/drops we report it so callers can surface a warning.
  */
-export function discoverRepoInstructions(cwd: string): Array<{ rel: string; content: string }> {
-  const out: Array<{ rel: string; content: string }> = [];
+export function collectRepoInstructions(cwd: string): RepoInstructionsResult {
+  const files: RepoInstructionFile[] = [];
+  const truncatedFiles: string[] = [];
+  const droppedFiles: string[] = [];
   const seen = new Set<string>();
   let total = 0;
   const push = (rel: string): void => {
     const norm = rel.replace(/\\/g, '/');
-    if (seen.has(norm) || total >= MAX_TOTAL) return;
+    if (seen.has(norm)) return;
     try {
       const abs = path.join(cwd, rel);
       if (!fs.statSync(abs).isFile()) return;
       let content = fs.readFileSync(abs, 'utf8').trim();
       if (!content) return;
+      // Budget already spent: record the drop so it isn't lost silently.
+      if (total >= MAX_TOTAL) {
+        seen.add(norm);
+        droppedFiles.push(norm);
+        return;
+      }
+      let truncated = false;
       if (content.length > MAX_PER_FILE) {
         content = `${content.slice(0, MAX_PER_FILE)}\n… (truncated)`;
+        truncated = true;
+        truncatedFiles.push(norm);
       }
       seen.add(norm);
       total += content.length;
-      out.push({ rel: norm, content });
+      files.push(truncated ? { rel: norm, content, truncated } : { rel: norm, content });
     } catch {
       /* missing/unreadable — skip */
     }
   };
+  // 1) Root well-known files (highest priority).
   for (const f of INSTRUCTION_FILES) push(f);
+  // 2) Root instruction-rule directories.
   for (const dir of INSTRUCTION_DIRS) {
     try {
       if (!fs.statSync(path.join(cwd, dir)).isDirectory()) continue;
@@ -113,7 +174,38 @@ export function discoverRepoInstructions(cwd: string): Array<{ rel: string; cont
       /* no such dir — skip */
     }
   }
-  return out;
+  // 3) Nested per-directory instruction files (monorepo package rules), walked
+  //    breadth-first, deterministic order, bounded by depth/count/ignore-list.
+  let nestedCount = 0;
+  const queue: Array<{ rel: string; depth: number }> = [{ rel: '', depth: 0 }];
+  while (queue.length > 0) {
+    const { rel, depth } = queue.shift()!;
+    if (depth > MAX_NESTED_DEPTH || nestedCount >= MAX_NESTED_FILES || total >= MAX_TOTAL) break;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(cwd, rel), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (e.name.startsWith('.') || NESTED_IGNORE_DIRS.has(e.name)) continue;
+        if (depth + 1 <= MAX_NESTED_DEPTH) queue.push({ rel: childRel, depth: depth + 1 });
+      } else if (depth > 0 && NESTED_INSTRUCTION_BASENAMES.has(e.name)) {
+        // depth>0 so root files (already handled with correct priority) aren't re-added.
+        if (nestedCount >= MAX_NESTED_FILES) break;
+        nestedCount += 1;
+        push(childRel);
+      }
+    }
+  }
+  return { files, truncatedFiles, droppedFiles };
+}
+
+/** Back-compat convenience: just the discovered instruction files. */
+export function discoverRepoInstructions(cwd: string): RepoInstructionFile[] {
+  return collectRepoInstructions(cwd).files;
 }
 
 export interface GroundingInput {
@@ -179,13 +271,21 @@ export function buildSystemPrompt({
         `or half-specified sections.`
       : '';
 
-  const repoInstructions = discoverRepoInstructions(cwd);
+  const { files: repoInstructions, truncatedFiles, droppedFiles } = collectRepoInstructions(cwd);
+  const capNote =
+    truncatedFiles.length || droppedFiles.length
+      ? `\n\n> ⚠ Some instruction content exceeded the context budget:` +
+        (truncatedFiles.length ? ` truncated ${truncatedFiles.join(', ')}.` : '') +
+        (droppedFiles.length ? ` dropped ${droppedFiles.join(', ')}.` : '') +
+        ` If a rule you need is cut, open the file directly with your tools.`
+      : '';
   const instructionsBlock = repoInstructions.length
     ? `\n\n# Repository instructions (MANDATORY — honor these)\n` +
       `This repository ships its OWN agent/contributor instructions. You **MUST read and follow ` +
       `them**; they take precedence over generic defaults wherever they conflict. Obey their ` +
       `conventions, commands, constraints, and definition of done exactly.\n\n` +
-      repoInstructions.map((f) => `## ${f.rel}\n${f.content}`).join('\n\n')
+      repoInstructions.map((f) => `## ${f.rel}\n${f.content}`).join('\n\n') +
+      capNote
     : '';
 
   return `# Environment

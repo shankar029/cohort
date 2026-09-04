@@ -2856,7 +2856,7 @@ class ProjectOrchestrator {
         );
         const res = await this.deps.git.commitWork(
           worktree.path,
-          `task(${item.stream ?? 'task'}): ${item.title}`,
+          this.deps.git.taskMessage(item.stream, item.title),
         );
         const files =
           res.committed && res.hash ? await this.deps.git.commitFiles(worktree.path, res.hash) : [];
@@ -3119,7 +3119,7 @@ class ProjectOrchestrator {
     if (completion?.branch) lines.push(`**Branch:** \`${completion.branch}\``);
     if (completion?.hash) {
       lines.push(
-        `**Commit:** \`${completion.hash.slice(0, 8)}\` - task(${item.stream ?? 'task'}): ${item.title}`,
+        `**Commit:** \`${completion.hash.slice(0, 8)}\` - ${this.deps.git.taskMessage(item.stream, item.title)}`,
       );
     }
     if (files.length > 0) {
