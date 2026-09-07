@@ -60,7 +60,7 @@ export const ALWAYS_DENIED = ['sql'];
  * ateam's custom tools (probe_app, the board/chat tools) and never touches the real
  * board. If the Lead uses it to "delegate", the shadow sub-agent can't actually run
  * anything ateam-specific and the real specialists are bypassed. The Lead delegates
- * through the board / `delegate_verification` instead, so deny the shadow spawner.
+ * through the board / `delegate` tool instead, so deny the shadow spawner.
  */
 export const SUBAGENT_TOOLS = ['task'];
 

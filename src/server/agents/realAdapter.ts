@@ -431,48 +431,57 @@ export class RealCopilotAdapter implements CopilotAdapter {
         ]
       : [];
 
-    // Lead-only: delegate an ad-hoc verification to a shell-capable specialist who
-    // boots-and-probes the app (probe_app) and reports back. Keeps the Lead itself
-    // non-executing while still letting it answer "is the app up?" end-to-end.
+    // Lead-only: delegate an arbitrary ad-hoc task to the right specialist (who has
+    // the full toolset - shell, probe_app, read), who does it and reports back. Keeps
+    // the Lead itself non-executing while letting it get real work done end-to-end.
     const leadTools =
       config.role === 'lead' && app
         ? [
-            sdk.defineTool('delegate_verification', {
+            sdk.defineTool('delegate', {
               description:
-                'Delegate a one-off VERIFICATION to a shell-capable specialist who will boot the ' +
-                'app, probe it (via probe_app), and report back. Use this when the user asks whether ' +
-                'the app runs / is up / works and you need to actually check it - you cannot run ' +
-                'commands yourself. Resolves with the specialist\u2019s report; relay it to the user.',
+                'Hand an arbitrary AD-HOC task to the right specialist (who has the full toolset - ' +
+                'shell, probe_app, read) and get their report back. Use this whenever you need ' +
+                'something DONE that you cannot do yourself: verify/boot-probe an app, run the tests, ' +
+                'investigate a bug, inspect data/logs, check config, explain how something works, etc. ' +
+                'This is for bounded, REPORTING work - NOT deliverable code changes, which you must ' +
+                'route through a proper task/epic so they go through review. Resolves with the ' +
+                'specialist report; relay it to the user.',
               parameters: {
                 type: 'object',
                 properties: {
-                  instructions: {
+                  task: {
                     type: 'string',
                     description:
-                      'What to verify, in plain terms (e.g. "boot the API and curl /api/health").',
+                      'What to do, in plain terms (e.g. "boot the API and curl /api/health", ' +
+                      '"run the test suite and report failures", "check why /login 500s").',
                   },
-                  specialistStream: {
+                  specialist: {
                     type: 'string',
                     description: 'Optional preferred specialist name/stream (e.g. "qa", "backend").',
                   },
+                  context: {
+                    type: 'string',
+                    description: 'Optional background the specialist should know.',
+                  },
                 },
-                required: ['instructions'],
+                required: ['task'],
               },
               skipPermission: true,
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               handler: async (args: any) => {
                 config.onEvent({
                   kind: 'tool_call',
-                  toolName: 'delegate_verification',
-                  detail: { specialistStream: args.specialistStream },
+                  toolName: 'delegate',
+                  detail: { task: String(args.task ?? '').slice(0, 80), specialist: args.specialist },
                 });
-                const res = await app.delegateVerification({
-                  instructions: String(args.instructions ?? ''),
-                  specialistStream: args.specialistStream ?? null,
+                const res = await app.delegate({
+                  task: String(args.task ?? ''),
+                  specialist: args.specialist ?? null,
+                  context: args.context ?? null,
                 });
                 config.onEvent({
                   kind: 'tool_result',
-                  toolName: 'delegate_verification',
+                  toolName: 'delegate',
                   detail: { ok: res.ok, specialist: res.specialist },
                 });
                 return res;

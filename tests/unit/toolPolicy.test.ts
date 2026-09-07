@@ -77,7 +77,7 @@ describe('deniedBuiltinTools', () => {
       'write_note',
       'update_plan',
       'list_board',
-      'delegate_verification',
+      'delegate',
       'probe_app',
     ];
     const denied = deniedBuiltinTools('lead', null);

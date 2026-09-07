@@ -49,11 +49,13 @@ export interface AgentAppTools {
   writeNote(input: { content: string; workItemId?: string | null }): { ok: boolean };
   updatePlan(input: { content: string }): { ok: boolean };
   /**
-   * Lead-only: hand an ad-hoc verification to a shell-capable specialist who boots
-   * and probes the app (via `probe_app`) and reports back. Resolves with the
-   * specialist's report so the Lead can answer the user directly.
+   * Lead-only: hand an arbitrary AD-HOC sub-task to the right specialist (who has
+   * the full real toolset — shell, probe_app, read) and get their report back. This
+   * is for bounded, reporting work (verify, run tests, investigate, inspect, explain)
+   * — NOT deliverable changes, which stay on the reviewed board/epic flow. Resolves
+   * with the specialist's report so the Lead can answer the user directly.
    */
-  delegateVerification(input: { instructions: string; specialistStream?: string | null }): Promise<{
+  delegate(input: { task: string; specialist?: string | null; context?: string | null }): Promise<{
     ok: boolean;
     specialist?: string;
     report?: string;

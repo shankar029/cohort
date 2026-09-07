@@ -4522,28 +4522,35 @@ class ProjectOrchestrator {
             : null,
         })),
       }),
-      delegateVerification: async (input) => {
-        const spec = this.pickVerifier(input.specialistStream ?? null);
+      delegate: async (input) => {
+        const task = String(input.task ?? '').trim();
+        if (!task) return { ok: false, error: 'No task described to delegate.' };
+        const spec = this.pickSpecialist(input.specialist ?? null);
         if (!spec) {
-          return { ok: false, error: 'No shell-capable specialist is available to verify.' };
+          return { ok: false, error: 'No specialist is available to take this on.' };
         }
         const threadId = this.ensureMainThread().id;
         this.emitEvent(
           agent.id,
           'system',
-          `Delegated verification to ${spec.displayName}`,
+          `Delegated to ${spec.displayName}: ${task.slice(0, 80)}`,
           null,
           null,
         );
         const prompt =
-          `The Team Lead has asked you to VERIFY a running app on their behalf and report back.\n\n` +
-          `Use the \`probe_app\` tool to boot the app in the BACKGROUND, wait until it is ready, ` +
-          `run the appropriate probe commands (e.g. \`curl\` the main endpoint / health check), and ` +
-          `let it tear the app down. NEVER run a blocking start command (\`npm start\`, ` +
-          `\`node server.js\`) directly — it will hang.\n\n` +
-          `Verification request:\n${input.instructions}\n\n` +
-          `Report CONCISELY: did it boot, was it ready, and exactly what the probes returned ` +
-          `(status codes / output). If it failed, include the server log tail.`;
+          `The Team Lead has delegated an AD-HOC task to you. Do it and report back concisely.\n\n` +
+          `TASK:\n${task}\n\n` +
+          (input.context ? `CONTEXT:\n${String(input.context)}\n\n` : '') +
+          `Guidance:\n` +
+          `- This is a one-off request, NOT a tracked deliverable. Investigate, verify, run, inspect, ` +
+          `or answer as needed and REPORT what you found — with concrete evidence (commands, output, ` +
+          `status codes, file/line refs).\n` +
+          `- To check a running app, use the \`probe_app\` tool (it boots in the background, probes, and ` +
+          `tears down) — never run a blocking start command (\`npm start\`, \`node server.js\`) directly.\n` +
+          `- Do NOT change deliverables or commit code here. If this actually requires editing/fixing ` +
+          `the codebase, do NOT do it — say so and recommend the Lead open a proper task so it goes ` +
+          `through the normal review + acceptance flow.\n` +
+          `- Finish with a clear, concise report of what you did and what you found.`;
         try {
           const report = await this.actor(spec).ask(prompt, threadId, null, this.project().repoDir);
           return { ok: true, specialist: spec.displayName, report };
@@ -4555,25 +4562,26 @@ class ProjectOrchestrator {
   }
 
   /**
-   * Pick a shell-capable specialist to run an ad-hoc verification. Prefers an
-   * explicitly named stream, then QA, then a backend/server role, else the first
-   * specialist whose tool allowlist permits shell (`bash`, or `null` = full access).
-   * Returns null when no specialist can run commands.
+   * Pick a specialist to run an ad-hoc delegated task. Prefers an explicitly named
+   * stream/name; otherwise prefers a shell-capable specialist (most ad-hoc asks need
+   * to run something), favouring QA then a backend/server role, and only falls back
+   * to a read-only specialist when no shell-capable one exists. Null when the project
+   * has no specialists at all.
    */
-  private pickVerifier(preferred: string | null): Agent | null {
-    const shellable = this.specialists().filter(
-      (s) => s.tools === null || s.tools.includes('bash'),
-    );
-    if (shellable.length === 0) return null;
+  private pickSpecialist(preferred: string | null): Agent | null {
+    const specialists = this.specialists();
+    if (specialists.length === 0) return null;
     const pref = preferred?.trim().toLowerCase();
     if (pref) {
-      const m = shellable.find((s) => s.name.toLowerCase() === pref);
+      const m = specialists.find((s) => s.name.toLowerCase() === pref);
       if (m) return m;
     }
+    const shellable = specialists.filter((s) => s.tools === null || s.tools.includes('bash'));
+    const pool = shellable.length ? shellable : specialists;
     return (
-      shellable.find((s) => /qa|test/.test(s.name.toLowerCase())) ??
-      shellable.find((s) => /back|api|server|engineer/.test(s.name.toLowerCase())) ??
-      shellable[0] ??
+      pool.find((s) => /qa|test/.test(s.name.toLowerCase())) ??
+      pool.find((s) => /back|api|server|engineer/.test(s.name.toLowerCase())) ??
+      pool[0] ??
       null
     );
   }

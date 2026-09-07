@@ -156,4 +156,11 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   them to boot-and-probe via `probe_app` in the main checkout, and RESOLVES with their report so the
   Lead answers the user directly. Wired in realAdapter (lead-only), orchestrator.appToolsFor +
   pickVerifier(), adapter.AgentAppTools, and the Lead prompt. Live: Lead→delegate_verification→QA
-  Engineer→probe_app→"booted and ready on localhost:3000"→Lead relayed. +1 toolPolicy test.
+  Engineer→probe_app→"booted and ready on localhost:3000"→Lead relayed.
+  → GENERALIZED: `delegate_verification` replaced by a single general `delegate` tool (task +
+  optional specialist/context) so the Lead can hand ANY ad-hoc, reporting-only work to the right
+  specialist — verify/boot-probe, run tests, investigate, inspect data/logs, explain — not just an
+  enumerated verb per need. Boundary enforced in the delegate prompt: deliverable/code changes are
+  refused and redirected to the normal task/epic + review flow (no unreviewed mutation via the ad-hoc
+  channel). pickVerifier→pickSpecialist. Live-proven twice: "is the app up?" (QA→probe_app) AND "run
+  the test suite" (QA→npm test, exit 0), both relayed by the Lead. +1 toolPolicy test.
