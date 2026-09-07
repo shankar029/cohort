@@ -1,6 +1,7 @@
 import type { AgentSession, AgentSessionConfig, CopilotAdapter, PermissionAsk } from './adapter.js';
 import { execFile } from 'node:child_process';
 import { deniedBuiltinTools } from './toolPolicy.js';
+import { probeApp } from '../appProbe.js';
 
 /**
  * Real adapter backed by @github/copilot-sdk. Each agent gets its OWN session
@@ -363,11 +364,74 @@ export class RealCopilotAdapter implements CopilotAdapter {
         ]
       : [];
 
+    // Boot-and-probe an app WITHOUT hanging the turn on a blocking start command.
+    // Only for agents that may run shell (builders/QA) - the Lead and read-only
+    // roles never execute. The server is always torn down before this returns.
+    const canShell = config.role === 'specialist' && (config.tools === null || config.tools.includes('bash'));
+    const probeTools = canShell
+      ? [
+          sdk.defineTool('probe_app', {
+            description:
+              'Boot an app/server in the BACKGROUND, wait until it is ready, run probe commands ' +
+              'against it, then stop it - all in one call. Use this to verify a running app instead ' +
+              'of executing a blocking start command yourself (which would hang your turn). The ' +
+              'process is ALWAYS torn down before this returns, so it never leaks. Prefer launching ' +
+              '`node <entryFile>` directly over `npm start`.',
+            parameters: {
+              type: 'object',
+              properties: {
+                startCommand: { type: 'string', description: 'e.g. `node server.js`' },
+                env: { type: 'object', description: 'Extra env vars, e.g. { "PORT": "3000" }' },
+                readyUrl: {
+                  type: 'string',
+                  description: 'HTTP URL polled until it responds (any status = listening).',
+                },
+                readyCommand: {
+                  type: 'string',
+                  description: 'Shell command polled until exit 0 (alternative readiness signal).',
+                },
+                probeCommands: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Commands run once ready, e.g. curl checks; each output captured.',
+                },
+                timeoutSeconds: { type: 'number' },
+              },
+              required: ['startCommand'],
+            },
+            skipPermission: true,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            handler: async (args: any) => {
+              config.onEvent({
+                kind: 'tool_call',
+                toolName: 'probe_app',
+                detail: { startCommand: String(args.startCommand) },
+              });
+              const res = await probeApp({
+                startCommand: String(args.startCommand),
+                cwd: config.workingDirectory,
+                env: args.env,
+                readyUrl: args.readyUrl,
+                readyCommand: args.readyCommand,
+                probeCommands: Array.isArray(args.probeCommands) ? args.probeCommands.map(String) : [],
+                timeoutSeconds: args.timeoutSeconds,
+              });
+              config.onEvent({
+                kind: 'tool_result',
+                toolName: 'probe_app',
+                detail: { booted: res.booted, ready: res.ready, probes: res.probes.length },
+              });
+              return res;
+            },
+          }),
+        ]
+      : [];
+
     const session = await client.createSession({
       model: config.model,
       workingDirectory: config.workingDirectory,
       streaming: true,
-      tools: [taskTool, waitTool, pollTool, ...appTools],
+      tools: [taskTool, waitTool, pollTool, ...probeTools, ...appTools],
       // The Copilot runtime ships built-in tools an agent can reach for on its own.
       // The `sql` session-store tool (a sandbox todos/history DB) is NOT our board:
       // an agent that grabs it hand-builds a phantom task list disconnected from

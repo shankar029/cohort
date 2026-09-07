@@ -262,7 +262,11 @@ export function buildSystemPrompt({
       `handing off. Never claim "done" on a red or unverified build - if you can't get it green, ` +
       `report the exact failure instead.\n` +
       `- **Report with evidence.** In your completion note, cite the exact files you changed and ` +
-      `the commands you ran with their pass/fail output.`
+      `the commands you ran with their pass/fail output.` +
+      `\n- **Verify a running app with \`probe_app\`.** To confirm a server/app works, use the ` +
+      `\`probe_app\` tool - it boots the app in the background, waits until ready, runs your probe ` +
+      `commands (e.g. \`curl\` checks), and tears it down. NEVER run a blocking start command ` +
+      `(\`npm start\`, \`node server.js\`) directly - it will hang your turn.`
     : canWrite
       ? `\n\n# Delivery standard\n` +
         `Produce COMPLETE, accurate deliverables the team can act on directly: cover every relevant ` +

@@ -21,7 +21,7 @@ export interface TestRunResult {
  * group leader and we kill the whole group via the negative pid — this reaps any
  * test-runner workers it spawned and can never signal an ancestor.
  */
-function killTree(child: import('node:child_process').ChildProcess): void {
+export function killProcessTree(child: import('node:child_process').ChildProcess): void {
   const pid = child.pid;
   if (pid === undefined) return;
   try {
@@ -238,13 +238,13 @@ function runResolved(
       resolve(r);
     };
     const timer = setTimeout(() => {
-      killTree(child);
+      killProcessTree(child);
       done({ ran: true, passed: false, command, output: out + '\n[timed out]' });
     }, timeoutMs);
     child.stdout?.on('data', cap);
     child.stderr?.on('data', cap);
     child.on('error', (err) => {
-      killTree(child);
+      killProcessTree(child);
       done({ ran: false, passed: false, command, output: out + '\n' + String(err) });
     });
     child.on('exit', (code) => {

@@ -128,3 +128,16 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   specialist and report back — always finish with a direct reply. **Live proof:** re-running the
   exact prompt, the Lead made **no** shell call, said it can't execute, inspected config via
   `view`, delegated to a verifier, and answered directly — turn completed normally.
+- [x] **H2. No reliable boot-and-probe primitive (blocking start hangs the turn).** ✅ FIXED.
+  When the Lead delegated "is the server up?" to a verifier, that specialist couldn't confirm it:
+  running a server start (`npm start`/`node server.js`) is a BLOCKING command that never returns,
+  so it hangs the tool call / turn (only the 15-min safety unwinds it), and agents had no way to
+  background-start → probe → tear down. **Fix (+3 unit tests, offline-proven):** new pure
+  `src/server/appProbe.ts` `probeApp()` — spawns the start command in the background, waits for
+  readiness (`readyUrl` polled until it answers, or `readyCommand` until exit 0), runs
+  `probeCommands` (e.g. `curl` checks) capturing output, then ALWAYS tears down the whole process
+  tree (reuses `qaGate.killProcessTree`). Exposed as a `probe_app` SDK tool registered ONLY for
+  shell-capable specialists (builders/QA) — the Lead and read-only roles never get it, preserving
+  H1. Prompt guidance added: use `probe_app`, never run a blocking start command directly.
+  *Live exercise (a specialist booting a delivered app) is the natural next validation — offline
+  boot+probe+teardown, early-exit, and timeout paths are unit-proven.*
