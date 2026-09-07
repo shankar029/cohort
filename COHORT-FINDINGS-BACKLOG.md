@@ -108,3 +108,23 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   `packages/web` from the root `workspaces` array; it passed gates (web has no failing tests)
   and merged. **Sev: Low.** *Fix idea:* flag/deny edits to shared root config (`package.json`
   workspaces, tsconfig) outside a task's declared scope, or gate on a broader build.
+
+## Group H — Interactive Team-Lead responsiveness (from live chat review, prj_5waL6eFxEi65)
+- [x] **H1. Lead dead-ends idle after a failed/rejected/blocking tool call.** ✅ FIXED. When the
+  user asked the Lead to "start the server / is it up?", the Lead reached for a shell tool, which
+  the permission gate (`handlePermission`: `lead && kind!=='read' → reject`) rejected — and the
+  SDK **ended the turn** with only the Lead's *preamble* as the answer. The Lead went idle and the
+  user had to ping again (2–3×) before it explained. **Root cause:** the catalog's read-only
+  allowlist for the Lead was never enforced at the SDK level (`realAdapter` only set
+  `excludedTools:['sql']`), so the runtime still *offered* the Lead every write/shell tool; the
+  prompt + permission gate said "no", the reject dead-ended the turn, and nothing re-drove it.
+  **Fix (3 parts, +9 unit tests, live-verified):**
+  (1) New pure `agents/toolPolicy.ts` `deniedBuiltinTools(role, tools)` — enforce the allowlist at
+  the SDK via `excludedTools`; the Lead + read-only roles lose write + the whole `<verb>_<shell>`
+  tool family (`read_powershell`, `list_powershell`, `write_bash`, …) while keeping
+  `view/grep/glob/read_file`. (2) `onPermissionRequest` now rejects **with `feedback`** so any
+  still-rejected tool feeds a reason back and the model can continue instead of stranding.
+  (3) Lead prompt: if asked to run/start/verify, either give the exact command or delegate to a
+  specialist and report back — always finish with a direct reply. **Live proof:** re-running the
+  exact prompt, the Lead made **no** shell call, said it can't execute, inspected config via
+  `view`, delegated to a verifier, and answered directly — turn completed normally.

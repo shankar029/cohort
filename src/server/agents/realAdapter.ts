@@ -1,5 +1,6 @@
 import type { AgentSession, AgentSessionConfig, CopilotAdapter, PermissionAsk } from './adapter.js';
 import { execFile } from 'node:child_process';
+import { deniedBuiltinTools } from './toolPolicy.js';
 
 /**
  * Real adapter backed by @github/copilot-sdk. Each agent gets its OWN session
@@ -372,7 +373,10 @@ export class RealCopilotAdapter implements CopilotAdapter {
       // an agent that grabs it hand-builds a phantom task list disconnected from
       // ateam and can rat-hole on FK errors. The board is materialized in code, so
       // no agent ever needs raw SQL — exclude it. (Bare name matches any source.)
-      excludedTools: ['sql'],
+      // Enforce the catalog's tool allowlist at the SDK level so an agent is never
+      // OFFERED a tool it can't use (e.g. the Lead + shell) — which previously
+      // dead-ended its turn on a permission rejection. See toolPolicy.ts.
+      excludedTools: deniedBuiltinTools(config.role, config.tools),
       skillDirectories: config.skillDirectories,
       systemMessage: { content: config.persona },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -384,7 +388,19 @@ export class RealCopilotAdapter implements CopilotAdapter {
           command: request?.fullCommandText,
         };
         const reply = await config.onPermission(ask);
-        return reply === 'approve' ? { kind: 'approve-once' } : { kind: 'reject' };
+        if (reply === 'approve') return { kind: 'approve-once' };
+        // Feed a reason back with the rejection instead of a bare reject, so the
+        // model can CONTINUE the turn and respond usefully rather than stranding
+        // idle. (Belt-and-suspenders for rejections toolPolicy doesn't pre-empt,
+        // e.g. a specialist trying to write outside its worktree.)
+        return {
+          kind: 'reject',
+          feedback:
+            `That action was blocked (not permitted for your role/workspace). Do NOT retry the ` +
+            `same tool. Instead respond in words: if you are the Team Lead, answer the user ` +
+            `directly or delegate this to the right specialist and have them report back; if you ` +
+            `are a specialist, keep all changes inside your assigned working directory.`,
+        };
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       onUserInputRequest: async (request: any) => {
