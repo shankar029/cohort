@@ -141,3 +141,12 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   H1. Prompt guidance added: use `probe_app`, never run a blocking start command directly.
   *Live exercise (a specialist booting a delivered app) is the natural next validation — offline
   boot+probe+teardown, early-exit, and timeout paths are unit-proven.*
+- [ ] **H3. Lead's interactive one-off delegation bypasses the real team (and probe_app).**
+  Discovered while live-testing H2: for an ad-hoc "verify this" request, the Lead delegates via
+  the SDK built-in `task` tool, which spawns an ISOLATED sub-agent that does NOT carry ateam's
+  custom tools (probe_app, board/chat tools) — so it reported "probe_app is not available" and the
+  real backend/QA specialist (who has the tool) was never engaged. probe_app IS reachable in the
+  normal delivery/QA path (real specialists in an epic clone), which is where boot-and-probe
+  matters most; only the interactive one-off path is affected. **Sev: Med.** *Fix ideas:* exclude
+  the built-in `task` tool for the Lead and give it a real "assign task to specialist" app-tool
+  for ad-hoc work; or make sub-agents inherit the session's custom tools.

@@ -381,7 +381,11 @@ export class RealCopilotAdapter implements CopilotAdapter {
               type: 'object',
               properties: {
                 startCommand: { type: 'string', description: 'e.g. `node server.js`' },
-                env: { type: 'object', description: 'Extra env vars, e.g. { "PORT": "3000" }' },
+                env: {
+                  type: 'object',
+                  additionalProperties: { type: 'string' },
+                  description: 'Extra env vars, e.g. { "PORT": "3000" }',
+                },
                 readyUrl: {
                   type: 'string',
                   description: 'HTTP URL polled until it responds (any status = listening).',
