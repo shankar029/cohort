@@ -48,6 +48,17 @@ export interface AgentAppTools {
   addReviewComment(input: { body: string; targetStream?: string | null }): { ok: boolean };
   writeNote(input: { content: string; workItemId?: string | null }): { ok: boolean };
   updatePlan(input: { content: string }): { ok: boolean };
+  /**
+   * Lead-only: hand an ad-hoc verification to a shell-capable specialist who boots
+   * and probes the app (via `probe_app`) and reports back. Resolves with the
+   * specialist's report so the Lead can answer the user directly.
+   */
+  delegateVerification(input: { instructions: string; specialistStream?: string | null }): Promise<{
+    ok: boolean;
+    specialist?: string;
+    report?: string;
+    error?: string;
+  }>;
   listBoard(): {
     items: Array<{
       id: string;

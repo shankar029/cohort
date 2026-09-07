@@ -56,6 +56,15 @@ export const SHELL_TOOLS = [
 export const ALWAYS_DENIED = ['sql'];
 
 /**
+ * The built-in `task` tool spawns an ISOLATED SDK sub-agent that does NOT carry
+ * ateam's custom tools (probe_app, the board/chat tools) and never touches the real
+ * board. If the Lead uses it to "delegate", the shadow sub-agent can't actually run
+ * anything ateam-specific and the real specialists are bypassed. The Lead delegates
+ * through the board / `delegate_verification` instead, so deny the shadow spawner.
+ */
+export const SUBAGENT_TOOLS = ['task'];
+
+/**
  * Built-in tools to exclude for an agent, derived from its role and catalog tool
  * allowlist (`null` = full access). The Lead and read-only specialists lose
  * write + shell; spec/doc authors (write, no bash) lose only shell; full builders
@@ -68,6 +77,7 @@ export function deniedBuiltinTools(role: 'lead' | 'specialist', tools: string[] 
   const canWrite = !isLead && (tools === null || tools.some((t) => t === 'write' || t === 'edit'));
   const canShell = !isLead && (tools === null || tools.includes('bash'));
   const denied = [...ALWAYS_DENIED];
+  if (isLead) denied.push(...SUBAGENT_TOOLS);
   if (!canShell) denied.push(...SHELL_TOOLS);
   if (!canWrite) denied.push(...WRITE_TOOLS);
   return denied;

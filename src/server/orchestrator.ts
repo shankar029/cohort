@@ -4522,7 +4522,60 @@ class ProjectOrchestrator {
             : null,
         })),
       }),
+      delegateVerification: async (input) => {
+        const spec = this.pickVerifier(input.specialistStream ?? null);
+        if (!spec) {
+          return { ok: false, error: 'No shell-capable specialist is available to verify.' };
+        }
+        const threadId = this.ensureMainThread().id;
+        this.emitEvent(
+          agent.id,
+          'system',
+          `Delegated verification to ${spec.displayName}`,
+          null,
+          null,
+        );
+        const prompt =
+          `The Team Lead has asked you to VERIFY a running app on their behalf and report back.\n\n` +
+          `Use the \`probe_app\` tool to boot the app in the BACKGROUND, wait until it is ready, ` +
+          `run the appropriate probe commands (e.g. \`curl\` the main endpoint / health check), and ` +
+          `let it tear the app down. NEVER run a blocking start command (\`npm start\`, ` +
+          `\`node server.js\`) directly — it will hang.\n\n` +
+          `Verification request:\n${input.instructions}\n\n` +
+          `Report CONCISELY: did it boot, was it ready, and exactly what the probes returned ` +
+          `(status codes / output). If it failed, include the server log tail.`;
+        try {
+          const report = await this.actor(spec).ask(prompt, threadId, null, this.project().repoDir);
+          return { ok: true, specialist: spec.displayName, report };
+        } catch (err) {
+          return { ok: false, specialist: spec.displayName, error: String(err) };
+        }
+      },
     };
+  }
+
+  /**
+   * Pick a shell-capable specialist to run an ad-hoc verification. Prefers an
+   * explicitly named stream, then QA, then a backend/server role, else the first
+   * specialist whose tool allowlist permits shell (`bash`, or `null` = full access).
+   * Returns null when no specialist can run commands.
+   */
+  private pickVerifier(preferred: string | null): Agent | null {
+    const shellable = this.specialists().filter(
+      (s) => s.tools === null || s.tools.includes('bash'),
+    );
+    if (shellable.length === 0) return null;
+    const pref = preferred?.trim().toLowerCase();
+    if (pref) {
+      const m = shellable.find((s) => s.name.toLowerCase() === pref);
+      if (m) return m;
+    }
+    return (
+      shellable.find((s) => /qa|test/.test(s.name.toLowerCase())) ??
+      shellable.find((s) => /back|api|server|engineer/.test(s.name.toLowerCase())) ??
+      shellable[0] ??
+      null
+    );
   }
 
   private moveItem(workItemId: string, status: WorkItem['status']): void {

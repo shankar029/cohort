@@ -51,6 +51,12 @@ describe('deniedBuiltinTools', () => {
     for (const t of WRITE_TOOLS) expect(denied).not.toContain(t);
   });
 
+  it('the Lead loses the built-in `task` sub-agent spawner; specialists keep it', () => {
+    expect(deniedBuiltinTools('lead', null)).toContain('task');
+    expect(deniedBuiltinTools('specialist', BUILDER)).not.toContain('task');
+    expect(deniedBuiltinTools('specialist', null)).not.toContain('task');
+  });
+
   it('a full builder (allowlist includes bash) loses nothing beyond sql', () => {
     expect(deniedBuiltinTools('specialist', BUILDER)).toEqual(['sql']);
   });
@@ -71,6 +77,8 @@ describe('deniedBuiltinTools', () => {
       'write_note',
       'update_plan',
       'list_board',
+      'delegate_verification',
+      'probe_app',
     ];
     const denied = deniedBuiltinTools('lead', null);
     for (const name of custom) expect(denied).not.toContain(name);

@@ -141,7 +141,7 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   H1. Prompt guidance added: use `probe_app`, never run a blocking start command directly.
   *Live exercise (a specialist booting a delivered app) is the natural next validation — offline
   boot+probe+teardown, early-exit, and timeout paths are unit-proven.*
-- [ ] **H3. Lead's interactive one-off delegation bypasses the real team (and probe_app).**
+- [x] **H3. Lead's interactive one-off delegation bypasses the real team (and probe_app).**
   Discovered while live-testing H2: for an ad-hoc "verify this" request, the Lead delegates via
   the SDK built-in `task` tool, which spawns an ISOLATED sub-agent that does NOT carry ateam's
   custom tools (probe_app, board/chat tools) — so it reported "probe_app is not available" and the
@@ -150,3 +150,10 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   matters most; only the interactive one-off path is affected. **Sev: Med.** *Fix ideas:* exclude
   the built-in `task` tool for the Lead and give it a real "assign task to specialist" app-tool
   for ad-hoc work; or make sub-agents inherit the session's custom tools.
+  ✅ FIXED (Fix A, live-proven). (1) toolPolicy excludes the built-in `task` sub-agent spawner for
+  the Lead (SUBAGENT_TOOLS), so it can no longer spin isolated helpers that bypass the team. (2) New
+  Lead-only `delegate_verification` app-tool: picks a shell-capable specialist (QA/backend), asks
+  them to boot-and-probe via `probe_app` in the main checkout, and RESOLVES with their report so the
+  Lead answers the user directly. Wired in realAdapter (lead-only), orchestrator.appToolsFor +
+  pickVerifier(), adapter.AgentAppTools, and the Lead prompt. Live: Lead→delegate_verification→QA
+  Engineer→probe_app→"booted and ready on localhost:3000"→Lead relayed. +1 toolPolicy test.

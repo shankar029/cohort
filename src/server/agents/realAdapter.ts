@@ -431,11 +431,61 @@ export class RealCopilotAdapter implements CopilotAdapter {
         ]
       : [];
 
+    // Lead-only: delegate an ad-hoc verification to a shell-capable specialist who
+    // boots-and-probes the app (probe_app) and reports back. Keeps the Lead itself
+    // non-executing while still letting it answer "is the app up?" end-to-end.
+    const leadTools =
+      config.role === 'lead' && app
+        ? [
+            sdk.defineTool('delegate_verification', {
+              description:
+                'Delegate a one-off VERIFICATION to a shell-capable specialist who will boot the ' +
+                'app, probe it (via probe_app), and report back. Use this when the user asks whether ' +
+                'the app runs / is up / works and you need to actually check it - you cannot run ' +
+                'commands yourself. Resolves with the specialist\u2019s report; relay it to the user.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  instructions: {
+                    type: 'string',
+                    description:
+                      'What to verify, in plain terms (e.g. "boot the API and curl /api/health").',
+                  },
+                  specialistStream: {
+                    type: 'string',
+                    description: 'Optional preferred specialist name/stream (e.g. "qa", "backend").',
+                  },
+                },
+                required: ['instructions'],
+              },
+              skipPermission: true,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              handler: async (args: any) => {
+                config.onEvent({
+                  kind: 'tool_call',
+                  toolName: 'delegate_verification',
+                  detail: { specialistStream: args.specialistStream },
+                });
+                const res = await app.delegateVerification({
+                  instructions: String(args.instructions ?? ''),
+                  specialistStream: args.specialistStream ?? null,
+                });
+                config.onEvent({
+                  kind: 'tool_result',
+                  toolName: 'delegate_verification',
+                  detail: { ok: res.ok, specialist: res.specialist },
+                });
+                return res;
+              },
+            }),
+          ]
+        : [];
+
     const session = await client.createSession({
       model: config.model,
       workingDirectory: config.workingDirectory,
       streaming: true,
-      tools: [taskTool, waitTool, pollTool, ...probeTools, ...appTools],
+      tools: [taskTool, waitTool, pollTool, ...probeTools, ...leadTools, ...appTools],
       // The Copilot runtime ships built-in tools an agent can reach for on its own.
       // The `sql` session-store tool (a sandbox todos/history DB) is NOT our board:
       // an agent that grabs it hand-builds a phantom task list disconnected from
