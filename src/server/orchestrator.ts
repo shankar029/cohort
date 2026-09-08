@@ -2566,6 +2566,38 @@ class ProjectOrchestrator {
     // (fresh Copilot session, clean slate) and re-drive the task. Only if it is
     // STILL empty after that restart do we park it and escalate for guidance.
     if (gate && !produced) {
+      // A FIX / remediation task (opened by a review comment or an acceptance/build
+      // gate - always titled "fix:" and priority high) that produces NO diff almost
+      // always means the objective is ALREADY satisfied on the branch, not that the
+      // agent failed. Burning a session restart + a user escalation on it is a false
+      // alarm (and exactly what happened when a truncated acceptance diff spawned a
+      // phantom "unmet criteria" fix). Complete it as an audited no-op and let the
+      // parent epic's gate re-adjudicate on the real tree - bounded by the epic
+      // remediation cap, which stays the true backstop against genuine misses.
+      const isFixTask =
+        item.parentId != null && item.priority === 'high' && /(^|\]\s*)fix:/i.test(item.title);
+      if (isFixTask) {
+        this.recordTaskReport(item, agent, [
+          {
+            id: 'produced',
+            status: 'skip',
+            detail: 'no change needed - objective already satisfied on the branch',
+          },
+        ]);
+        this.emitEvent(
+          agent.id,
+          'git',
+          `No change needed for "${item.title}" - already satisfied on the branch; completing as a no-op`,
+          null,
+          item.id,
+        );
+        this.clearTrouble(agent.id);
+        this.restartedForItem.delete(item.id);
+        this.setStatus(agent.id, 'idle');
+        this.moveItem(item.id, 'done');
+        this.maybeFinishEpic(item.parentId);
+        return;
+      }
       this.troubleSignal(agent.id);
       this.recordTaskReport(item, agent, [
         { id: 'produced', status: 'fail', detail: `no code after ${MAX_ATTEMPTS} attempts` },
@@ -3339,10 +3371,12 @@ class ProjectOrchestrator {
     if (this.deps.store.getWorkItem(epic.id)?.status !== 'review') this.moveItem(epic.id, 'review');
 
     let diff = '';
+    let fileStat = '';
     if (branch && wt) {
       try {
         const base = await this.deps.git.currentBranch(repoDir);
         diff = await this.deps.git.branchDiff(wt.path, base);
+        fileStat = await this.deps.git.branchFileStat(wt.path, base);
       } catch {
         /* ignore */
       }
@@ -3422,7 +3456,15 @@ class ProjectOrchestrator {
       `whatever the team happened to build):\n${(epic.description ?? '').slice(0, 2000)}\n\n` +
       constraintBlock +
       critBlock +
+      (fileStat
+        ? `Files delivered (COMPLETE list - the content diff below may be truncated, ` +
+          `this file list is not):\n${fileStat}\n\n`
+        : '') +
       `Diff:\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
+      `You are reviewing INSIDE the delivered working tree - if the content diff is ` +
+      `truncated, open the files listed above to see the full implementation before ` +
+      `judging. `
+      +
       `Check CONFORMANCE to the request FIRST, before any code-quality nits. File a ` +
       `BLOCKING comment for ANY deviation from what the user actually asked for - ` +
       `especially the request's HARD CONSTRAINTS: persistence model (e.g. in-memory vs ` +
@@ -4169,11 +4211,32 @@ class ProjectOrchestrator {
     const judge = this.findAgentByStream('qa') ?? this.findReviewer(this.lead());
     const thread = this.threadForWorkItem(epic);
     const numbered = criteria.map((c, i) => `${i + 1}. ${c.text}`).join('\n');
+    // COMPLETE file list (cheap, .ateam-excluded) so the judge can never falsely
+    // rule a whole subsystem "not delivered" just because the textual diff was
+    // truncated before it. The content diff below is best-effort context only.
+    let fileStat = '';
+    if (wt) {
+      try {
+        const base = await this.deps.git.currentBranch(this.project().repoDir);
+        fileStat = await this.deps.git.branchFileStat(wt.path, base);
+      } catch {
+        /* ignore */
+      }
+    }
     const prompt =
       `Judge each acceptance criterion for epic "${epic.title}" against the delivered work.\n\n` +
       `ORIGINAL REQUEST (source of truth):\n${(epic.description ?? '').slice(0, 2000)}\n\n` +
       `Acceptance criteria:\n${numbered}\n\n` +
+      (fileStat
+        ? `Files delivered (COMPLETE list - trust THIS over the diff for "was X built?"; ` +
+          `the diff below may be truncated, this list is not):\n${fileStat}\n\n`
+        : '') +
       `Diff (may be truncated):\n${diff.slice(0, 6000) || '(no textual diff)'}\n\n` +
+      `You are running INSIDE the delivered working tree. The content diff may be cut ` +
+      `off, so NEVER mark a criterion FAILED as "not delivered"/"missing" from the diff ` +
+      `alone - first OPEN the relevant files (they are in your working directory; use ` +
+      `view/grep) and confirm the code is genuinely absent or wrong. `
+      +
       `Reply with ONE line per criterion in the exact form "AC<n>: MET" or ` +
       `"AC<n>: FAILED - <short reason>". Judge whether the code ACTUALLY satisfies ` +
       `the criterion, not whether it was intended. A criterion that encodes a HARD ` +

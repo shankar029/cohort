@@ -100,3 +100,54 @@ describe('commit-aware work detection (empty-epic regression)', () => {
     expect(await svc.commitsAheadOfBase(taskDir)).toBe(1);
   });
 });
+
+/**
+ * Regression for the truncated-acceptance-diff false-fail: the acceptance/review
+ * judge was fed only the first ~6KB of a 100KB textual diff, whose alphabetically
+ * first entry was the large `.ateam/acceptance.mjs` harness - so the judge never
+ * saw `public/app.js`/`server.js` and falsely ruled whole subsystems "not
+ * delivered". `branchFileStat` gives the judge the COMPLETE file list (cheap,
+ * .ateam-excluded) so it can never go blind that way again.
+ */
+describe('branchFileStat (complete, .ateam-excluded delivery evidence)', () => {
+  it('lists delivered product files and EXCLUDES .ateam scaffolding', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-bfs-'));
+    cleanups.push(root);
+
+    const epicDir = path.join(root, 'epic');
+    fs.mkdirSync(epicDir, { recursive: true });
+    git(['init', '-q'], epicDir);
+    git(['checkout', '-q', '-b', 'ateam/epic-X'], epicDir);
+    fs.writeFileSync(path.join(epicDir, 'README.md'), '# seed\n');
+    git(['add', '-A'], epicDir);
+    git(['commit', '-q', '-m', 'init'], epicDir);
+
+    const taskDir = path.join(root, 'task');
+    git(['clone', '--no-hardlinks', '-q', epicDir, taskDir], root);
+    git(['checkout', '-q', '-b', 'ateam/task-Y'], taskDir);
+
+    // Real product files PLUS large .ateam scaffolding, all committed - mirroring
+    // the epic where the acceptance harness sorted first and ate the diff budget.
+    fs.writeFileSync(path.join(taskDir, 'server.js'), 'console.log("app");\n');
+    fs.mkdirSync(path.join(taskDir, 'public'), { recursive: true });
+    fs.writeFileSync(path.join(taskDir, 'public', 'app.js'), 'export const x = 1;\n');
+    fs.mkdirSync(path.join(taskDir, '.ateam', 'tasks'), { recursive: true });
+    fs.writeFileSync(path.join(taskDir, '.ateam', 'tasks', 'wi_1.md'), '# task card\n');
+    fs.writeFileSync(
+      path.join(taskDir, '.ateam', 'acceptance.mjs'),
+      '// '.padEnd(4000, 'x') + '\n',
+    );
+    git(['add', '-A'], taskDir);
+    git(['commit', '-q', '-m', 'feat: app'], taskDir);
+
+    const svc = new GitService(root);
+    const stat = await svc.branchFileStat(taskDir, 'ateam/epic-X');
+
+    // The judge would SEE the real deliverables...
+    expect(stat).toContain('server.js');
+    expect(stat).toContain('public/app.js');
+    // ...and NOT the .ateam scaffolding that used to dominate the truncated diff.
+    expect(stat).not.toContain('.ateam');
+    expect(stat).not.toContain('acceptance.mjs');
+  });
+});

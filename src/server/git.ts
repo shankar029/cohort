@@ -502,6 +502,28 @@ export class GitService {
   }
 
   /**
+   * Compact `--stat` file list of epic-branch work vs base, EXCLUDING `.ateam/`
+   * scaffolding. Cheap and COMPLETE - unlike the truncated textual diff, this
+   * always shows WHICH files were delivered, so an acceptance/review judge can
+   * never falsely conclude a whole subsystem is "not delivered" just because the
+   * content diff was cut off before it.
+   */
+  async branchFileStat(checkoutPath: string, base: string): Promise<string> {
+    const ref = base ? `origin/${base}` : 'origin/HEAD';
+    const args = (r: string) => [
+      'diff',
+      '--stat',
+      `${r}...HEAD`,
+      '--',
+      '.',
+      ':(exclude).ateam/**',
+    ];
+    let r = await this.run(args(ref), checkoutPath);
+    if (!r.ok) r = await this.run(args('origin/HEAD'), checkoutPath);
+    return r.ok ? r.stdout.trim() : '';
+  }
+
+  /**
    * Merge an epic clone's branch into the base branch of the main repo. The epic
    * branch is fetched from the clone into the main repo first, then merged
    * (--no-ff). Nothing is pushed to any remote.

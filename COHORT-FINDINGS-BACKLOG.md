@@ -164,3 +164,31 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   refused and redirected to the normal task/epic + review flow (no unreviewed mutation via the ad-hoc
   channel). pickVerifier→pickSpecialist. Live-proven twice: "is the app up?" (QA→probe_app) AND "run
   the test suite" (QA→npm test, exit 0), both relayed by the Lead. +1 toolPolicy test.
+
+## Group I — Acceptance-gate false-fail cascade (from live review, prj_5waL6eFxEi65 PFM epic)
+
+- [x] **I1. Acceptance judge goes blind on a truncated diff → phantom fix-task → produced:fail loop.**
+  Live symptom: UX Designer "implemented a task, the verification gate failed since it didn't merge
+  anything, and the Team Lead retried twice with the same issue." Root cause (proven on disk): the
+  epic's real diff was **102,383 chars**; `evaluateAcceptance` fed the QA judge only
+  `diff.slice(0, 6000)`, and the alphabetically-first file `.ateam/acceptance.mjs` (the probe
+  harness) spanned bytes 0–12,540 — so the judge's ENTIRE window was the first half of the harness.
+  `public/app.js` (42k), `server.js` (65k), `migrations/001_initial.sql` (41k) and every test were
+  truncated away, so the judge "correctly" reported *"no frontend/SQLite delivered"* → 1/12 met →
+  opened a phantom `fix: unmet acceptance criteria (11)`. The UX Designer audited, found everything
+  already implemented, produced no diff → `produced:fail` ×2 + session restart + escalation. **Sev:
+  High** (false escalation + wasted rounds + operator confusion; only user override forced the
+  correct merge). Aggravator: an agent committed the runtime `data/ledger.sqlite` (no `.gitignore`),
+  which also caused an `Integration failed: untracked working tree files would be overwritten`.
+  ✅ FIXED. (1) New pure `git.branchFileStat(checkoutPath, base)`: complete `--stat` file list with
+  `.ateam/**` excluded — cheap (~1KB here) and NOT truncated, so the judge always sees WHICH files
+  were delivered. (2) `evaluateAcceptance` now leads its prompt with that file list and instructs the
+  judge — which runs INSIDE the delivered tree — to OPEN files (view/grep) before ruling any
+  criterion "not delivered", never trusting the truncated diff alone. (3) Same file list + tree-
+  inspection guidance added to the reviewer/Architect prompt (identical `slice(0,6000)` blindness).
+  (4) Safety net: a `fix:`/high-priority remediation task that produces NO diff is completed as an
+  audited no-op ("already satisfied on the branch") and the epic gate re-adjudicates — bounded by the
+  epic remediation cap — instead of burning a restart + user escalation. Regular build tasks still
+  escalate (SEV-3 test green). +1 `branchFileStat` unit test (lists product files, excludes .ateam).
+  Suite 250 pass/1 skip. *Deferred (not done):* seeding a `.gitignore` for runtime artifacts
+  (`*.sqlite`, `data/`) — held pending user sign-off.
