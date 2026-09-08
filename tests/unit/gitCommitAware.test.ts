@@ -151,3 +151,51 @@ describe('branchFileStat (complete, .ateam-excluded delivery evidence)', () => {
     expect(stat).not.toContain('acceptance.mjs');
   });
 });
+
+/**
+ * Runtime-artifact hygiene: a FRESH project repo is seeded with a default
+ * .gitignore so agents can't commit sqlite DBs / node_modules / logs that block
+ * merges ("untracked working tree files would be overwritten") or dominate the
+ * acceptance/review diff. An EXISTING repo (or a pre-placed .gitignore) is never
+ * touched.
+ */
+describe('ensureRepo seeds a default .gitignore (greenfield only)', () => {
+  it('commits a .gitignore covering sqlite/node_modules in a fresh repo', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-ign-'));
+    cleanups.push(root);
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+
+    const svc = new GitService(root);
+    await svc.ensureRepo(repo);
+
+    // Committed (tracked), not just present.
+    const tracked = git(['ls-files'], repo).split('\n');
+    expect(tracked).toContain('.gitignore');
+    const body = fs.readFileSync(path.join(repo, '.gitignore'), 'utf8');
+    expect(body).toMatch(/\*\.sqlite/);
+    expect(body).toMatch(/node_modules\//);
+
+    // A runtime sqlite artifact is now ignored (won't get committed or block a merge).
+    fs.writeFileSync(path.join(repo, 'ledger.sqlite'), 'BINARYDB');
+    expect(git(['status', '--porcelain'], repo)).toBe('');
+  });
+
+  it('does NOT clobber a repo that already has commits/.gitignore', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-ign2-'));
+    cleanups.push(root);
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    git(['init', '-q'], repo);
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'custom-only/\n');
+    fs.writeFileSync(path.join(repo, 'README.md'), '# existing\n');
+    git(['add', '-A'], repo);
+    git(['commit', '-q', '-m', 'init'], repo);
+
+    const svc = new GitService(root);
+    await svc.ensureRepo(repo);
+
+    // The user's .gitignore is left exactly as-is.
+    expect(fs.readFileSync(path.join(repo, '.gitignore'), 'utf8')).toBe('custom-only/\n');
+  });
+});

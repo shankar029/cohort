@@ -4,6 +4,44 @@ import path from 'node:path';
 import { commitMessages, type CommitMessages, type CommitStyle } from './commitStyle.js';
 
 /**
+ * Default ignore rules seeded into a FRESH (empty) project repo so agents never
+ * commit runtime artifacts that block merges ("untracked working tree files
+ * would be overwritten") or pollute the acceptance/review diff. Deliberately
+ * conservative: dependencies, build output, and RUNTIME databases/logs that a
+ * migration or the app itself regenerates - never a project's source or seed
+ * data. Only applied when the repo has no commits AND no `.gitignore` yet, so an
+ * existing repo's rules are never touched.
+ */
+const DEFAULT_GITIGNORE = `# Seeded by ateam so runtime artifacts never get committed.
+# Dependencies / build output
+node_modules/
+dist/
+build/
+out/
+bin/
+obj/
+
+# Runtime databases (recreated by migrations/seeds - must not be committed)
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs, temp, coverage
+*.log
+*.tmp
+coverage/
+
+# Env & OS
+.env
+.env.local
+.DS_Store
+Thumbs.db
+`;
+
+/**
  * Thin wrapper over the git CLI. Isolates each epic in its OWN local clone
  * (a full checkout with its own `.git`), so agents working on different epics
  * never share a filesystem — and, critically, so the Copilot runtime resolves
@@ -74,6 +112,12 @@ export class GitService {
       if (status.stdout.trim().length === 0) {
         // Empty repo: seed a keep file so we have a base commit to branch from.
         fs.writeFileSync(path.join(dir, '.ateam-keep'), 'ateam workspace\n');
+        // ...and a default .gitignore so agents can't commit runtime artifacts
+        // (sqlite DBs, node_modules, logs) that would block merges or dominate
+        // the acceptance/review diff. Greenfield-only: an existing repo (HEAD
+        // present) or a pre-placed .gitignore is never touched.
+        const ignorePath = path.join(dir, '.gitignore');
+        if (!fs.existsSync(ignorePath)) fs.writeFileSync(ignorePath, DEFAULT_GITIGNORE);
       }
       await this.run(['add', '-A'], dir);
       await this.commit(dir, this.msg.snapshot());

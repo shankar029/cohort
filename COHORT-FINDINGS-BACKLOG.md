@@ -192,3 +192,23 @@ Groups A/B/D/E and F1a are shipped; F1b+C are the remaining set.
   escalate (SEV-3 test green). +1 `branchFileStat` unit test (lists product files, excludes .ateam).
   Suite 250 pass/1 skip. *Deferred (not done):* seeding a `.gitignore` for runtime artifacts
   (`*.sqlite`, `data/`) — held pending user sign-off.
+
+- [x] **I2. Runtime artifacts committed → merge blocks + diff pollution (root aggravator of I1).**
+  Agents ran the app/tests, which created `data/ledger.sqlite`; with no `.gitignore` it got committed
+  — causing `Integration failed: untracked working tree files would be overwritten` and bloating the
+  diff. ✅ FIXED. `ensureRepo` now seeds a conservative default `.gitignore` (node_modules, build
+  output, `*.sqlite*`/`*.db*`, logs, coverage, env, OS files) into the base commit of a FRESH repo
+  only — an existing repo or a pre-placed `.gitignore` is never touched. All epic clones inherit it,
+  so runtime DBs can't be committed. +2 unit tests (seeds+ignores sqlite in a fresh repo; does not
+  clobber an existing `.gitignore`). Live-corroborated: in the Ledger run the review gate caught a
+  committed `ledger.sqlite` and the team added a `.gitignore` — this makes that automatic for
+  greenfield. Suite 252 pass/1 skip.
+
+  **Live end-to-end verification of Group I (Ledger epic, prj_W0YSaCWO2_iA, greenfield full-stack):**
+  Same shape as the PFM failure (69KB diff, `.ateam/acceptance.mjs` sorts first). Deterministic proof
+  on the live epic branch: OLD `diff.slice(0,6000)` window = ONLY `.ateam/acceptance.mjs`; NEW
+  `branchFileStat` = full delivery list (server.js/public/*/tests). Behavioral: across 3 review rounds
+  the Architect filed accurate, file-specific comments (8→2→0) and the acceptance judge then returned
+  **12/12 MET accurately** → epic merged. No phantom fix-task, no produced:fail loop, no false
+  escalation — vs the old "1/12, no frontend delivered." (produced:fail no-op net not triggered live
+  — every fix-task made real changes — so it stays unit-proven only.)
