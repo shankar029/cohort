@@ -43,7 +43,7 @@ import type {
   UserInputAsk,
 } from './agents/adapter.js';
 import { buildSystemPrompt } from './agents/context.js';
-import { discoverSkills, skillDirectories } from './agents/skillScanner.js';
+import { discoverSkills, scopedDisabledSkills, skillDirectories } from './agents/skillScanner.js';
 import type { Cancel, SchedulerService } from './scheduler.js';
 import type { GitService } from './git.js';
 import type { SessionRecorder } from './sessionRecorder.js';
@@ -167,6 +167,10 @@ class AgentActor {
       project.repoDir,
       project.settings.extraSkillRoots,
     );
+    // Scope skills PER AGENT: keep the full discovery pool so selected names
+    // resolve, but disable every discovered skill this agent was not given, so
+    // an agent only follows the skills the user attached (opt-in; empty => none).
+    const disabledSkills = scopedDisabledSkills(skills, this.agent.skills);
     const persona = buildSystemPrompt({
       project,
       self: this.agent,
@@ -185,6 +189,7 @@ class AgentActor {
       skills: this.agent.skills,
       workingDirectory: cwd,
       skillDirectories: skillDirectories(skills),
+      disabledSkills,
       approvalMode: project.settings.approvalMode,
       scheduler: this.orch.deps.scheduler,
       appTools: this.orch.appToolsFor(this.agent),

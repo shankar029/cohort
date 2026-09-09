@@ -91,6 +91,14 @@ export interface AgentSessionConfig extends AgentSessionCallbacks {
   skills: string[];
   workingDirectory: string;
   skillDirectories: string[];
+  /**
+   * Skill names to DISABLE for this agent's session. We scope skills per agent by
+   * loading the full discovery pool via `skillDirectories` (so names resolve) and
+   * disabling every discovered skill the agent was NOT given. Empty `skills` =>
+   * everything disabled (opt-in). Name-granular, so skills that share a parent
+   * directory don't leak into an agent that didn't select them.
+   */
+  disabledSkills: string[];
   approvalMode: ApprovalMode;
   /** Timing capability backing the agent's `wait` / `poll` tools. */
   scheduler?: Scheduler;

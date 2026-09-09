@@ -30,6 +30,7 @@ describe.skipIf(!LIVE)('RealCopilotAdapter (live)', () => {
       skills: [],
       workingDirectory: repoDir,
       skillDirectories: [],
+      disabledSkills: [],
       approvalMode: 'auto-workspace',
       onEvent: (e: SessionEvent) => events.push(e),
       onPermission: async () => 'approve',

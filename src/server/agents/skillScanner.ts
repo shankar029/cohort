@@ -107,3 +107,17 @@ export function skillDirectories(skills: SkillInfo[]): string[] {
   for (const s of skills) dirs.add(path.dirname(s.path));
   return [...dirs];
 }
+
+/**
+ * Per-agent skill scoping. Given every discovered skill and the names a single
+ * agent was attached to, return the skill names to DISABLE for that agent's
+ * session (everything discovered that the agent did NOT select). Combined with a
+ * full `skillDirectories` pool this yields opt-in, name-granular scoping: an
+ * agent only follows its attached skills, and skills sharing a parent directory
+ * never leak into an agent that didn't select them. Empty selection => all
+ * discovered skills disabled.
+ */
+export function scopedDisabledSkills(all: SkillInfo[], selected: string[]): string[] {
+  const keep = new Set(selected);
+  return all.filter((s) => !keep.has(s.name)).map((s) => s.name);
+}

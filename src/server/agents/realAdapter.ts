@@ -505,6 +505,9 @@ export class RealCopilotAdapter implements CopilotAdapter {
       // dead-ended its turn on a permission rejection. See toolPolicy.ts.
       excludedTools: deniedBuiltinTools(config.role, config.tools),
       skillDirectories: config.skillDirectories,
+      // Per-agent scoping: disable every discovered skill this agent wasn't given
+      // so it only follows its attached skills (opt-in). See AgentSessionConfig.
+      disabledSkills: config.disabledSkills,
       systemMessage: { content: config.persona },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       onPermissionRequest: async (request: any): Promise<any> => {

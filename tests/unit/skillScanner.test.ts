@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSkillFrontmatter, discoverSkills } from '../../src/server/agents/skillScanner.js';
+import { parseSkillFrontmatter, discoverSkills, scopedDisabledSkills } from '../../src/server/agents/skillScanner.js';
+import type { SkillInfo } from '../../src/shared/index.js';
 
 describe('parseSkillFrontmatter', () => {
   it('parses name and description from YAML frontmatter', () => {
@@ -70,5 +71,37 @@ describe('discoverSkills', () => {
   it('ignores node_modules and returns [] when roots are empty', () => {
     writeSkill(home, 'node_modules/pkg', 'hidden', 'should be ignored');
     expect(discoverSkills([home], null)).toEqual([]);
+  });
+});
+
+describe('scopedDisabledSkills (per-agent scoping)', () => {
+  const skill = (name: string, dir: string): SkillInfo => ({
+    name,
+    description: '',
+    path: dir,
+    source: 'home',
+  });
+  const pool = [
+    skill('alpha', '/root/alpha'),
+    skill('beta', '/root/beta'),
+    // gamma shares a parent dir with alpha/beta - name-granular scoping must
+    // still isolate it so it never leaks into an agent that didn't pick it.
+    skill('gamma', '/root/gamma'),
+  ];
+
+  it('disables every discovered skill the agent did NOT select', () => {
+    expect(scopedDisabledSkills(pool, ['beta']).sort()).toEqual(['alpha', 'gamma']);
+  });
+
+  it('empty selection disables ALL discovered skills (opt-in)', () => {
+    expect(scopedDisabledSkills(pool, []).sort()).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
+  it('selecting everything disables nothing', () => {
+    expect(scopedDisabledSkills(pool, ['alpha', 'beta', 'gamma'])).toEqual([]);
+  });
+
+  it('ignores selected names that are not in the discovery pool', () => {
+    expect(scopedDisabledSkills(pool, ['beta', 'nonexistent']).sort()).toEqual(['alpha', 'gamma']);
   });
 });
