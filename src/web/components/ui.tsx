@@ -1,7 +1,8 @@
 import React from 'react';
 import { Clock, Coins } from 'lucide-react';
-import type { AgentStatus } from '@shared/index';
+import type { AgentStatus, SkillInfo } from '@shared/index';
 import { api } from '../api';
+import { partitionRecommended } from '../skills';
 import { useTheme, usePalette } from '../theme';
 import { formatDuration, formatTokens } from '../usage';
 
@@ -375,5 +376,101 @@ export function ModelSelect({
         </option>
       ))}
     </select>
+  );
+}
+
+/** One toggle pill for a skill. `rec` highlights it as recommended for the role. */
+function SkillPill({
+  skill,
+  selected,
+  rec,
+  onToggle,
+}: {
+  skill: SkillInfo;
+  selected: boolean;
+  rec?: boolean;
+  onToggle: (name: string) => void;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`rounded-full border px-2 py-1 text-xs ${
+        selected
+          ? 'border-accent-500 bg-accent-500/20 text-accent-200'
+          : rec
+            ? 'border-accent-500/40 text-slate-300'
+            : 'border-surface-border text-slate-400'
+      }`}
+      title={`${skill.description || skill.name} (${skill.source})`}
+      data-testid={`skill-${skill.name}`}
+      aria-pressed={selected}
+      onClick={() => onToggle(skill.name)}
+    >
+      {skill.name}
+      <span className="ml-1 text-[10px] text-slate-500">{skill.source}</span>
+    </button>
+  );
+}
+
+/**
+ * Reusable skill selector. Surfaces skills recommended for the agent's role
+ * first (recommend, don't restrict) while keeping every discovered skill
+ * selectable. Pass `recommended` (skill names) to enable the grouping; omit it
+ * for a flat list (e.g. custom agents, which can pick anything).
+ */
+export function SkillPicker({
+  skills,
+  selected,
+  recommended = [],
+  onToggle,
+}: {
+  skills: SkillInfo[];
+  selected: string[];
+  recommended?: string[];
+  onToggle: (name: string) => void;
+}): React.JSX.Element {
+  const sel = new Set(selected);
+  const rec = new Set(recommended);
+  const groups = partitionRecommended(skills, recommended);
+
+  if (skills.length === 0) {
+    return <p className="text-xs text-slate-500">No skills discovered.</p>;
+  }
+
+  return (
+    <div className="space-y-2" data-testid="skill-picker">
+      {groups.recommended.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Recommended for this role
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {groups.recommended.map((s) => (
+              <SkillPill key={s.path} skill={s} selected={sel.has(s.name)} rec onToggle={onToggle} />
+            ))}
+          </div>
+        </div>
+      )}
+      {groups.others.length > 0 && (
+        <div className="space-y-1">
+          {groups.recommended.length > 0 && (
+            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              Other skills
+            </p>
+          )}
+          <div className="flex max-h-40 flex-wrap gap-2 overflow-auto">
+            {groups.others.map((s) => (
+              <SkillPill
+                key={s.path}
+                skill={s}
+                selected={sel.has(s.name)}
+                rec={rec.has(s.name)}
+                onToggle={onToggle}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

@@ -7,6 +7,7 @@ import {
   Avatar,
   EmptyState,
   ModelSelect,
+  SkillPicker,
   StatusPill,
   UsageChip,
   agentAvatar,
@@ -403,6 +404,7 @@ function AgentEditor({
   const [model, setModel] = useState(agent.model);
   const [selectedSkills, setSelectedSkills] = useState<string[]>(agent.skills);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [recommended, setRecommended] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -411,6 +413,16 @@ function AgentEditor({
       .then((r) => setSkills(r.skills))
       .catch(() => undefined);
   }, [projectId]);
+
+  // Recommended skills follow the catalog persona this agent was created from
+  // (custom agents have no catalogId -> flat list, pick anything).
+  useEffect(() => {
+    if (!agent.catalogId) return;
+    api
+      .catalog()
+      .then((r) => setRecommended(r.agents.find((c) => c.id === agent.catalogId)?.suggestedSkills ?? []))
+      .catch(() => undefined);
+  }, [agent.catalogId]);
 
   const toggleSkill = (name: string): void =>
     setSelectedSkills((s) => (s.includes(name) ? s.filter((x) => x !== name) : [...s, name]));
@@ -483,27 +495,12 @@ function AgentEditor({
       </div>
       <div>
         <span className="label">Skills to preload ({skills.length} discovered)</span>
-        {skills.length === 0 ? (
-          <p className="text-xs text-slate-500">No skills discovered.</p>
-        ) : (
-          <div className="flex max-h-40 flex-wrap gap-2 overflow-auto">
-            {skills.map((s) => (
-              <button
-                type="button"
-                key={s.path}
-                className={`rounded-full border px-2 py-1 text-xs ${
-                  selectedSkills.includes(s.name)
-                    ? 'border-accent-500 bg-accent-500/20 text-accent-200'
-                    : 'border-surface-border text-slate-400'
-                }`}
-                title={`${s.description} (${s.source})`}
-                onClick={() => toggleSkill(s.name)}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-        )}
+        <SkillPicker
+          skills={skills}
+          selected={selectedSkills}
+          recommended={recommended}
+          onToggle={toggleSkill}
+        />
       </div>
       <div className="flex gap-2">
         <button type="submit" className="btn-primary" disabled={saving} data-testid="save-agent">

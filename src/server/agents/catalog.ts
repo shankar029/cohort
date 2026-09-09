@@ -55,7 +55,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: [...READONLY, 'write'],
     emoji: '🎨',
     color: '#ec4899',
-    suggestedSkills: [],
+    suggestedSkills: ['accessibility', 'design-system'],
   },
   {
     id: 'frontend-engineer',
@@ -68,7 +68,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: BUILDER,
     emoji: '🖥️',
     color: '#3b82f6',
-    suggestedSkills: [],
+    suggestedSkills: ['accessibility', 'design-system'],
   },
   {
     id: 'backend-engineer',
@@ -80,7 +80,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: BUILDER,
     emoji: '⚙️',
     color: '#10b981',
-    suggestedSkills: [],
+    suggestedSkills: ['api-design', 'security'],
   },
   {
     id: 'qa-engineer',
@@ -93,7 +93,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: BUILDER,
     emoji: '🧪',
     color: '#eab308',
-    suggestedSkills: [],
+    suggestedSkills: ['testing', 'test-strategy'],
   },
   {
     id: 'devops-engineer',
@@ -105,7 +105,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: BUILDER,
     emoji: '🚀',
     color: '#06b6d4',
-    suggestedSkills: [],
+    suggestedSkills: ['ci-cd', 'docker'],
   },
   {
     id: 'docs-writer',
@@ -117,7 +117,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: [...READONLY, 'write', 'edit'],
     emoji: '📝',
     color: '#7c3aed',
-    suggestedSkills: [],
+    suggestedSkills: ['technical-writing'],
   },
   {
     id: 'researcher',
@@ -141,7 +141,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: READONLY,
     emoji: '🔬',
     color: '#f97316',
-    suggestedSkills: [],
+    suggestedSkills: ['code-review', 'security'],
   },
   {
     id: 'security-auditor',
@@ -154,7 +154,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: READONLY,
     emoji: '🛡️',
     color: '#ef4444',
-    suggestedSkills: [],
+    suggestedSkills: ['security', 'owasp'],
   },
   {
     id: 'data-engineer',
@@ -166,7 +166,7 @@ export const AGENT_CATALOG: CatalogAgent[] = [
     tools: BUILDER,
     emoji: '🗄️',
     color: '#6366f1',
-    suggestedSkills: [],
+    suggestedSkills: ['database-design', 'sql'],
   },
 ];
 

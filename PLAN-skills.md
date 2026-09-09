@@ -42,9 +42,15 @@ enforcement, capability checks, and observability to keep runs predictable.
   names as disabled; selected stays enabled. No schema change. ✅ 2026-09-07 — extracted pure
   `scopedDisabledSkills()` helper; +4 unit tests; suite 256 pass/1 skip; tsc+lint clean; live
   server healthy after hot-reload.
-- [ ] 2. **Phase 2 — curate + catalog UI.** Populate `suggestedSkills` per role; add a
+- [x] 2. **Phase 2 — curate + catalog UI.** Populate `suggestedSkills` per role; add a
   recommended-skills selector when adding a catalog agent (pre-check present suggested, "show all"
-  for the rest); allow editing skills on an existing agent (PATCH already supports it).
+  for the rest); allow editing skills on an existing agent (PATCH already supports it). ✅ 2026-09-07
+  — curated `suggestedSkills` for 9 roles (applied only if a skill of that name is present); catalog
+  "Add" now auto-attaches recommended-present skills + shows a "Recommends: …" hint (one-click add
+  preserved for e2e); shared recommended-aware `SkillPicker` (recommend, don't restrict) reused by
+  the custom form + agent editor; editor derives recommendations from the agent's catalog persona.
+  Pure `partitionRecommended`/`recommendedPresent` helpers + 5 unit tests. Suite 261 pass/1 skip;
+  tsc+lint clean; vite build clean. (Edit-skills-on-existing-agent already existed.)
 - [ ] 3. **Phase 3 — capability validation.** Shared helper + UI warning when a chosen skill needs
   tools the agent's `toolPolicy` allowlist lacks (the combo that actually breaks a run). Optional
   relevance sort (skill-description vs persona keywords) — steering only.

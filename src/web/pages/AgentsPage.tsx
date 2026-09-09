@@ -3,7 +3,16 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { SkillInfo } from '@shared/index';
 import { api, type CatalogAgentDTOShape } from '../api';
 import { useApp, useBundle } from '../state';
-import { Avatar, Banner, ModelSelect, StatusPill, UsageChip, agentAvatar } from '../components/ui';
+import {
+  Avatar,
+  Banner,
+  ModelSelect,
+  SkillPicker,
+  StatusPill,
+  UsageChip,
+  agentAvatar,
+} from '../components/ui';
+import { recommendedPresent } from '../skills';
 import { usageForAgent } from '../usage';
 
 export function AgentsPage(): React.JSX.Element {
@@ -237,12 +246,18 @@ function AddAgentDrawer({
               </p>
               {catalog.map((c) => {
                 const added = present.has(c.id);
+                const recPresent = recommendedPresent(c.suggestedSkills, skills);
                 return (
                   <div key={c.id} className="card flex items-center gap-3 p-3">
                     <Avatar emoji={c.emoji} color={c.color} src={agentAvatar(c.id)} />
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-slate-100">{c.displayName}</p>
                       <p className="text-xs text-slate-500">{c.description}</p>
+                      {recPresent.length > 0 && (
+                        <p className="mt-0.5 text-[11px] text-accent-300/80">
+                          Recommends: {recPresent.join(', ')}
+                        </p>
+                      )}
                     </div>
                     {added ? (
                       <span
@@ -255,7 +270,7 @@ function AddAgentDrawer({
                       <button
                         className="btn-primary"
                         data-testid={`add-catalog-${c.id}`}
-                        onClick={() => void add({ catalogId: c.id, model })}
+                        onClick={() => void add({ catalogId: c.id, model, skills: recPresent })}
                       >
                         Add
                       </button>
@@ -345,24 +360,7 @@ function CustomAgentForm({
             No skills found in your home directory or this project.
           </p>
         ) : (
-          <div className="flex max-h-40 flex-wrap gap-2 overflow-auto">
-            {skills.map((s) => (
-              <button
-                type="button"
-                key={s.path}
-                className={`rounded-full border px-2 py-1 text-xs ${
-                  selectedSkills.includes(s.name)
-                    ? 'border-blue-500 bg-blue-500/20 text-blue-200'
-                    : 'border-surface-border text-slate-400'
-                }`}
-                title={`${s.description} (${s.source})`}
-                onClick={() => toggleSkill(s.name)}
-              >
-                {s.name}
-                <span className="ml-1 text-[10px] text-slate-500">{s.source}</span>
-              </button>
-            ))}
-          </div>
+          <SkillPicker skills={skills} selected={selectedSkills} onToggle={toggleSkill} />
         )}
       </div>
       <button type="submit" className="btn-primary w-full" data-testid="custom-submit">
