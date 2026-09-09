@@ -4,7 +4,7 @@
 given (curated defaults for catalog personas, free choice for custom agents), with the
 enforcement, capability checks, and observability to keep runs predictable.
 
-**Status:** in progress
+**Status:** Phases 1–2 shipped & pushed; Phase 3 skipped; Phases 4–5 deferred.
 
 ## Key findings (grounded in code + Copilot SDK types)
 - Skill plumbing already exists: `Agent.skills: string[]`, `skillScanner.discoverSkills()`,
@@ -51,10 +51,11 @@ enforcement, capability checks, and observability to keep runs predictable.
   the custom form + agent editor; editor derives recommendations from the agent's catalog persona.
   Pure `partitionRecommended`/`recommendedPresent` helpers + 5 unit tests. Suite 261 pass/1 skip;
   tsc+lint clean; vite build clean. (Edit-skills-on-existing-agent already existed.)
-- [ ] 3. **Phase 3 — capability validation.** Shared helper + UI warning when a chosen skill needs
-  tools the agent's `toolPolicy` allowlist lacks (the combo that actually breaks a run). Optional
-  relevance sort (skill-description vs persona keywords) — steering only.
-- [ ] 4. **Phase 4 — observability.** Emit a skill-enabled/invoked event so runs stay auditable.
+- [-] 3. **Phase 3 — capability validation.** SKIPPED 2026-09-07 — real `SKILL.md` files declare
+  only `name`/`description` (no `allowed-tools`), so a skill-vs-tools warning would essentially
+  never fire today. Revisit if/when skills adopt tool declarations.
+- [ ] 4. **Phase 4 (deferred) — observability.** Emit a skill-enabled/invoked event so runs stay
+  auditable.
 - [ ] 5. **Phase 5 (deferred) — always-on eager injection.** Restructure agent sessions to
   `customAgents` with per-agent `skills` for guaranteed "always follow." Only if Phase 1's
   on-demand model is insufficient.
