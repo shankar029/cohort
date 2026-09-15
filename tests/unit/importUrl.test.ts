@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isGitUrl, createProjectSchema } from '../../src/shared/api.js';
-import { deriveRepoName } from '../../src/server/services.js';
+import { deriveRepoName, summarizeCloneError } from '../../src/server/services.js';
 
 describe('isGitUrl', () => {
   const accepted = [
@@ -40,6 +40,7 @@ describe('deriveRepoName', () => {
     ['git@github.com:owner/Cool_Repo.git', 'Cool_Repo'],
     ['ssh://git@host/a/b/c.git', 'c'],
     ['file:///tmp/some/fixture-repo', 'fixture-repo'],
+    ['https://github.com/owner/repo.git/', 'repo'], // trailing slash after .git
     ['https://github.com/owner/weird name!.git', 'weird-name'], // sanitized, trailing dashes trimmed
   ];
   for (const [url, expected] of cases) {
@@ -90,5 +91,33 @@ describe('createProjectSchema back-compat + discrimination', () => {
       repoUrl: 'https://github.com/owner/repo.git',
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('summarizeCloneError', () => {
+  it('maps an auth/credential failure to a private-repo message', () => {
+    expect(summarizeCloneError('fatal: could not read Username for https://github.com')).toMatch(
+      /private or requires authentication/i,
+    );
+    expect(summarizeCloneError('remote: Authentication failed')).toMatch(/authentication/i);
+    expect(summarizeCloneError('fatal: could not read Password: terminal prompts disabled')).toMatch(
+      /private or requires authentication/i,
+    );
+  });
+
+  it('maps a not-found failure to a check-the-URL message', () => {
+    expect(summarizeCloneError("remote: Repository not found.")).toMatch(/not found/i);
+    expect(summarizeCloneError('fatal: repository does not exist')).toMatch(/not found/i);
+  });
+
+  it('maps a network failure to a reachability message', () => {
+    expect(summarizeCloneError('fatal: unable to access: Could not resolve host: github.com')).toMatch(
+      /could not reach the remote/i,
+    );
+  });
+
+  it('falls back to the last non-empty git line, and to a generic message when empty', () => {
+    expect(summarizeCloneError('line one\nfatal: something odd\n')).toBe('Clone failed: fatal: something odd');
+    expect(summarizeCloneError('   ')).toBe('Clone failed');
   });
 });

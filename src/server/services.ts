@@ -73,7 +73,7 @@ export function createProjectWithLead(
  * usable remains (caller treats that as invalid).
  */
 export function deriveRepoName(url: string): string {
-  const trimmed = (url ?? '').trim().replace(/\.git$/i, '').replace(/[/\\]+$/, '');
+  const trimmed = (url ?? '').trim().replace(/[/\\]+$/, '').replace(/\.git$/i, '').replace(/[/\\]+$/, '');
   const segment = trimmed.split(/[/:]/).filter(Boolean).pop() ?? '';
   return segment.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -132,7 +132,7 @@ export class ProjectImportError extends Error {
 }
 
 /** Reduce raw `git clone` stderr to a short, user-actionable sentence. */
-function summarizeCloneError(stderr: string): string {
+export function summarizeCloneError(stderr: string): string {
   const text = (stderr || '').trim();
   if (!text) return 'Clone failed';
   if (/could not read Username|Authentication failed|terminal prompts disabled/i.test(text)) {

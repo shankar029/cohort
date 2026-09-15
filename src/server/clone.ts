@@ -27,7 +27,7 @@ export async function cloneRepoToDir(
   return new Promise((resolve) => {
     execFile(
       'git',
-      ['clone', url, name],
+      ['clone', '--', url, name],
       {
         cwd: parent,
         windowsHide: true,
