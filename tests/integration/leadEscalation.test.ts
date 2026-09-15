@@ -86,12 +86,24 @@ describe('@mention wakes the Lead to take over (Item 2)', () => {
     );
     const noCodeQId = q.type === 'question.updated' ? q.question.id : '';
     expect(noCodeQId).toBeTruthy();
+    const blockedItem = ctx.store
+      .listWorkItems(projectId)
+      .find((w) => w.kind === 'task' && (w.description ?? '').includes('lead-decision'));
+    const sameAgentId = blockedItem?.assigneeAgentId ?? null;
 
-    // An UNRELATED escalation the take-over must never answer (different choices).
+    // Two UNRELATED escalations the take-over must never answer: one with no
+    // agent, and one owned by the SAME agent as the no-code blocker (the exact
+    // hazard the noCodeQuestions map guards against — B1).
     const unrelated = ctx.store.createQuestion({
       projectId,
       agentId: null,
       question: 'Epic review budget exhausted — keep working or merge anyway?',
+      choices: ['Keep working', 'Merge anyway'],
+    });
+    const unrelatedSameAgent = ctx.store.createQuestion({
+      projectId,
+      agentId: sameAgentId,
+      question: 'Integration conflict — keep working or merge anyway?',
       choices: ['Keep working', 'Merge anyway'],
     });
 
@@ -104,8 +116,13 @@ describe('@mention wakes the Lead to take over (Item 2)', () => {
       15000,
     );
 
-    // The unrelated escalation is untouched (scoping — B1).
+    // The unrelated escalations are untouched (scoping — B1), including the one
+    // owned by the same agent as the no-code blocker.
     const stillPending = ctx.store.listQuestions(projectId).find((x) => x.id === unrelated.id);
     expect(stillPending?.status).toBe('pending');
+    const sameAgentStill = ctx.store
+      .listQuestions(projectId)
+      .find((x) => x.id === unrelatedSameAgent.id);
+    expect(sameAgentStill?.status).toBe('pending');
   });
 });
