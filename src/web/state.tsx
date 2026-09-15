@@ -474,7 +474,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       refreshProjects,
       ensureBundle,
       createProject: async (input) => {
-        const { project } = await api.createProject(input);
+        const { project } = await api.createProject({ ...input, source: 'local' });
         dispatch({ type: 'UPSERT_PROJECT', project });
         return project;
       },

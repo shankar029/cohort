@@ -1,0 +1,295 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design — Project create + GitHub import</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="design.html" data-slug="project-create-import"></script>
+
+<h1>Design — Project create + GitHub import</h1>
+<p class="s">Cohort — Fastify server + React web, TypeScript, better-sqlite3. Grounded in
+<code>research.md</code> (commit <code>8776239</code>), <code>clarifications.md</code>, <code>traceability.md</code>.</p>
+
+<section>
+  <h2>1. Problem &amp; scope</h2>
+  <ul>
+    <li><strong>AC1</strong> — Create a project from an existing local repo directory. <em>Already implemented</em>; this design only notes how it is regression-guarded.</li>
+    <li><strong>AC2</strong> — Import a project by GitHub URL: clone the repo locally, then create a project from the clone.</li>
+    <li><strong>AC2.1</strong> — Reject invalid/malformed URLs with a clear, user-visible error.</li>
+    <li><strong>AC2.2</strong> — Clone failure (bad repo, auth required, network) surfaces a clear error, no hang, no partial project.</li>
+    <li><strong>AC2.3</strong> — New Project modal lets the user choose <em>import-by-URL</em> vs <em>create-local</em>.</li>
+  </ul>
+  <p><strong>Out of scope:</strong> storing tokens/credentials; SSH-key management; host allow-listing; background/streamed clone progress; editing a project's remote after creation; non-git sources.</p>
+  <p class="assumption">A1 (Q1): a URL clone lands at <code>&lt;parentDir&gt;/&lt;repoName&gt;</code> where the user picks a <em>parent</em> directory (reusing the existing folder picker) and <code>repoName</code> is derived from the URL; the target subdir must not already exist.</p>
+  <p class="assumption">A2 (Q2): v1 supports public HTTPS clone and relies on the ambient git credential helper for private repos; <code>GIT_TERMINAL_PROMPT=0</code> forces fail-fast (no hang). No token is stored.</p>
+  <p class="assumption">A3 (Q3): accept well-formed <code>https://…(.git)</code> and <code>git@host:…</code> / <code>ssh://</code> forms; trim; reject empty/malformed. Validation is for UX correctness, not a security boundary (local single-user app).</p>
+</section>
+
+<section>
+  <h2>2. Program design</h2>
+  <svg viewBox="0 0 720 250" role="img" aria-label="Module diagram for create + import">
+    <defs>
+      <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z"/>
+      </marker>
+    </defs>
+    <rect class="b" x="10" y="20" width="140" height="46" rx="5"/>
+    <text class="t" x="80" y="40">CreateProjectModal</text>
+    <text class="s" x="80" y="56">web · tabs local/import</text>
+
+    <rect class="b" x="10" y="110" width="140" height="46" rx="5"/>
+    <text class="t" x="80" y="130">web/api.ts</text>
+    <text class="s" x="80" y="146">createProject()</text>
+
+    <rect class="b" x="200" y="110" width="150" height="46" rx="5"/>
+    <text class="t" x="275" y="130">POST /api/projects</text>
+    <text class="s" x="275" y="146">app.ts · branch on source</text>
+
+    <rect class="b" x="200" y="20" width="150" height="46" rx="5"/>
+    <text class="t" x="275" y="40">createProjectSchema</text>
+    <text class="s" x="275" y="56">shared/api.ts · union</text>
+
+    <rect class="b" x="400" y="20" width="150" height="46" rx="5"/>
+    <text class="t" x="475" y="37">importProjectFromUrl</text>
+    <text class="s" x="475" y="53">services.ts (new)</text>
+
+    <rect class="b" x="400" y="110" width="150" height="46" rx="5"/>
+    <text class="t" x="475" y="127">createProjectWithLead</text>
+    <text class="s" x="475" y="143">services.ts (reused)</text>
+
+    <rect class="b" x="590" y="110" width="120" height="46" rx="5"/>
+    <text class="t" x="650" y="130">clone.ts</text>
+    <text class="s" x="650" y="146">cloneRepoToDir() (new)</text>
+
+    <line class="a" x1="80" y1="66" x2="80" y2="110" marker-end="url(#ar)"/>
+    <line class="a" x1="150" y1="133" x2="200" y2="133" marker-end="url(#ar)"/>
+    <line class="a" x1="275" y1="110" x2="275" y2="66" marker-end="url(#ar)"/>
+    <line class="a" x1="350" y1="120" x2="400" y2="120" marker-end="url(#ar)"/>
+    <line class="a" x1="475" y1="66" x2="475" y2="110" marker-end="url(#ar)"/>
+    <line class="a" x1="475" y1="43" x2="590" y2="120" marker-end="url(#ar)"/>
+  </svg>
+
+  <table>
+    <thead><tr><th>Type</th><th>Responsibility</th><th>Public API (signatures)</th><th>Collaborators</th><th>Why (AC)</th><th>Principle</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>createProjectSchema</code> (shared/api.ts)</td>
+        <td>Validate request; discriminate local vs import; validate URL shape</td>
+        <td><code>z.discriminatedUnion('source', [localSchema, importSchema])</code>; <code>type CreateProjectInput</code></td>
+        <td>route, web/api.ts, state.tsx, modal</td>
+        <td>AC2.1, AC2.3</td>
+        <td>Single source of truth; parse at boundary</td>
+      </tr>
+      <tr>
+        <td><code>cloneRepoToDir</code> (new file <code>src/server/clone.ts</code>, standalone function)</td>
+        <td>Run <code>git clone &lt;url&gt; &lt;name&gt;</code> with cwd=parent, <code>GIT_TERMINAL_PROMPT=0</code>; detect non-zero; no hang</td>
+        <td><code>cloneRepoToDir(url: string, parentDir: string, name: string): Promise&lt;{ ok: boolean; path: string; stderr: string }&gt;</code></td>
+        <td>node <code>execFile</code> (its own thin wrapper)</td>
+        <td>AC2, AC2.2</td>
+        <td>SRP: kept OFF <code>GitService</code> (worktree-scoped); no instance needed in the route (fixes review #1/#2)</td>
+      </tr>
+      <tr>
+        <td><code>importProjectFromUrl</code> (services.ts, new)</td>
+        <td>Derive name, compute+guard target, clone, build a name-normalized local input, then reuse lead-creation</td>
+        <td><code>importProjectFromUrl(store, config, input: ImportProjectInput): Promise&lt;Project&gt;</code></td>
+        <td><code>deriveRepoName</code>, <code>cloneRepoToDir</code>, <code>createProjectWithLead</code></td>
+        <td>AC2, AC2.2</td>
+        <td>Compose, don't duplicate; no <code>GitService</code> dependency</td>
+      </tr>
+      <tr>
+        <td><code>deriveRepoName</code> (services.ts, new helper)</td>
+        <td>Extract repo name from URL; strip <code>.git</code>; sanitize</td>
+        <td><code>deriveRepoName(url: string): string</code></td>
+        <td>—</td>
+        <td>AC2, AC2.1</td>
+        <td>Pure function; testable</td>
+      </tr>
+      <tr>
+        <td><code>POST /api/projects</code> (app.ts)</td>
+        <td>Parse, branch on <code>source</code>, map failures to <code>HttpError</code></td>
+        <td>(existing route; branch added)</td>
+        <td>schema, both services, <code>HttpError</code>, <code>setErrorHandler</code></td>
+        <td>AC1, AC2, AC2.2</td>
+        <td>One entry point; errors as data</td>
+      </tr>
+      <tr>
+        <td><code>validateRepoDir</code> + <code>createProjectWithLead</code> (services.ts)</td>
+        <td>Existing create path (local dir → project + Team Lead + main thread)</td>
+        <td>(unchanged)</td>
+        <td>store</td>
+        <td>AC1</td>
+        <td>Reuse; regression-guard only</td>
+      </tr>
+      <tr>
+        <td><code>CreateProjectModal</code> (ProjectsPage.tsx)</td>
+        <td>Local/import tabs; URL + parent-folder inputs; surface errors</td>
+        <td>(existing component; import branch added)</td>
+        <td><code>FolderPicker</code>, <code>state.createProject</code></td>
+        <td>AC2.3, AC2.1</td>
+        <td>Reuse folder picker; minimal UI change</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>As-is → to-be (changed existing symbols)</h3>
+  <ul>
+    <li><code>createProjectSchema</code> — <em>as-is</em> a flat <code>z.object({name, repoDir, defaultModel?, createDir?})</code> (research §2, <code>api.ts:9-16</code>). <em>To-be</em> a discriminated union on <code>source</code>: <code>'local'</code> keeps today's fields; <code>'import'</code> adds <code>repoUrl</code> + <code>parentDir</code>. <code>source</code> defaults to <code>'local'</code> so existing callers stay valid (additive/back-compat).</li>
+    <li><code>GitService</code> — <em>as-is</em> worktree-scoped git CLI wrapper; class doc: "All operations are scoped to managed clones under <code>worktreeRoot</code>" (research §4, <code>git.ts:41-93</code>). <em>To-be</em> <strong>unchanged</strong>. URL clone lives in a new standalone <code>src/server/clone.ts</code> (its own <code>execFile</code> wrapper that sets <code>GIT_TERMINAL_PROMPT=0</code>), so <code>GitService</code>'s invariant is preserved and no <code>GitService</code> instance is needed in <code>buildApp</code> (which does not receive one — <code>app.ts:24-31</code>, <code>109-110</code>, <code>index.ts:49-56</code>).</li>
+    <li><code>POST /api/projects</code> — <em>as-is</em> always calls <code>validateRepoDir</code> → <code>createProjectWithLead</code> (research §2, <code>app.ts:159-167</code>). <em>To-be</em> branches: <code>source==='import'</code> → <code>importProjectFromUrl</code>; else the existing path.</li>
+    <li><code>web/api.ts createProject</code> / <code>state.createProject</code> / <code>CreateProjectModal</code> — <em>as-is</em> local-only input <code>{name, repoDir, defaultModel?, createDir?}</code> (research §2, <code>api.ts:60-64</code>, <code>state.tsx:295-300</code>, <code>ProjectsPage.tsx:222-266</code>). <em>To-be</em> input type widens to the union; modal adds an import tab.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>3. Key interactions</h2>
+  <svg viewBox="0 0 720 300" role="img" aria-label="Import sequence: happy path and clone failure">
+    <defs>
+      <marker id="ar2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z"/>
+      </marker>
+    </defs>
+    <text class="t" x="70" y="20">Modal</text>
+    <text class="t" x="210" y="20">Route</text>
+    <text class="t" x="360" y="20">importService</text>
+    <text class="t" x="530" y="20">GitService</text>
+    <text class="t" x="660" y="20">Store</text>
+    <line class="a-dash" x1="70" y1="28" x2="70" y2="285"/>
+    <line class="a-dash" x1="210" y1="28" x2="210" y2="285"/>
+    <line class="a-dash" x1="360" y1="28" x2="360" y2="285"/>
+    <line class="a-dash" x1="530" y1="28" x2="530" y2="285"/>
+    <line class="a-dash" x1="660" y1="28" x2="660" y2="285"/>
+
+    <line class="a" x1="70" y1="50" x2="210" y2="50" marker-end="url(#ar2)"/>
+    <text class="l" x="140" y="44">POST source=import</text>
+    <line class="a" x1="210" y1="78" x2="360" y2="78" marker-end="url(#ar2)"/>
+    <text class="l" x="285" y="72">parse+guard target</text>
+    <line class="a" x1="360" y1="106" x2="530" y2="106" marker-end="url(#ar2)"/>
+    <text class="l" x="445" y="100">cloneRepo(url,parent,name)</text>
+    <line class="a" x1="530" y1="134" x2="360" y2="134" marker-end="url(#ar2)"/>
+    <text class="l" x="445" y="128">ok:true, path</text>
+    <line class="a" x1="360" y1="162" x2="660" y2="162" marker-end="url(#ar2)"/>
+    <text class="l" x="510" y="156">createProjectWithLead</text>
+    <line class="a" x1="660" y1="190" x2="70" y2="190" marker-end="url(#ar2)"/>
+    <text class="l" x="360" y="184">201 {project, agents}</text>
+
+    <line class="a" x1="530" y1="234" x2="360" y2="234" marker-end="url(#ar2)"/>
+    <text class="l" x="445" y="228">FAIL ok:false, stderr</text>
+    <line class="a" x1="360" y1="262" x2="70" y2="262" marker-end="url(#ar2)"/>
+    <text class="l" x="215" y="256">HttpError(400) → body.error (no partial)</text>
+  </svg>
+  <p class="s">Happy path (top): clone succeeds, then the existing lead-creation path runs against the cloned dir. Failure path (bottom): <code>cloneRepo</code> returns <code>ok:false</code>; service throws <code>HttpError(400, stderr-summary)</code>; nothing is written to the store, so no partial project. <code>GIT_TERMINAL_PROMPT=0</code> guarantees the clone fails fast instead of hanging on a credential prompt (AC2.2).</p>
+</section>
+
+<section>
+  <h2>4. Data &amp; contracts</h2>
+  <p>Discriminated union in <code>src/shared/api.ts</code>, wrapped so a body that omits <code>source</code> still parses as <code>'local'</code> (back-compat for existing callers — fixes review #4):</p>
+  <pre><code>const localSchema = z.object({
+  source: z.literal('local'),
+  name: z.string().trim().min(1).max(80),
+  repoDir: z.string().trim().min(1),
+  defaultModel: z.string().trim().min(1).optional(),
+  createDir: z.boolean().optional(),
+});
+const importSchema = z.object({
+  source: z.literal('import'),
+  name: z.string().trim().max(80).optional(),   // default: derived repo name
+  repoUrl: z.string().trim().min(1).refine(isGitUrl, 'Enter a valid git URL'),
+  parentDir: z.string().trim().min(1),
+  defaultModel: z.string().trim().min(1).optional(),
+});
+// z.preprocess injects source:'local' when missing, BEFORE the union reads the
+// discriminator — so old bodies { name, repoDir } keep working (verified by a test).
+export const createProjectSchema = z.preprocess(
+  (v) =&gt; (v &amp;&amp; typeof v === 'object' &amp;&amp; !('source' in v) ? { ...v, source: 'local' } : v),
+  z.discriminatedUnion('source', [localSchema, importSchema]),
+);
+export type CreateProjectInput = z.infer&lt;typeof createProjectSchema&gt;;
+export type ImportProjectInput = z.infer&lt;typeof importSchema&gt;;</code></pre>
+  <p class="s"><strong>Name normalization (fixes review #3):</strong> <code>importProjectFromUrl</code> resolves <code>name</code> = <code>input.name?.trim() || deriveRepoName(input.repoUrl)</code> (never undefined), then builds a local-shaped input <code>{ name, repoDir: clonedPath, defaultModel }</code> and calls <code>createProjectWithLead</code> — so <code>tsc</code> proves <code>name</code> is present and the reused create path is unchanged.</p>
+  <p class="s"><strong>Route order (fixes review #5):</strong> the handler branches on <code>input.source</code> as the first statement after <code>parse</code>; the import branch never reads <code>input.repoDir</code> / calls <code>validateRepoDir</code> (that stays in the <code>else</code>).</p>
+  <ul>
+    <li><strong>Request</strong> (<code>POST /api/projects</code>): either variant above. <code>isGitUrl</code> accepts <code>https://host/x/y(.git)</code>, <code>git@host:x/y(.git)</code>, <code>ssh://…</code>; trims; rejects empty/malformed (AC2.1).</li>
+    <li><strong>Response</strong> (unchanged shape): <code>201 { project: Project, agents: Agent[] }</code> — additive, so <code>state.createProject</code> (<code>state.tsx:476-480</code>) keeps working.</li>
+    <li><strong>Errors</strong>: <code>ZodError</code>→400 <code>{error:'Validation failed', details}</code>; <code>HttpError</code>→its status <code>{error}</code>; the web <code>request&lt;T&gt;</code> surfaces <code>body.error</code> to the modal (research §4).</li>
+    <li><code>Project.repoDir</code> stays a local path (<code>domain.ts:58-62</code>) = the cloned <code>&lt;parentDir&gt;/&lt;repoName&gt;</code>; no schema change to the domain type.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>5. Decisions &amp; trade-offs</h2>
+  <table>
+    <thead><tr><th>Decision</th><th>Rejected alternative</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Single <code>POST /api/projects</code> with a <code>source</code> branch</td>
+        <td>Separate <code>POST /api/projects/import</code> route</td>
+        <td>Same response, same downstream (lead creation); one entry point avoids duplicating wiring and keeps web client symmetric. Discriminated union already encodes the branch.</td>
+      </tr>
+      <tr>
+        <td>Standalone <code>cloneRepoToDir</code> in a new <code>src/server/clone.ts</code></td>
+        <td>Add a <code>cloneRepo</code> method to <code>GitService</code>; or thread a <code>GitService</code> into <code>buildApp</code></td>
+        <td><code>GitService</code> is worktree-scoped by contract (<code>git.ts:41-49</code>) and <code>buildApp</code> never receives an instance (<code>index.ts:49-56</code>). A URL clone writes to a user-chosen dir <em>outside</em> <code>worktreeRoot</code>, so it belongs in its own small module — the route/service imports the function directly with no wiring change. This resolves both the SRP violation and the feasibility blocker from Gate 2b.</td>
+      </tr>
+      <tr>
+        <td>Derive repo name from URL → clone into <code>&lt;parent&gt;/&lt;name&gt;</code></td>
+        <td>User types the exact target dir (like local <code>repoDir</code>)</td>
+        <td>Matches native <code>git clone &lt;url&gt;</code> behavior and the existing "pick a folder" UX; avoids clobbering an existing dir; less typing/error for the user. Guard: target subdir must not already exist.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>6. Risks, edge cases &amp; failure modes</h2>
+  <table>
+    <thead><tr><th>Case</th><th>Handling</th></tr></thead>
+    <tbody>
+      <tr><td>Target dir already exists</td><td>Pre-check in <code>importProjectFromUrl</code> before clone: if <code>&lt;parent&gt;/&lt;name&gt;</code> exists → <code>HttpError(400, 'Target folder already exists: …')</code>; never clone over it.</td></tr>
+      <tr><td>Clone requires auth (private repo, no creds)</td><td><code>GIT_TERMINAL_PROMPT=0</code> makes git fail fast; <code>cloneRepo</code> returns <code>ok:false</code>; mapped to a clear <code>HttpError</code>. No hang (AC2.2).</td></tr>
+      <tr><td>Invalid / malformed URL</td><td>Rejected at zod boundary via <code>isGitUrl</code> refine → 400 before any git call (AC2.1).</td></tr>
+      <tr><td>Partial clone on failure</td><td>Service treats <code>ok:false</code> as fatal and does not call <code>createProjectWithLead</code>; optionally best-effort remove a partial dir git left behind, then throw. No project row is written (AC2.2).</td></tr>
+      <tr><td><code>git</code> not on PATH</td><td><code>execFile('git', …)</code> errors → <code>ok:false</code>, stderr surfaced as <code>HttpError</code> with an actionable message. <span class="unverified">Not currently a documented prereq for import (docs/DEVELOPMENT.md:9-14).</span></td></tr>
+      <tr><td>Long / large clone</td><td>Synchronous HTTP request; acceptable for v1 (no progress stream). Note UX/timeout budget for the integration test (<code>vitest.config.ts</code> testTimeout 20000); use a tiny fixture repo. Streaming progress is out of scope.</td></tr>
+      <tr><td>Empty/odd repo name derivation (e.g. URL ends in <code>/</code>)</td><td><code>deriveRepoName</code> sanitizes and falls back; if empty → validation error (AC2.1). <span class="unverified">Exact fallback string is an implementation choice.</span></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>7. Test strategy</h2>
+  <table>
+    <thead><tr><th>AC</th><th>Unit</th><th>Integration</th><th>e2e</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>AC1 (regression)</td>
+        <td>existing <code>validateRepoDir.test.ts</code>, <code>fsBrowse.test.ts</code></td>
+        <td>existing <code>POST /api/projects</code> local path</td>
+        <td>existing <code>_createdir.spec.ts</code> create-local flow</td>
+      </tr>
+      <tr>
+        <td>AC2</td>
+        <td><code>deriveRepoName</code> cases; <code>importProjectFromUrl</code> composes clone+lead (mock GitService)</td>
+        <td><code>cloneRepo</code> clones a local <em>bare/file</em> fixture repo → project created with cloned <code>repoDir</code>; Team Lead + main thread present</td>
+        <td>import tab → URL → parent pick → project appears &amp; navigates</td>
+      </tr>
+      <tr>
+        <td>AC2.1</td>
+        <td><code>isGitUrl</code> accept/reject table; schema parse rejects malformed</td>
+        <td>route returns 400 <code>{error}</code> for a malformed URL (no git call)</td>
+        <td>modal shows the URL validation error inline</td>
+      </tr>
+      <tr>
+        <td>AC2.2</td>
+        <td><code>importProjectFromUrl</code> throws on <code>ok:false</code>; no store write</td>
+        <td>clone of a nonexistent/unauth URL fails fast → 400, no project row, no partial dir; assert no hang (bounded time)</td>
+        <td>modal shows clone-failure error; project list unchanged</td>
+      </tr>
+      <tr>
+        <td>AC2.3</td>
+        <td>—</td>
+        <td>—</td>
+        <td>modal renders local/import tabs; switching shows URL + parent-folder inputs</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="s"><strong>Open questions:</strong> (1) exact <code>deriveRepoName</code> fallback for degenerate URLs; (2) whether to best-effort <code>rm</code> a partial clone dir on failure (research states no precedent). Both are noted rather than invented.</p>
+</section>

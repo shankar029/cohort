@@ -19,7 +19,7 @@ import {
   updateProjectSettingsSchema,
   updateWorkItemSchema,
 } from '@shared/index';
-import { AGENT_CATALOG, createAgent, createProjectWithLead, validateRepoDir } from './services.js';
+import { AGENT_CATALOG, createAgent, createProjectWithLead, importProjectFromUrl, ProjectImportError, validateRepoDir } from './services.js';
 import { discoverSkills } from './agents/skillScanner.js';
 
 export interface AppContext {
@@ -158,6 +158,18 @@ export function buildApp(ctx: AppContext): FastifyInstance {
 
   app.post('/api/projects', async (req, reply) => {
     const input = createProjectSchema.parse(req.body);
+    if (input.source === 'import') {
+      let project;
+      try {
+        project = await importProjectFromUrl(store, config, input);
+      } catch (err) {
+        if (err instanceof ProjectImportError) throw new HttpError(400, err.message);
+        throw err;
+      }
+      bus.publish({ type: 'project.updated', project });
+      reply.status(201);
+      return { project, agents: store.listAgents(project.id) };
+    }
     const check = validateRepoDir(input.repoDir, input.createDir === true);
     if (!check.ok) throw new HttpError(400, check.error);
     const project = createProjectWithLead(store, config, input, check.resolved);
