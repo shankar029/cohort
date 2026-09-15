@@ -5,17 +5,17 @@ Branch: feat/project-create-import
 Design: design.html · Plan: plan.html · Architecture: n/a
 Traceability: traceability.md
 
-Current phase: 6 — Review, prove, ship
-Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅ | G5 ✅ | G6 ⬜ (writing report + PR)
-Next action: Write report.html; push branch; open PR.
+Current phase: 6 — DONE (shipped)
+Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅ | G5 ✅ | G6 ✅
+Next action: none — PR #1 open: https://github.com/shankar029/cohort/pull/1
 Blocked on: none
 
 ## Acceptance criteria (see traceability.md)
-- [ ] AC1 Create a new project pointing at a local repo dir (existing — verify + regression-guard)
-- [ ] AC2 Import a project by GitHub URL: clone locally, then create project from the clone
-- [ ] AC2.1 Invalid/malformed URL rejected with clear error
-- [ ] AC2.2 Clone failure surfaces clear error, no hang, no partial project
-- [ ] AC2.3 New Project modal offers import-by-URL vs create-local
+- [x] AC1 Create a new project pointing at a local repo dir (existing — verify + regression-guard) — VERIFIED
+- [x] AC2 Import a project by GitHub URL: clone locally, then create project from the clone — VERIFIED
+- [x] AC2.1 Invalid/malformed URL rejected with clear error — VERIFIED
+- [x] AC2.2 Clone failure surfaces clear error, no hang, no partial project — VERIFIED
+- [x] AC2.3 New Project modal offers import-by-URL vs create-local — VERIFIED
 
 ## Increments
 - [x] I1 Backend: contracts + helpers + clone + service + route — green, committed (2f2acf1 amended). typecheck+lint clean; full suite 297 pass/1 skip (via --no-file-parallelism; parallel-load timeouts are pre-existing, proven on baseline).
@@ -40,4 +40,4 @@ Blocked on: none
 - 2026-09-15 I1 implemented + G4 PASSED: typecheck+lint clean, full suite green (--no-file-parallelism). Committed 2f2acf1. package-lock drift reverted to origin.
 - 2026-09-15 I2 implemented + G4 PASSED: modal Local/Import tabs, client isGitUrl validation. Full e2e suite 25/25 green (incl _import.spec.ts). Committed 6ef8e28.
 - 2026-09-15 G5 PASSED: independent verification (delegated, fresh) 5/5 AC PASS; evidence/verification.md.
-- 2026-09-15 G6: probe verdict pass (analysis tools + UI mutation unavailable/skipped — reported honestly). Independent review (delegated, fresh) APPROVE, all 5 AC VERIFIED. 3 low findings fixed (d0cb715): summarizeCloneError branch tests, deriveRepoName .git/ edge, clone -- hardening. Probe re-run pass. Traceability all VERIFIED.
+- 2026-09-15 G6 PASSED / SHIPPED: report.html written; branch pushed; PR #1 opened (https://github.com/shankar029/cohort/pull/1). Committed d0cb715 + docs.
