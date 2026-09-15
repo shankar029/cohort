@@ -1,0 +1,130 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design — Lead-first escalation + @mention wake</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="design.html" data-slug="lead-escalation-mention"></script>
+
+<h1>Design — Lead-first escalation, @mention wake, Frontend unblock</h1>
+<div class="meta">Repo: cohort · Branch: feat/lead-escalation-mention · Base: main · Research: research.md</div>
+
+<h2>1. Problem</h2>
+<p>When a specialist can't produce a deliverable, Cohort restarts its session once and then <strong>parks the run on a
+"NEEDS YOUR INPUT" prompt to the human</strong> (Retry/Skip). The Team Lead — an autonomous manager that already
+exists — is never asked to actually resolve the blocker. And the user cannot summon the Lead: a chat reply like
+"are you looking into this?" gets a conversational answer but does not make the Lead take over the parked task.
+The live "Snippet Vault" run shows the concrete failure: the <strong>Frontend Engineer</strong> hit an empty repo with no
+tech-stack decision and looped on self-directed clarifying questions, producing zero code, while Backend/UX made
+assumptions and shipped. Root cause detail: research.md §"Item 3".</p>
+
+<h2>2. Approach (three converging changes)</h2>
+<ol>
+  <li><strong>Lead-first escalation (Items 1 & 3).</strong> Insert a Lead-resolve step <em>before</em> the human prompt in the
+  no-code blocker path. The Lead makes the missing reversible decisions (tech stack, file layout, conventions),
+  writes a concrete buildable spec into the task, posts it to the agent, and re-queues the task for one Lead-guided
+  re-drive. Only if that <em>also</em> yields no code do we fall back to the existing user prompt (true last resort).</li>
+  <li><strong>@mention wake (Item 2).</strong> Parse an <code>@lead / @team-lead / @&lt;lead name&gt;</code> mention in <code>chat()</code>.
+  On mention the Lead is "woken to act": beyond its normal reply, it <em>takes over every pending blocker</em> for the
+  project — runs the Lead-resolve step and clears the parked <code>Question</code>s (answers them "Retry") so the human
+  prompt disappears and the Lead drives. A lightweight "@ Team Lead" affordance is added to the chat input.</li>
+  <li><strong>Frontend rescue (Item 3).</strong> Falls out of #1: the Lead's decision supplies the tech stack + UI spec the
+  FE was missing, so the re-drive has something concrete to build. No FE-specific special-casing needed.</li>
+</ol>
+
+<h2>3. Server changes — <code>src/server/orchestrator.ts</code></h2>
+<ul>
+  <li><strong>State:</strong> <code>private readonly leadAssisted = new Set&lt;string&gt;()</code> (items the Lead already tried to
+  unblock — one-shot) and <code>private readonly noCodeQuestions = new Map&lt;string,string&gt;()</code> (itemId&rarr;questionId,
+  populated only where the no-code user prompt is raised) so the <code>@mention</code> take-over is scoped to no-code
+  blockers ONLY (B1) and never touches build/integration/epic-review escalations.</li>
+  <li><strong>New:</strong> <code>private async leadResolveBlocker(agent, item, reason)</code> (idempotent, one-shot decision):
+    <ol>
+      <li><code>firstTime = !alreadyAssisted(item)</code> where <em>alreadyAssisted</em> = <code>leadAssisted.has(id)</code> OR the
+      item description already carries the decision marker (survives process restart — M2). Then <code>leadAssisted.add(id)</code>.</li>
+      <li>If <code>firstTime</code>: read the agent's latest notes (<code>store.listNotes</code>); ask the Lead actor to <em>decide</em>.
+      Wrapped in try/catch — on failure fall back to a generic "ship the smallest working slice, decide minor things
+      yourself" directive. Append the decision to <code>item.description</code> under a <code>&lt;!--lead-decision--&gt;</code>
+      marker (<code>store.updateWorkItem</code> + publish <code>workitem.updated</code>), emit a <code>system</code> event, and
+      <code>postMessage</code> it to main as the Lead addressed to the agent. If <em>not</em> firstTime: post a short
+      "re-driving now" Lead message only (no duplicate decision — M1/N5).</li>
+      <li>Resolve any tracked no-code question via <code>resolveQuestionForItem(item.id)</code>: resolve the in-memory
+      <code>pending</code> promise if present with a VALID choice (<code>'Retry'</code>), else mark the DB row answered directly
+      (<code>store.answerQuestion</code> + publish) so it never stays stuck <code>pending</code> across a restart (M3); clear
+      <code>noCodeQuestions</code>.</li>
+      <li>Re-queue: <code>awaitingInput.delete</code>, <code>setStatus(agent,'idle')</code>, <code>moveItem(item,'todo')</code>, <code>pokeLead()</code>.</li>
+    </ol>
+  </li>
+  <li><strong>No-code path</strong> (~2625): before <code>setStatus('needs_input')</code>+<code>raiseQuestion</code>, insert
+    <pre><code>if (!this.leadAssisted.has(item.id)) {
+  await this.leadResolveBlocker(agent, item, 'no code after a session restart');
+  return;
+}</code></pre>
+  The existing user prompt stays as the last resort (reached only when the item is already Lead-assisted). Because
+  <code>restartedForItem</code> still holds the item, the re-drive gets exactly one more session attempt then escalates —
+  bounded.</li>
+  <li><strong>New:</strong> <code>private async leadTakeOverPending()</code>: iterate <code>noCodeQuestions</code> entries whose DB
+  question is still <code>pending</code>; post ONE consolidated "taking over N blocked task(s)" Lead message (N5), then for each
+  run <code>leadResolveBlocker(agent, item, 'you asked the Team Lead to step in')</code> (which resolves the question + re-drives).
+  Scoped to no-code blockers only (B1). If <code>paused</code>, it still clears the question and annotates but posts that work is
+  paused until resume (N3).</li>
+  <li><strong><code>chat()</code></strong> (~586): compute <code>mentionsLead = mentionsAgent(content, lead.displayName)</code>. Strip the
+  mention token before intent classification (<code>contentForIntent</code>) so <code>@lead</code> alone does not trip
+  <code>buildIntent</code>/<code>discussIntent</code> (N2). After the existing reply+route, <code>if (mentionsLead) await this.leadTakeOverPending()</code>.</li>
+</ul>
+
+<h2>4. Web changes — <code>src/web/pages/ChatPage.tsx</code></h2>
+<ul>
+  <li>Add a small <strong>"@ Team Lead"</strong> button (<code>data-testid="mention-lead"</code>) next to the composer that inserts
+  <code>@Team Lead </code> into the input and focuses it. Purely a convenience to produce the token the server recognizes;
+  the server is the source of truth. No new API surface.</li>
+</ul>
+
+<h2>5. Invariants & safety</h2>
+<ul>
+  <li>The manager tick must never crash: every Lead <code>ask</code> is wrapped in try/catch; failures degrade to the generic
+  directive and still re-queue.</li>
+  <li>Assistance is <strong>one-shot per item</strong> (<code>leadAssisted</code>) → no infinite Lead↔agent loop; the human prompt
+  remains the guaranteed backstop.</li>
+  <li>No schema/domain changes; reuses <code>Question</code>, <code>work_items.description</code>, existing events. Response shapes and
+  all other <code>raiseQuestion</code> sites are unchanged (Item-1 helper is adoptable by them later — research A4).</li>
+  <li>Fake-adapter friendly: the Lead's decision is plain text; in fake mode it returns canned text and the flow still
+  re-queues deterministically, so it is testable offline.</li>
+</ul>
+
+<h2>6. Test plan</h2>
+<ul>
+  <li><strong>Unit:</strong> pure exported <code>mentionsAgent(content, name)</code> — matches <code>@lead</code>, <code>@team-lead</code>,
+  <code>@teamlead</code>, <code>@Team Lead</code> (escaped displayName), leading or inline after whitespace; rejects negatives
+  <code>email@host</code>, <code>user@team-lead.io</code> (requires a non-word char or start before <code>@</code>); <code>RegExp</code>-escaped name, no ReDoS (N4).</li>
+  <li><strong>Integration (orchestrator, fake adapter):</strong>
+    <ul>
+      <li>A build task that produces no code triggers a <strong>Lead decision + re-queue</strong> (task back to todo, a Lead
+      message posted, description annotated) <em>before</em> any pending user question is created.</li>
+      <li>After a Lead-assisted item still produces no code, the run <strong>falls back to the user prompt</strong> exactly once.</li>
+      <li><code>@team-lead</code> chat on a project with a parked question <strong>clears the question</strong> (status→answered) and
+      re-queues the blocked item.</li>
+    </ul>
+  </li>
+  <li><strong>E2E (Playwright, fake adapter):</strong> the "@ Team Lead" button inserts the token and sends; assert the
+  parked "NEEDS YOUR INPUT" resolves (Lead takes over) — or, if timing is hard offline, assert the button wiring +
+  a server integration test covers the behavior.</li>
+  <li>Full suite green via <code>npx vitest run --no-file-parallelism</code>; typecheck + lint clean.</li>
+</ul>
+
+<h2>7. Rollout / increments</h2>
+<ol>
+  <li><strong>I1</strong> — server: <code>mentionsAgent</code> helper + <code>leadResolveBlocker</code> + no-code path rewire + unit/integration tests.</li>
+  <li><strong>I2</strong> — server: <code>leadTakeOverPending</code> + <code>chat()</code> mention wiring + tests; web "@ Team Lead" button + e2e.</li>
+</ol>
+
+<h2>8. Review dispositions (Gate 2b)</h2>
+<p>Independent design review (design-review.md) returned <strong>REVISE</strong>: 1 blocker + 3 majors + 6 minors, all addressed:</p>
+<ul>
+  <li><strong>B1 (blocker) — take-over over-broad:</strong> FIXED — scoped via dedicated <code>noCodeQuestions</code> map; never answer
+  a question with a value outside its <code>choices</code>. Build/integration/epic-review escalations untouched.</li>
+  <li><strong>M1:</strong> FIXED — <code>leadResolveBlocker</code> decides only on <code>firstTime</code>; otherwise a short re-drive message.</li>
+  <li><strong>M2:</strong> FIXED — <em>alreadyAssisted</em> also reads the persisted <code>&lt;!--lead-decision--&gt;</code> marker.</li>
+  <li><strong>M3:</strong> FIXED — <code>resolveQuestionForItem</code> marks the DB row answered directly when the resolver is gone.</li>
+  <li><strong>N1–N5:</strong> pending-filter, strip-mention-before-intent, paused-note, escaped/bounded regex, consolidated notice — folded in.</li>
+  <li><strong>N6:</strong> other <code>raiseQuestion</code> sites stay out of scope (A4); the map prevents the sweep reaching them.</li>
+</ul>
