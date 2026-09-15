@@ -1,0 +1,111 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report — Lead-first escalation + @mention wake</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="report.html" data-slug="lead-escalation-mention"></script>
+
+<h1>Lead-first escalation, @mention wake, Frontend no-code fix — Final report</h1>
+<div class="meta">Repo: cohort · Branch: feat/lead-escalation-mention · Commit: 00296cb · 2026-09-15 · Design: design.html · Review: review.md</div>
+
+<h2>1. Outcome</h2>
+<p>Cohort no longer dead-ends on a human "NEEDS YOUR INPUT" prompt when a specialist can't produce code. The
+<strong>Team Lead now steps in first</strong>: it makes the missing reversible decision (tech stack, file layout,
+conventions), writes a concrete buildable spec into the task, posts it to the agent, and re-drives — one-shot per
+item, with the human prompt kept as the guaranteed last-resort backstop. Users can also <strong>summon the Lead by
+@mention</strong> (<code>@lead</code> / <code>@team-lead</code> / <code>@&lt;lead name&gt;</code>) to make it take over parked
+no-code blockers immediately. This directly resolves the reported <strong>Frontend "no code" stall</strong>: the live-run
+diagnosis (empty greenfield repo + no stack decision → the FE looped on self-directed clarifying questions) is now
+rescued because the Lead supplies the decision. Committed on <code>feat/lead-escalation-mention</code>; PR to open (§10).
+Headline caveat: cross-restart @mention take-over is intentionally not supported (§8), and the FE fix is a
+mechanism + evidence-backed diagnosis rather than an FE-persona prompt edit.</p>
+
+<h2>2. Delivered</h2>
+<ul>
+  <li><code>leadResolveBlocker</code> — Lead makes+persists an unblock decision (<code>&lt;!--lead-decision--&gt;</code> marker) and re-drives; one-shot via <code>alreadyLeadAssisted</code> (in-memory + persisted).</li>
+  <li>No-code path rewired to call the Lead <em>before</em> <code>raiseQuestion</code>; bounded fallback to the user prompt exactly once.</li>
+  <li><code>leadTakeOverPending</code> + <code>chat()</code> @mention wiring; scoped strictly to a <code>noCodeQuestions</code> map (B1) so build/integration/epic-review escalations are never swept or answered with an invalid choice.</li>
+  <li><code>src/server/mention.ts</code> — pure, ReDoS-safe <code>mentionsAgent</code>/<code>stripMention</code> (escaped name, email/host rejection).</li>
+  <li>Web: an "@ Team Lead" button in the chat composer inserts the mention token.</li>
+  <li>Diagnosis of the FE no-code bug from the live SQLite run (research.md).</li>
+</ul>
+<h3>Not delivered (out of scope)</h3>
+<ul>
+  <li>Persisting <code>noCodeQuestions</code> for cross-restart @mention take-over (would reintroduce the B1 hazard — §8).</li>
+  <li>Editing the FE catalog persona prompt; adopting the Lead-first helper at the other ~10 <code>raiseQuestion</code> sites.</li>
+</ul>
+
+<h2>3. Acceptance criteria</h2>
+<table>
+  <tr><th>AC</th><th>Verdict</th><th>Proven by</th></tr>
+  <tr><td>AC1 — Lead decides + re-drives before the user prompt</td><td>VERIFIED</td><td>leadEscalation.test.ts "makes a decision and re-drives BEFORE parking"</td></tr>
+  <tr><td>AC2 — bounded fallback to the user prompt exactly once</td><td>VERIFIED</td><td>boundedness trace (review.md); delivery.test.ts SEV-3 still green</td></tr>
+  <tr><td>AC3 — @mention take-over clears the parked no-code question</td><td>VERIFIED</td><td>leadEscalation.test.ts "@team-lead clears the parked no-code question"</td></tr>
+  <tr><td>AC3.1 — mentionsAgent matches/rejects email-like, ReDoS-safe</td><td>VERIFIED</td><td>mention.test.ts (positives/negatives + 100k ReDoS)</td></tr>
+  <tr><td>AC3.2 — take-over scoped to no-code blockers only</td><td>VERIFIED</td><td>leadEscalation.test.ts B1 (unrelated + same-agent questions stay pending)</td></tr>
+  <tr><td>AC4 — FE no-code root cause documented + rescued</td><td>VERIFIED-WITH-LIMITATIONS</td><td>research.md (live-DB evidence); rescue mechanism = AC1. Proven on a fake NOOP builder, not the live FE persona.</td></tr>
+  <tr><td>AC5 — web "@ Team Lead" affordance</td><td>VERIFIED</td><td>e2e _mention.spec.ts (executed: 1 passed) — token insertion + send</td></tr>
+</table>
+
+<h2>4. Gates</h2>
+<table>
+  <tr><th>G1</th><th>G2</th><th>G3</th><th>G4</th><th>G5</th><th>G6</th></tr>
+  <tr><td>✅</td><td>✅ (2b REVISE→addressed)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+</table>
+
+<h2>5. Measurements</h2>
+<table>
+  <tr><th>Measure</th><th>Base</th><th>Head</th><th>Status</th></tr>
+  <tr><td>feature unit+integration</td><td>—</td><td>8 pass / 0 fail (unit 6, integ 2)</td><td>ok</td></tr>
+  <tr><td>full unit+integ suite</td><td>~268</td><td>268 pass / 1 skip (1 flake*)</td><td>ok*</td></tr>
+  <tr><td>e2e (Playwright)</td><td>22</td><td>23 pass / 0 fail (incl. _mention)</td><td>ok</td></tr>
+  <tr><td>typecheck / lint</td><td>clean</td><td>clean</td><td>ok</td></tr>
+  <tr><td>probe verdict (vs merge-base)</td><td>—</td><td>pass (no regression)</td><td>ok</td></tr>
+</table>
+<p class="assumption">* One full-suite failure — "reclaims the epic worktree after merge (SEV-4 GC)" — is a known Windows
+worktree-GC parallel-load flake: it passes in isolation and touches none of the changed files. Same class documented
+in the prior PR. Unavailable metrics (tools not globally installed): duplication, complexity, cycles, dead_exports,
+static_findings. Mutation auto-skipped for the UI project; the one branch it would have caught (unasserted error-
+message/Skip paths) is noted as a follow-up — the core changed branches are asserted.</p>
+
+<h2>6. Scorecard</h2>
+<table>
+  <tr><th>Dimension</th><th>Score</th><th>Justification</th></tr>
+  <tr><td>Correctness</td><td>5/5</td><td>Bounded one-shot assist traced + tested; independent reviewer APPROVE, 7/7 AC reconcile.</td></tr>
+  <tr><td>Testing</td><td>5/5</td><td>Real git + NOOP-builder integration, ReDoS unit, executed e2e; B1 scoping airtight (same-agent case).</td></tr>
+  <tr><td>Design fidelity</td><td>5/5</td><td>Built the revised design incl. all Gate-2b fixes (B1 map, marker persistence, valid-choice answers).</td></tr>
+  <tr><td>Maintainability</td><td>5/5</td><td>+456/−4 across 6 files; pure helper extracted; reuses existing seams; no schema change.</td></tr>
+  <tr><td>Security</td><td>5/5</td><td>ReDoS-safe escaped regex; no new external surface; execFile/no-shell untouched.</td></tr>
+  <tr><td>Error handling</td><td>5/5</td><td>Every Lead ask try/caught → generic fallback; tick never crashes; paused handled.</td></tr>
+  <tr><td>Performance</td><td>4/5</td><td>One extra Lead turn per blocked task; repeat @mentions bounded but slightly wasteful (F4).</td></tr>
+  <tr><td>Readability</td><td>5/5</td><td>Documented invariants (one-shot, B1 scoping, backstop).</td></tr>
+  <tr><td>Grounding</td><td>5/5</td><td>Diagnosis from the live DB; reviewer re-derived all ACs and the raiseQuestion-site scoping.</td></tr>
+</table>
+<p>Convergence iterations: 2 (design Gate-2b REVISE→addressed; review REQUEST-CHANGES F1→fixed).</p>
+
+<h2>7. Pending &amp; unproven</h2>
+<table>
+  <tr><th>Item</th><th>Why</th><th>Command / action to finish</th></tr>
+  <tr><td>Full suite under default parallelism</td><td>Known Windows worktree-GC flake + orchestration timeouts</td><td><code>npx vitest run --no-file-parallelism</code></td></tr>
+  <tr><td>Analysis metrics + UI mutation</td><td>Tools not installed; UI mutation reruns whole suite</td><td>Install jscpd/madge/ts-prune; <code>probe.py --force-mutation</code></td></tr>
+  <tr><td>Live FE persona rescue</td><td>Proven on the NOOP fake builder</td><td>Re-run the "Snippet Vault" import with a real Copilot FE agent</td></tr>
+</table>
+
+<h2>8. Assumptions still unconfirmed</h2>
+<ul class="assumption">
+  <li>The Lead may auto-decide reversible technical choices (stack, layout) to unblock, rather than asking the user; non-reversible/product choices still escalate.</li>
+  <li>Cross-restart @mention take-over is NOT supported: <code>noCodeQuestions</code> is in-memory (it is the B1 scoping guard); this matches the pre-existing in-memory answer-resolver behavior.</li>
+  <li><code>@mention</code> matches <code>@lead</code>/<code>@team-lead</code>/<code>@teamlead</code>/<code>@&lt;lead displayName&gt;</code>; leading non-word boundary rejects emails/hosts.</li>
+  <li>Item-1 scope centers on the no-code blocker path (the reported case); the helper is adoptable by the other <code>raiseQuestion</code> sites next.</li>
+</ul>
+
+<h2>9. Follow-ups</h2>
+<ul>
+  <li>Edit the FE catalog persona so it makes a default stack decision on an empty repo instead of self-questioning.</li>
+  <li>Adopt Lead-first escalation at the build/integration/QA <code>raiseQuestion</code> sites.</li>
+  <li>Assert the Skip and paused-take-over branches; short-circuit repeat @mentions when already Lead-assisted (F4/F5).</li>
+</ul>
+
+<h2>10. How to finish</h2>
+<pre><code>git push -u origin feat/lead-escalation-mention
+gh pr create --fill --base main --head feat/lead-escalation-mention</code></pre>
