@@ -13,6 +13,7 @@ import type {
   AgentNote,
   AgentTask,
   ChatMessage,
+  CreateProjectInput,
   Project,
   Question,
   ServerMessage,
@@ -292,12 +293,7 @@ function reducer(state: State, action: Action): State {
 interface AppContextValue {
   state: State;
   refreshProjects: () => Promise<void>;
-  createProject: (input: {
-    name: string;
-    repoDir: string;
-    defaultModel?: string;
-    createDir?: boolean;
-  }) => Promise<Project>;
+  createProject: (input: CreateProjectInput) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   ensureBundle: (projectId: string) => Promise<void>;
   loadAgentTasks: (projectId: string, agentId: string) => Promise<void>;
@@ -474,7 +470,7 @@ export function AppProvider({ children }: { children: React.ReactNode }): React.
       refreshProjects,
       ensureBundle,
       createProject: async (input) => {
-        const { project } = await api.createProject({ ...input, source: 'local' });
+        const { project } = await api.createProject(input);
         dispatch({ type: 'UPSERT_PROJECT', project });
         return project;
       },
