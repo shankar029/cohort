@@ -1,0 +1,29 @@
+{
+  "slug": "project-create-import",
+  "base": "origin/main",
+  "merge_base": "87762392b86a",
+  "head": "d0cb715",
+  "generated": "2026-09-15T06:36:01+00:00",
+  "project": "ui",
+  "baseline": "compared",
+  "verdict": "pass",
+  "worst_status": "ok",
+  "metrics": {
+    "diff_files": {
+      "head": 19
+    },
+    "diff_lines": {
+      "head": 2220
+    }
+  },
+  "unavailable": [
+    "duplication_pct",
+    "complexity_max",
+    "complexity_avg",
+    "cycles",
+    "dead_exports",
+    "static_findings",
+    "mutation_score_pct"
+  ],
+  "tools": {}
+}

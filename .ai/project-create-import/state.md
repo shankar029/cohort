@@ -5,9 +5,9 @@ Branch: feat/project-create-import
 Design: design.html · Plan: plan.html · Architecture: n/a
 Traceability: traceability.md
 
-Current phase: 4 — Implement (increment I2 of 2: Web UI + E2E)
-Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅ (I1) | G5 ⬜ | G6 ⬜
-Next action: Add import-vs-local tabs to CreateProjectModal, widen web createProject to the union, wire URL + parent-folder inputs.
+Current phase: 6 — Review, prove, ship
+Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅ | G5 ✅ | G6 ⬜ (writing report + PR)
+Next action: Write report.html; push branch; open PR.
 Blocked on: none
 
 ## Acceptance criteria (see traceability.md)
@@ -19,7 +19,7 @@ Blocked on: none
 
 ## Increments
 - [x] I1 Backend: contracts + helpers + clone + service + route — green, committed (2f2acf1 amended). typecheck+lint clean; full suite 297 pass/1 skip (via --no-file-parallelism; parallel-load timeouts are pre-existing, proven on baseline).
-- [ ] I2 Web UI + E2E ← current
+- [x] I2 Web UI + E2E — green, committed (6ef8e28). typecheck+lint clean; full e2e suite 25/25 pass (incl. new _import.spec.ts and existing _createdir).
 
 ## Notes
 - Plan resized 3→2 increments (union type ripples through service+route — backend lands as one green slice).
@@ -38,3 +38,6 @@ Blocked on: none
 - 2026-09-15 G3 PASSED: plan.html written; traceability Design/Task columns filled; branch feat/project-create-import created.
 - 2026-09-15 Installed node_modules; baseline typecheck green.
 - 2026-09-15 I1 implemented + G4 PASSED: typecheck+lint clean, full suite green (--no-file-parallelism). Committed 2f2acf1. package-lock drift reverted to origin.
+- 2026-09-15 I2 implemented + G4 PASSED: modal Local/Import tabs, client isGitUrl validation. Full e2e suite 25/25 green (incl _import.spec.ts). Committed 6ef8e28.
+- 2026-09-15 G5 PASSED: independent verification (delegated, fresh) 5/5 AC PASS; evidence/verification.md.
+- 2026-09-15 G6: probe verdict pass (analysis tools + UI mutation unavailable/skipped — reported honestly). Independent review (delegated, fresh) APPROVE, all 5 AC VERIFIED. 3 low findings fixed (d0cb715): summarizeCloneError branch tests, deriveRepoName .git/ edge, clone -- hardening. Probe re-run pass. Traceability all VERIFIED.
