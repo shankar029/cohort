@@ -1,0 +1,46 @@
+{
+  "scenario": "design-first",
+  "adapter": "real",
+  "completed": false,
+  "crashed": false,
+  "elapsedSec": 1504,
+  "epics": [
+    {
+      "id": "wi__qr45y3N4cjN",
+      "title": "Build a small, accessible \"click counter\" web page: a button that i...",
+      "status": "in_progress"
+    }
+  ],
+  "epicsDone": 0,
+  "epicsTotal": 1,
+  "tasksByStatus": {
+    "in_progress": 1,
+    "backlog": 1
+  },
+  "prs": [],
+  "prsMerged": 0,
+  "deliverableFiles": [],
+  "deliverableCount": 0,
+  "taskStreams": [
+    "frontend",
+    "qa"
+  ],
+  "uiFileCount": 0,
+  "runtimeDeps": [],
+  "writesToDisk": false,
+  "verificationReports": 3,
+  "gateFailures": 3,
+  "gateOverrides": 0,
+  "tasksDoneWithFailingGate": 0,
+  "acceptanceProbe": "skip",
+  "qaSignoff": false,
+  "authIssue": false,
+  "designPersisted": false,
+  "designStatedStack": false,
+  "designEnrichedTasks": false,
+  "frontendStreamTerminal": false,
+  "frontendProducedCode": false,
+  "streamsWithCode": [],
+  "frontendFiles": [],
+  "userQuestionsRaised": 1
+}
