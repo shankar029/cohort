@@ -1242,15 +1242,17 @@ class ProjectOrchestrator {
   ): Promise<void> {
     const streams = [...streamToTaskId.keys()];
     if (!streams.length) return;
-    const designer = architect ?? this.lead();
-    const role = architect ? 'Software Architect' : 'Team Lead';
     const stackClause = brownfield
       ? `This is an EXISTING codebase. Honor its AGENTS.md / CLAUDE.md / CONTRIBUTING / README and ` +
         `current conventions; design WITHIN the established stack - do not propose a new one.`
       : `This is a GREENFIELD repo with no established stack. DECIDE and state the tech stack, ` +
         `frameworks, language, and project layout the team will use.`;
-    const prompt =
-      `You are the ${role}. Design epic "${epic.title}" BEFORE the team builds it.\n` +
+    // Build the design prompt for a role. `textOnly` is appended on retries to
+    // steer a real model away from an empty, tool-only turn - the live failure
+    // mode where the Architect calls tools but emits no design text, which used
+    // to silently no-op design-first and re-expose the greenfield build stall.
+    const buildPrompt = (who: string, textOnly: boolean): string =>
+      `You are the ${who}. Design epic "${epic.title}" BEFORE the team builds it.\n` +
       `Request: ${content}\n\n` +
       `${stackClause}\n\n` +
       `First give a 3-6 sentence technical design: the approach, key decisions, and the SHARED ` +
@@ -1258,28 +1260,75 @@ class ProjectOrchestrator {
       `Then output a per-stream task breakdown as ONE LINE PER STREAM in EXACTLY this format:\n` +
       `[stream] <task title> :: <concrete acceptance criteria>\n` +
       `Use only these streams: ${streams.join(', ')}. Do not invent streams, do not create tasks ` +
-      `yourself, do not ask the user questions, and do not write code.`;
-    let raw: string | typeof TIMED_OUT;
-    try {
-      raw = await withTimeout(
-        this.actor(designer).ask(prompt, thread.id, epic.id),
-        Number(process.env.ATEAM_DESIGN_TIMEOUT_MS ?? 45_000),
-      );
-    } catch {
-      return; // never crash decomposition - tasks keep their template descriptions
+      `yourself, do not ask the user questions, and do not write code.` +
+      (textOnly
+        ? `\n\nIMPORTANT: Reply with PLAIN TEXT ONLY in this message - the design paragraph then ` +
+          `the [stream] ... :: ... lines. Do NOT call tools or write files; write the text now.`
+        : '');
+    // One time-boxed design attempt. Returns trimmed text, '' on an empty/errored
+    // turn (so the caller can retry or fall back), or TIMED_OUT.
+    const attempt = async (
+      who: Agent,
+      whoRole: string,
+      textOnly: boolean,
+    ): Promise<string | typeof TIMED_OUT> => {
+      try {
+        const r = await withTimeout(
+          this.actor(who).ask(buildPrompt(whoRole, textOnly), thread.id, epic.id),
+          Number(process.env.ATEAM_DESIGN_TIMEOUT_MS ?? 45_000),
+        );
+        return r === TIMED_OUT ? TIMED_OUT : (r ?? '').trim();
+      } catch {
+        return ''; // treat a crashed turn like an empty one - fall back, never strand
+      }
+    };
+    // Bounded attempt plan: the Architect (or Lead) once; a text-only retry with
+    // the SAME designer; then, if an Architect still produced nothing, fall back
+    // to the Team Lead as designer. Every branch leaves the template board intact.
+    const lead = this.lead();
+    const plan: Array<{ who: Agent; role: string; textOnly: boolean }> = architect
+      ? [
+          { who: architect, role: 'Software Architect', textOnly: false },
+          { who: architect, role: 'Software Architect', textOnly: true },
+          { who: lead, role: 'Team Lead', textOnly: true },
+        ]
+      : [
+          { who: lead, role: 'Team Lead', textOnly: false },
+          { who: lead, role: 'Team Lead', textOnly: true },
+        ];
+    let text = '';
+    let designer: Agent = plan[0]!.who;
+    let role: string = plan[0]!.role;
+    for (const step of plan) {
+      const res = await attempt(step.who, step.role, step.textOnly);
+      if (res === TIMED_OUT) {
+        this.emitEvent(
+          step.who.id,
+          'system',
+          `Design step timed out - proceeding with template tasks`,
+          null,
+          epic.id,
+        );
+        return;
+      }
+      if (res) {
+        text = res;
+        designer = step.who;
+        role = step.role;
+        break;
+      }
+      // empty turn - fall through to the next attempt in the plan
     }
-    if (raw === TIMED_OUT) {
+    if (!text) {
       this.emitEvent(
-        designer.id,
+        lead.id,
         'system',
-        `Design step timed out - proceeding with template tasks`,
+        `Design step produced no text after retries - proceeding with template tasks`,
         null,
         epic.id,
       );
       return;
     }
-    const text = (raw ?? '').trim();
-    if (!text) return;
     this.deps.store.setEpicDesign({
       projectId: this.projectId,
       epicId: epic.id,

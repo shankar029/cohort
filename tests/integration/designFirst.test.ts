@@ -163,3 +163,53 @@ describe('never strand the board (AC3)', () => {
     }
   });
 });
+
+describe('empty design turn recovery (fix: design-empty-turn-fallback)', () => {
+  it('when the Architect emits an empty (tool-only) turn every time, the Lead takes over and design STILL persists + enriches', async () => {
+    repoDir = brownfieldRepo();
+    const projectId = await createProject('DF ArchEmpty');
+    await addAgent(projectId, 'architect');
+    await addAgent(projectId, 'backend-engineer');
+    await addAgent(projectId, 'frontend-engineer');
+
+    // [[ARCH_EMPTY]] makes the fake Architect return '' on every design attempt;
+    // without the fix this would silently no-op design-first (epic_designs empty).
+    await chat(
+      projectId,
+      'Build a complete orders feature with an API and a settings dashboard. [[ARCH_EMPTY]]',
+    );
+
+    const enriched = await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        (m.workItem.description ?? '').includes('<!--design-acceptance-->'),
+      15000,
+    );
+    expect(enriched.type).toBe('workitem.updated');
+    const epic = ctx.store.listWorkItems(projectId).find((w) => w.kind === 'epic')!;
+    expect(ctx.store.getEpicDesign(epic.id)).not.toBe('');
+  });
+
+  it('when the Architect is empty on the FIRST attempt only, the text-only retry (same designer) recovers', async () => {
+    repoDir = brownfieldRepo();
+    const projectId = await createProject('DF EmptyOnce');
+    await addAgent(projectId, 'architect');
+    await addAgent(projectId, 'backend-engineer');
+    await addAgent(projectId, 'frontend-engineer');
+
+    await chat(
+      projectId,
+      'Build a complete orders feature with an API and a settings dashboard. [[DESIGN_EMPTY_ONCE]]',
+    );
+
+    const enriched = await ctx.waitFor(
+      (m) =>
+        m.type === 'workitem.updated' &&
+        (m.workItem.description ?? '').includes('<!--design-acceptance-->'),
+      15000,
+    );
+    expect(enriched.type).toBe('workitem.updated');
+    const epic = ctx.store.listWorkItems(projectId).find((w) => w.kind === 'epic')!;
+    expect(ctx.store.getEpicDesign(epic.id)).not.toBe('');
+  });
+});
