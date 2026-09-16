@@ -9,6 +9,7 @@ import {
 import { sanitizeDag } from './dag.js';
 import { planStallRecovery, boardHasLiveWork } from './stallRecovery.js';
 import { reviewBudgetDecision } from './reviewBudget.js';
+import { mentionsAgent, stripMention } from './mention.js';
 import { scopeStreams, pickBrownfieldBuilders } from './streamScope.js';
 import {
   detectConstraints,
@@ -273,6 +274,11 @@ class ProjectOrchestrator {
   private readonly running = new Set<string>();
   /** Work items parked awaiting a human/Lead decision, so the manager won't re-drive them. */
   private readonly awaitingInput = new Set<string>();
+  /** Work items the Team Lead has already tried to unblock (one-shot, so assist can't loop). */
+  private readonly leadAssisted = new Set<string>();
+  /** No-code-blocked work items → the pending Question id, so an @mention take-over is
+   *  scoped to no-code blockers ONLY and never touches build/integration/epic-review questions. */
+  private readonly noCodeQuestions = new Map<string, string>();
   /** Epics the user discarded — guards in-flight turns from resurrecting them. */
   private readonly discardedEpics = new Set<string>();
   /** Epics the user chose to merge despite unmet acceptance criteria. */
@@ -617,6 +623,12 @@ class ProjectOrchestrator {
 
     return (async () => {
       const lead = this.lead();
+      // Did the user summon the Team Lead directly (@lead / @team-lead / @<name>)?
+      // If so, the Lead is "woken to act": beyond replying it takes over any parked
+      // no-code blockers. Intent is classified on the message with the mention
+      // token stripped, so "@lead" alone doesn't falsely trip build/discuss routing.
+      const leadMentioned = mentionsAgent(content, lead.displayName);
+      const intentText = leadMentioned ? stripMention(content, lead.displayName) : content;
       const roster = this.specialists()
         .map((s) => `- \`${s.name}\` (${s.displayName}): ${s.description}`)
         .join('\n');
@@ -641,10 +653,10 @@ class ProjectOrchestrator {
       // replies above, but starts no new team work until the user resumes.
       const buildIntent =
         /\b(build|implement|create|add|develop|feature|fix|refactor|integrate|migrate|support)\b/i.test(
-          content,
+          intentText,
         );
       const discussIntent = /\b(brainstorm|discuss|approach|architect|explore|options)\b/i.test(
-        content,
+        intentText,
       );
       if (this.paused) {
         // no-op: user is redirecting; hold off on kicking off work
@@ -660,6 +672,11 @@ class ProjectOrchestrator {
           );
         }
       }
+
+      // A direct @mention makes the Lead address the user's issue immediately: it
+      // takes over parked no-code blockers so the human prompt clears and work
+      // resumes under the Lead's guidance.
+      if (leadMentioned) await this.leadTakeOverPending();
     })();
   }
 
@@ -2023,6 +2040,151 @@ class ProjectOrchestrator {
     }
   }
 
+  /** Marker embedded in a task description once the Lead has recorded an unblock decision. */
+  private static readonly LEAD_DECISION_MARKER = '<!--lead-decision-->';
+
+  /** True if the Lead already tried to unblock this item (in-memory OR persisted across restart). */
+  private alreadyLeadAssisted(item: WorkItem): boolean {
+    if (this.leadAssisted.has(item.id)) return true;
+    return (item.description ?? '').includes(ProjectOrchestrator.LEAD_DECISION_MARKER);
+  }
+
+  /**
+   * The Team Lead steps in for a specialist that produced no deliverable, instead
+   * of parking the run on the human. On the FIRST assist it MAKES the missing
+   * (reversible) decisions - tech stack, file layout, conventions - writes a
+   * concrete buildable spec into the task, posts it to the agent, and re-queues
+   * the task for a Lead-guided re-drive. Assistance is one-shot per item
+   * (`alreadyLeadAssisted`), so the human prompt remains the guaranteed backstop.
+   */
+  private async leadResolveBlocker(agent: Agent, item: WorkItem, reason: string): Promise<void> {
+    const firstTime = !this.alreadyLeadAssisted(item);
+    this.leadAssisted.add(item.id);
+    const lead = this.lead();
+    const main = this.ensureMainThread();
+
+    if (firstTime) {
+      const notes = this.deps.store
+        .listNotes(agent.id)
+        .slice(0, 2)
+        .map((n) => n.content)
+        .join('\n\n')
+        .slice(0, 1500);
+      const prompt =
+        `${agent.displayName} is blocked on "${item.title}" (${reason}) and produced no code.\n` +
+        `Their latest notes:\n"""\n${notes || '(none)'}\n"""\n\n` +
+        `You are the Team Lead. UNBLOCK them now by MAKING the decisions they are missing - ` +
+        `pick concrete, reversible defaults (tech stack, libraries, file/dir layout, conventions) ` +
+        `rather than asking anyone. Reply with a short, buildable spec: the stack to use, the exact ` +
+        `files/components to create, and the acceptance for this slice. Be decisive and specific.`;
+      let decision = '';
+      try {
+        decision = (await this.actor(lead).ask(prompt, main.id, item.id)).trim();
+      } catch {
+        /* never crash the tick - fall through to the generic directive */
+      }
+      const guidance =
+        decision ||
+        `Use a conventional default stack and ship the smallest working slice for "${item.title}". ` +
+          `Make any remaining minor decisions yourself; do not wait for clarification.`;
+      const patched = `${item.description ?? ''}\n\n${ProjectOrchestrator.LEAD_DECISION_MARKER}\nTeam Lead decision (unblock):\n${guidance}`.slice(
+        0,
+        8000,
+      );
+      const updated = this.deps.store.updateWorkItem(item.id, { description: patched });
+      if (updated)
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: updated,
+        });
+      this.emitEvent(
+        agent.id,
+        'system',
+        `Team Lead stepped in with a decision to unblock "${item.title}"`,
+        { decision: guidance },
+        item.id,
+      );
+      this.postMessage(
+        main.id,
+        lead,
+        `@${agent.displayName} you're blocked - here's the call so you can proceed:\n\n${guidance}\n\n` +
+          `Implement this now; make any remaining minor decisions yourself.`,
+      );
+    } else {
+      this.postMessage(
+        main.id,
+        lead,
+        `@${agent.displayName} re-driving "${item.title}" now with the guidance above - make concrete progress.`,
+      );
+    }
+
+    // Clear any parked no-code question so the human prompt disappears, then re-queue.
+    this.resolveQuestionForItem(item.id, 'Retry');
+    this.awaitingInput.delete(item.id);
+    this.setStatus(agent.id, 'idle');
+    if (!this.paused) {
+      this.moveItem(item.id, 'todo');
+      this.pokeLead();
+    } else {
+      this.moveItem(item.id, 'todo');
+      this.postMessage(
+        main.id,
+        lead,
+        `(Work is paused - "${item.title}" is queued and will re-drive when you resume.)`,
+      );
+    }
+  }
+
+  /**
+   * Resolve a parked no-code Question for a work item: fulfil the in-memory
+   * promise if it is still live, otherwise mark the DB row answered directly so a
+   * take-over across a process restart never leaves a question stuck `pending`.
+   * `answer` must be one of the question's valid choices.
+   */
+  private resolveQuestionForItem(itemId: string, answer: string): void {
+    const qId = this.noCodeQuestions.get(itemId);
+    if (!qId) return;
+    this.noCodeQuestions.delete(itemId);
+    if (this.answer(qId, answer)) return; // in-memory resolver handled it (also persists)
+    const answered = this.deps.store.answerQuestion(qId, answer);
+    if (answered)
+      this.deps.bus.publish({
+        type: 'question.updated',
+        projectId: this.projectId,
+        question: answered,
+      });
+  }
+
+  /**
+   * The user summoned the Team Lead (via an @mention). Take over every parked
+   * NO-CODE blocker - and only those - by driving the Lead-resolve step, so the
+   * human prompt is cleared and the Lead re-drives. Scoped strictly to
+   * `noCodeQuestions`, so build/integration/epic-review escalations are untouched.
+   */
+  private async leadTakeOverPending(): Promise<void> {
+    const pending = this.deps.store.listQuestions(this.projectId).filter((q) => q.status === 'pending');
+    const pendingIds = new Set(pending.map((q) => q.id));
+    const targets: Array<{ item: WorkItem; agent: Agent }> = [];
+    for (const [itemId, qId] of this.noCodeQuestions) {
+      if (!pendingIds.has(qId)) continue;
+      const item = this.deps.store.getWorkItem(itemId);
+      const agent = item?.assigneeAgentId
+        ? this.deps.store.getAgent(item.assigneeAgentId)
+        : undefined;
+      if (item && agent) targets.push({ item, agent });
+    }
+    if (targets.length === 0) return;
+    this.postMessage(
+      this.ensureMainThread().id,
+      this.lead(),
+      `On it - stepping in on ${targets.length} blocked task(s) so you don't have to. I'll make the calls and re-drive.`,
+    );
+    for (const { item, agent } of targets) {
+      await this.leadResolveBlocker(agent, item, 'you asked the Team Lead to step in');
+    }
+  }
+
   /**
    * Restart an agent whose session is stuck/unrecoverable: dispose its Copilot
    * session(s), build a fresh one on the next turn, and re-drive its work. Posts a
@@ -2622,6 +2784,14 @@ class ProjectOrchestrator {
         );
         return;
       }
+      // ITEM-1/3: before ever parking the run on the human, the Team Lead steps in
+      // to MAKE the missing decision and re-drive (one-shot per item). Only if the
+      // Lead-assisted re-drive ALSO produces nothing do we fall through to the user
+      // prompt below - the guaranteed last-resort backstop.
+      if (!this.alreadyLeadAssisted(item)) {
+        await this.leadResolveBlocker(agent, item, 'no code after a session restart');
+        return;
+      }
       this.setStatus(agent.id, 'needs_input');
       this.awaitingInput.add(item.id);
       this.emitEvent(
@@ -2643,7 +2813,9 @@ class ProjectOrchestrator {
         agent.id,
         `${agent.displayName} produced no code for "${item.title}" even after restarting its session. How should we proceed?`,
         ['Retry', 'Skip this task'],
+        item.id,
       ).then((ans) => {
+        this.noCodeQuestions.delete(item.id);
         this.awaitingInput.delete(item.id);
         this.setStatus(agent.id, 'idle');
         if (ans.toLowerCase().startsWith('skip')) {
@@ -4860,6 +5032,7 @@ class ProjectOrchestrator {
     agentId: string | null,
     question: string,
     choices?: string[],
+    trackNoCodeItemId?: string,
   ): Promise<string> {
     const q = this.deps.store.createQuestion({
       projectId: this.projectId,
@@ -4867,6 +5040,9 @@ class ProjectOrchestrator {
       question,
       choices: choices ?? null,
     });
+    // Register no-code blockers so an @mention take-over can find (and only find)
+    // these questions - it must never sweep build/integration/epic-review prompts.
+    if (trackNoCodeItemId) this.noCodeQuestions.set(trackNoCodeItemId, q.id);
     this.deps.bus.publish({ type: 'question.updated', projectId: this.projectId, question: q });
     this.notify('question', 'Your input is needed', question, 'chat', null, agentId);
     this.deps.store.appendEvent({

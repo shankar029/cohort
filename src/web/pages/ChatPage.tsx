@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Paperclip, X } from 'lucide-react';
+import { Plus, Paperclip, X, AtSign } from 'lucide-react';
 import type { Thread } from '@shared/index';
 import { useApp, useBundle } from '../state';
 import { api } from '../api';
@@ -550,6 +550,21 @@ export function ChatPage(): React.JSX.Element {
                 >
                   <Paperclip className="h-4 w-4" />
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInput((v) => {
+                      const sep = v && !v.endsWith(' ') ? ' ' : '';
+                      return `${v}${sep}@Team Lead `;
+                    });
+                    taRef.current?.focus();
+                  }}
+                  title="Summon the Team Lead"
+                  data-testid="mention-lead"
+                  className="btn-ghost shrink-0 self-end px-3 py-2"
+                >
+                  <AtSign className="h-4 w-4" />
+                </button>
                 <textarea
                   ref={taRef}
                   className="input max-h-52 min-h-[2.75rem] flex-1 resize-none overflow-y-auto"
@@ -574,7 +589,7 @@ export function ChatPage(): React.JSX.Element {
               <p className="mt-2 text-[0.7rem] text-slate-600">
                 {uploading
                   ? 'Uploading…'
-                  : 'You always talk to the Team Lead. Enter to send · Shift+Enter for a new line · 📎 to attach files.'}
+                  : 'You always talk to the Team Lead. @ mention to summon them · Enter to send · Shift+Enter for a new line · 📎 to attach files.'}
               </p>
             </>
           ) : (

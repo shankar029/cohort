@@ -1,0 +1,29 @@
+{
+  "slug": "lead-escalation-mention",
+  "base": "origin/main",
+  "merge_base": "87762392b86a",
+  "head": "00296cb",
+  "generated": "2026-09-15T10:26:47+00:00",
+  "project": "ui",
+  "baseline": "compared",
+  "verdict": "pass",
+  "worst_status": "ok",
+  "metrics": {
+    "diff_files": {
+      "head": 17
+    },
+    "diff_lines": {
+      "head": 2216
+    }
+  },
+  "unavailable": [
+    "duplication_pct",
+    "complexity_max",
+    "complexity_avg",
+    "cycles",
+    "dead_exports",
+    "static_findings",
+    "mutation_score_pct"
+  ],
+  "tools": {}
+}

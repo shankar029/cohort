@@ -1,0 +1,585 @@
+diff --git a/src/server/mention.ts b/src/server/mention.ts
+new file mode 100644
+index 0000000..de8ed5b
+--- /dev/null
++++ b/src/server/mention.ts
+@@ -0,0 +1,59 @@
++/**
++ * Detect an @-mention of a named agent (e.g. the Team Lead) inside a free-form
++ * chat message. Matching is intentionally forgiving on the *name* side (the
++ * user may type `@lead`, `@team-lead`, `@teamlead`, or the full display name)
++ * but strict on the *boundary* side: the `@` must sit at the start of the
++ * message or right after whitespace/punctuation, so an email address like
++ * `user@team-lead.io` or `foo@lead` never counts as a mention.
++ */
++
++/** Escape a string for safe use inside a RegExp. */
++function escapeRegExp(s: string): string {
++  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++}
++
++/**
++ * Build the alias set recognised for an agent display name. Always includes the
++ * fixed Team-Lead aliases plus a normalized form of the display name (spaces and
++ * hyphens made optional so `@team-lead`, `@team lead`, and `@teamlead` all hit).
++ */
++function aliasPatterns(displayName: string): string[] {
++  const aliases = new Set<string>(['team[-\\s]?lead', 'teamlead', 'lead']);
++  const name = (displayName ?? '').trim();
++  if (name) {
++    // Turn runs of spaces/hyphens in the display name into "[-\s]?" so the user
++    // can type it with or without the separators.
++    const flexible = escapeRegExp(name).replace(/(\\?[-\s])+/g, '[-\\s]?');
++    aliases.add(flexible);
++  }
++  // Longer aliases first so the regex prefers the most specific match.
++  return [...aliases].sort((a, b) => b.length - a.length);
++}
++
++/**
++ * True when `content` contains an @-mention of the agent named `displayName`.
++ * Case-insensitive. Requires a non-word char (or string start) immediately
++ * before the `@`, and a word boundary after the alias.
++ */
++export function mentionsAgent(content: string, displayName: string): boolean {
++  if (!content) return false;
++  const alt = aliasPatterns(displayName).join('|');
++  // (^|[^\w@]) — start, or a char that is neither a word char nor another '@'
++  // (so `foo@lead` and `a@@lead` do not match) — this also rejects emails like
++  // `user@team-lead.io` because the char before '@' is a word char. Then '@',
++  // the alias, and a trailing non-word boundary (so `@leadership` does not match
++  // but a sentence-ending `@team-lead.` still does).
++  const re = new RegExp(`(^|[^\\w@])@(?:${alt})(?!\\w)`, 'i');
++  return re.test(content);
++}
++
++/**
++ * Remove @-mentions of the agent from the text (used to classify build/discuss
++ * intent on the *content* rather than the mention token itself).
++ */
++export function stripMention(content: string, displayName: string): string {
++  if (!content) return content;
++  const alt = aliasPatterns(displayName).join('|');
++  const re = new RegExp(`(^|[^\\w@])@(?:${alt})(?!\\w)`, 'gi');
++  return content.replace(re, '$1').trim();
++}
+diff --git a/src/server/orchestrator.ts b/src/server/orchestrator.ts
+index f91ba0d..ab86a9f 100644
+--- a/src/server/orchestrator.ts
++++ b/src/server/orchestrator.ts
+@@ -9,6 +9,7 @@ import {
+ import { sanitizeDag } from './dag.js';
+ import { planStallRecovery, boardHasLiveWork } from './stallRecovery.js';
+ import { reviewBudgetDecision } from './reviewBudget.js';
++import { mentionsAgent, stripMention } from './mention.js';
+ import { scopeStreams, pickBrownfieldBuilders } from './streamScope.js';
+ import {
+   detectConstraints,
+@@ -273,6 +274,11 @@ class ProjectOrchestrator {
+   private readonly running = new Set<string>();
+   /** Work items parked awaiting a human/Lead decision, so the manager won't re-drive them. */
+   private readonly awaitingInput = new Set<string>();
++  /** Work items the Team Lead has already tried to unblock (one-shot, so assist can't loop). */
++  private readonly leadAssisted = new Set<string>();
++  /** No-code-blocked work items → the pending Question id, so an @mention take-over is
++   *  scoped to no-code blockers ONLY and never touches build/integration/epic-review questions. */
++  private readonly noCodeQuestions = new Map<string, string>();
+   /** Epics the user discarded — guards in-flight turns from resurrecting them. */
+   private readonly discardedEpics = new Set<string>();
+   /** Epics the user chose to merge despite unmet acceptance criteria. */
+@@ -617,6 +623,12 @@ class ProjectOrchestrator {
+ 
+     return (async () => {
+       const lead = this.lead();
++      // Did the user summon the Team Lead directly (@lead / @team-lead / @<name>)?
++      // If so, the Lead is "woken to act": beyond replying it takes over any parked
++      // no-code blockers. Intent is classified on the message with the mention
++      // token stripped, so "@lead" alone doesn't falsely trip build/discuss routing.
++      const leadMentioned = mentionsAgent(content, lead.displayName);
++      const intentText = leadMentioned ? stripMention(content, lead.displayName) : content;
+       const roster = this.specialists()
+         .map((s) => `- \`${s.name}\` (${s.displayName}): ${s.description}`)
+         .join('\n');
+@@ -641,10 +653,10 @@ class ProjectOrchestrator {
+       // replies above, but starts no new team work until the user resumes.
+       const buildIntent =
+         /\b(build|implement|create|add|develop|feature|fix|refactor|integrate|migrate|support)\b/i.test(
+-          content,
++          intentText,
+         );
+       const discussIntent = /\b(brainstorm|discuss|approach|architect|explore|options)\b/i.test(
+-        content,
++        intentText,
+       );
+       if (this.paused) {
+         // no-op: user is redirecting; hold off on kicking off work
+@@ -660,6 +672,11 @@ class ProjectOrchestrator {
+           );
+         }
+       }
++
++      // A direct @mention makes the Lead address the user's issue immediately: it
++      // takes over parked no-code blockers so the human prompt clears and work
++      // resumes under the Lead's guidance.
++      if (leadMentioned) await this.leadTakeOverPending();
+     })();
+   }
+ 
+@@ -2023,6 +2040,151 @@ class ProjectOrchestrator {
+     }
+   }
+ 
++  /** Marker embedded in a task description once the Lead has recorded an unblock decision. */
++  private static readonly LEAD_DECISION_MARKER = '<!--lead-decision-->';
++
++  /** True if the Lead already tried to unblock this item (in-memory OR persisted across restart). */
++  private alreadyLeadAssisted(item: WorkItem): boolean {
++    if (this.leadAssisted.has(item.id)) return true;
++    return (item.description ?? '').includes(ProjectOrchestrator.LEAD_DECISION_MARKER);
++  }
++
++  /**
++   * The Team Lead steps in for a specialist that produced no deliverable, instead
++   * of parking the run on the human. On the FIRST assist it MAKES the missing
++   * (reversible) decisions - tech stack, file layout, conventions - writes a
++   * concrete buildable spec into the task, posts it to the agent, and re-queues
++   * the task for a Lead-guided re-drive. Assistance is one-shot per item
++   * (`alreadyLeadAssisted`), so the human prompt remains the guaranteed backstop.
++   */
++  private async leadResolveBlocker(agent: Agent, item: WorkItem, reason: string): Promise<void> {
++    const firstTime = !this.alreadyLeadAssisted(item);
++    this.leadAssisted.add(item.id);
++    const lead = this.lead();
++    const main = this.ensureMainThread();
++
++    if (firstTime) {
++      const notes = this.deps.store
++        .listNotes(agent.id)
++        .slice(0, 2)
++        .map((n) => n.content)
++        .join('\n\n')
++        .slice(0, 1500);
++      const prompt =
++        `${agent.displayName} is blocked on "${item.title}" (${reason}) and produced no code.\n` +
++        `Their latest notes:\n"""\n${notes || '(none)'}\n"""\n\n` +
++        `You are the Team Lead. UNBLOCK them now by MAKING the decisions they are missing - ` +
++        `pick concrete, reversible defaults (tech stack, libraries, file/dir layout, conventions) ` +
++        `rather than asking anyone. Reply with a short, buildable spec: the stack to use, the exact ` +
++        `files/components to create, and the acceptance for this slice. Be decisive and specific.`;
++      let decision = '';
++      try {
++        decision = (await this.actor(lead).ask(prompt, main.id, item.id)).trim();
++      } catch {
++        /* never crash the tick - fall through to the generic directive */
++      }
++      const guidance =
++        decision ||
++        `Use a conventional default stack and ship the smallest working slice for "${item.title}". ` +
++          `Make any remaining minor decisions yourself; do not wait for clarification.`;
++      const patched = `${item.description ?? ''}\n\n${ProjectOrchestrator.LEAD_DECISION_MARKER}\nTeam Lead decision (unblock):\n${guidance}`.slice(
++        0,
++        8000,
++      );
++      const updated = this.deps.store.updateWorkItem(item.id, { description: patched });
++      if (updated)
++        this.deps.bus.publish({
++          type: 'workitem.updated',
++          projectId: this.projectId,
++          workItem: updated,
++        });
++      this.emitEvent(
++        agent.id,
++        'system',
++        `Team Lead stepped in with a decision to unblock "${item.title}"`,
++        { decision: guidance },
++        item.id,
++      );
++      this.postMessage(
++        main.id,
++        lead,
++        `@${agent.displayName} you're blocked - here's the call so you can proceed:\n\n${guidance}\n\n` +
++          `Implement this now; make any remaining minor decisions yourself.`,
++      );
++    } else {
++      this.postMessage(
++        main.id,
++        lead,
++        `@${agent.displayName} re-driving "${item.title}" now with the guidance above - make concrete progress.`,
++      );
++    }
++
++    // Clear any parked no-code question so the human prompt disappears, then re-queue.
++    this.resolveQuestionForItem(item.id, 'Retry');
++    this.awaitingInput.delete(item.id);
++    this.setStatus(agent.id, 'idle');
++    if (!this.paused) {
++      this.moveItem(item.id, 'todo');
++      this.pokeLead();
++    } else {
++      this.moveItem(item.id, 'todo');
++      this.postMessage(
++        main.id,
++        lead,
++        `(Work is paused - "${item.title}" is queued and will re-drive when you resume.)`,
++      );
++    }
++  }
++
++  /**
++   * Resolve a parked no-code Question for a work item: fulfil the in-memory
++   * promise if it is still live, otherwise mark the DB row answered directly so a
++   * take-over across a process restart never leaves a question stuck `pending`.
++   * `answer` must be one of the question's valid choices.
++   */
++  private resolveQuestionForItem(itemId: string, answer: string): void {
++    const qId = this.noCodeQuestions.get(itemId);
++    if (!qId) return;
++    this.noCodeQuestions.delete(itemId);
++    if (this.answer(qId, answer)) return; // in-memory resolver handled it (also persists)
++    const answered = this.deps.store.answerQuestion(qId, answer);
++    if (answered)
++      this.deps.bus.publish({
++        type: 'question.updated',
++        projectId: this.projectId,
++        question: answered,
++      });
++  }
++
++  /**
++   * The user summoned the Team Lead (via an @mention). Take over every parked
++   * NO-CODE blocker - and only those - by driving the Lead-resolve step, so the
++   * human prompt is cleared and the Lead re-drives. Scoped strictly to
++   * `noCodeQuestions`, so build/integration/epic-review escalations are untouched.
++   */
++  private async leadTakeOverPending(): Promise<void> {
++    const pending = this.deps.store.listQuestions(this.projectId).filter((q) => q.status === 'pending');
++    const pendingIds = new Set(pending.map((q) => q.id));
++    const targets: Array<{ item: WorkItem; agent: Agent }> = [];
++    for (const [itemId, qId] of this.noCodeQuestions) {
++      if (!pendingIds.has(qId)) continue;
++      const item = this.deps.store.getWorkItem(itemId);
++      const agent = item?.assigneeAgentId
++        ? this.deps.store.getAgent(item.assigneeAgentId)
++        : undefined;
++      if (item && agent) targets.push({ item, agent });
++    }
++    if (targets.length === 0) return;
++    this.postMessage(
++      this.ensureMainThread().id,
++      this.lead(),
++      `On it - stepping in on ${targets.length} blocked task(s) so you don't have to. I'll make the calls and re-drive.`,
++    );
++    for (const { item, agent } of targets) {
++      await this.leadResolveBlocker(agent, item, 'you asked the Team Lead to step in');
++    }
++  }
++
+   /**
+    * Restart an agent whose session is stuck/unrecoverable: dispose its Copilot
+    * session(s), build a fresh one on the next turn, and re-drive its work. Posts a
+@@ -2622,6 +2784,14 @@ class ProjectOrchestrator {
+         );
+         return;
+       }
++      // ITEM-1/3: before ever parking the run on the human, the Team Lead steps in
++      // to MAKE the missing decision and re-drive (one-shot per item). Only if the
++      // Lead-assisted re-drive ALSO produces nothing do we fall through to the user
++      // prompt below - the guaranteed last-resort backstop.
++      if (!this.alreadyLeadAssisted(item)) {
++        await this.leadResolveBlocker(agent, item, 'no code after a session restart');
++        return;
++      }
+       this.setStatus(agent.id, 'needs_input');
+       this.awaitingInput.add(item.id);
+       this.emitEvent(
+@@ -2643,7 +2813,9 @@ class ProjectOrchestrator {
+         agent.id,
+         `${agent.displayName} produced no code for "${item.title}" even after restarting its session. How should we proceed?`,
+         ['Retry', 'Skip this task'],
++        item.id,
+       ).then((ans) => {
++        this.noCodeQuestions.delete(item.id);
+         this.awaitingInput.delete(item.id);
+         this.setStatus(agent.id, 'idle');
+         if (ans.toLowerCase().startsWith('skip')) {
+@@ -4860,6 +5032,7 @@ class ProjectOrchestrator {
+     agentId: string | null,
+     question: string,
+     choices?: string[],
++    trackNoCodeItemId?: string,
+   ): Promise<string> {
+     const q = this.deps.store.createQuestion({
+       projectId: this.projectId,
+@@ -4867,6 +5040,9 @@ class ProjectOrchestrator {
+       question,
+       choices: choices ?? null,
+     });
++    // Register no-code blockers so an @mention take-over can find (and only find)
++    // these questions - it must never sweep build/integration/epic-review prompts.
++    if (trackNoCodeItemId) this.noCodeQuestions.set(trackNoCodeItemId, q.id);
+     this.deps.bus.publish({ type: 'question.updated', projectId: this.projectId, question: q });
+     this.notify('question', 'Your input is needed', question, 'chat', null, agentId);
+     this.deps.store.appendEvent({
+diff --git a/src/web/pages/ChatPage.tsx b/src/web/pages/ChatPage.tsx
+index 17add59..7484205 100644
+--- a/src/web/pages/ChatPage.tsx
++++ b/src/web/pages/ChatPage.tsx
+@@ -1,6 +1,6 @@
+ import React, { useEffect, useMemo, useRef, useState } from 'react';
+ import { useParams } from 'react-router-dom';
+-import { Plus, Paperclip, X } from 'lucide-react';
++import { Plus, Paperclip, X, AtSign } from 'lucide-react';
+ import type { Thread } from '@shared/index';
+ import { useApp, useBundle } from '../state';
+ import { api } from '../api';
+@@ -550,6 +550,21 @@ export function ChatPage(): React.JSX.Element {
+                 >
+                   <Paperclip className="h-4 w-4" />
+                 </button>
++                <button
++                  type="button"
++                  onClick={() => {
++                    setInput((v) => {
++                      const sep = v && !v.endsWith(' ') ? ' ' : '';
++                      return `${v}${sep}@Team Lead `;
++                    });
++                    taRef.current?.focus();
++                  }}
++                  title="Summon the Team Lead"
++                  data-testid="mention-lead"
++                  className="btn-ghost shrink-0 self-end px-3 py-2"
++                >
++                  <AtSign className="h-4 w-4" />
++                </button>
+                 <textarea
+                   ref={taRef}
+                   className="input max-h-52 min-h-[2.75rem] flex-1 resize-none overflow-y-auto"
+@@ -574,7 +589,7 @@ export function ChatPage(): React.JSX.Element {
+               <p className="mt-2 text-[0.7rem] text-slate-600">
+                 {uploading
+                   ? 'Uploading…'
+-                  : 'You always talk to the Team Lead. Enter to send · Shift+Enter for a new line · 📎 to attach files.'}
++                  : 'You always talk to the Team Lead. @ mention to summon them · Enter to send · Shift+Enter for a new line · 📎 to attach files.'}
+               </p>
+             </>
+           ) : (
+diff --git a/tests/e2e/_mention.spec.ts b/tests/e2e/_mention.spec.ts
+new file mode 100644
+index 0000000..ee804cb
+--- /dev/null
++++ b/tests/e2e/_mention.spec.ts
+@@ -0,0 +1,37 @@
++import { test, expect, type Page } from '@playwright/test';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++
++async function createProject(page: Page, name: string): Promise<void> {
++  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-e2e-mention-'));
++  await page.goto('/');
++  await page.getByTestId('new-project').click();
++  await page.getByTestId('project-name').fill(name);
++  await page.getByTestId('project-repo').fill(repoDir);
++  await page.getByTestId('project-submit').click();
++  await expect(page.getByTestId('add-agent')).toBeVisible();
++}
++
++async function nav(page: Page, name: string): Promise<void> {
++  await page.getByRole('link', { name, exact: true }).click();
++}
++
++test('the "@ Team Lead" affordance inserts the mention token and sends it (AC5)', async ({ page }) => {
++  await createProject(page, 'Mention');
++  await nav(page, 'Threads');
++
++  const input = page.getByTestId('chat-input');
++  await input.fill('are you looking into this issue?');
++
++  // Clicking the @ button prepends the mention token the server recognizes.
++  await page.getByTestId('mention-lead').click();
++  await expect(input).toHaveValue(/@Team Lead\s*$/);
++
++  // The composed message includes both the mention and the user's text.
++  await expect(input).toHaveValue(/are you looking into this issue\?\s+@Team Lead\s*$/);
++
++  // It sends like any other message (the mention is plain text the Lead parses).
++  await page.getByTestId('chat-send').click();
++  await expect(page.getByText('are you looking into this issue?').first()).toBeVisible();
++});
+diff --git a/tests/integration/leadEscalation.test.ts b/tests/integration/leadEscalation.test.ts
+new file mode 100644
+index 0000000..c70ea53
+--- /dev/null
++++ b/tests/integration/leadEscalation.test.ts
+@@ -0,0 +1,111 @@
++import { describe, it, expect, afterEach, beforeEach } from 'vitest';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { createTestApp, rmDir, type TestApp } from '../helpers/testApp.js';
++import { execFileSync } from 'node:child_process';
++
++let ctx: TestApp;
++let repoDir: string;
++
++beforeEach(() => {
++  repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-repo-'));
++  // A real git repo so epic worktrees can be created.
++  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@e', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@e' };
++  execFileSync('git', ['init', '-q'], { cwd: repoDir, env });
++  fs.writeFileSync(path.join(repoDir, 'README.md'), '# fixture\n');
++  execFileSync('git', ['add', '.'], { cwd: repoDir, env });
++  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repoDir, env });
++  ctx = createTestApp();
++});
++
++afterEach(async () => {
++  await ctx.close();
++  rmDir(repoDir);
++});
++
++async function createProject(name = 'Lead Escalation'): Promise<string> {
++  const res = await ctx.app.inject({ method: 'POST', url: '/api/projects', payload: { name, repoDir } });
++  expect(res.statusCode).toBe(201);
++  return (res.json() as { project: { id: string } }).project.id;
++}
++
++async function addNoopBuilder(projectId: string): Promise<void> {
++  await ctx.app.inject({
++    method: 'POST',
++    url: `/api/projects/${projectId}/agents`,
++    payload: {
++      catalogId: 'backend-engineer',
++      name: 'backend',
++      prompt: 'You are the Backend Engineer. [[NOOP]] You describe work but write no files.',
++    },
++  });
++}
++
++async function chat(projectId: string, content: string): Promise<void> {
++  const res = await ctx.app.inject({ method: 'POST', url: `/api/projects/${projectId}/chat`, payload: { content } });
++  expect(res.statusCode).toBeLessThan(300);
++}
++
++describe('Lead-first escalation (Items 1 & 3)', () => {
++  it('the Team Lead makes a decision and re-drives BEFORE parking the run on the user', async () => {
++    const projectId = await createProject();
++    await addNoopBuilder(projectId);
++    await chat(projectId, 'Please build an orders API.');
++
++    // The no-code fallback question still surfaces (guaranteed backstop)…
++    const q = await ctx.waitFor(
++      (m) => m.type === 'question.updated' && /produced no code/i.test(m.question.question),
++      15000,
++    );
++    expect(q.type === 'question.updated' && q.question.status).toBe('pending');
++
++    // …but ONLY after the Lead first stepped in: the blocked task carries a
++    // persisted Lead decision, and the Lead posted an unblock message. That is
++    // the AC1 proof — a Lead-made decision precedes the human prompt.
++    const blocked = ctx.store.listWorkItems(projectId).find((w) => w.kind === 'task' && (w.description ?? '').includes('lead-decision'));
++    expect(blocked, 'a task should carry the Lead decision marker').toBeTruthy();
++    expect(blocked!.description).toContain('Team Lead decision (unblock)');
++
++    const leadMsg = ctx.messages.find(
++      (m) => m.type === 'chat.message' && /here's the call so you can proceed/i.test(m.message.content),
++    );
++    expect(leadMsg, 'the Lead should post unblock guidance to the agent').toBeTruthy();
++  });
++});
++
++describe('@mention wakes the Lead to take over (Item 2)', () => {
++  it('@team-lead clears the parked no-code question and re-drives, and does NOT touch unrelated escalations (B1)', async () => {
++    const projectId = await createProject();
++    await addNoopBuilder(projectId);
++    await chat(projectId, 'Please build an orders API.');
++
++    const q = await ctx.waitFor(
++      (m) => m.type === 'question.updated' && /produced no code/i.test(m.question.question),
++      15000,
++    );
++    const noCodeQId = q.type === 'question.updated' ? q.question.id : '';
++    expect(noCodeQId).toBeTruthy();
++
++    // An UNRELATED escalation the take-over must never answer (different choices).
++    const unrelated = ctx.store.createQuestion({
++      projectId,
++      agentId: null,
++      question: 'Epic review budget exhausted — keep working or merge anyway?',
++      choices: ['Keep working', 'Merge anyway'],
++    });
++
++    // The user summons the Lead. Not a build/discuss intent — pure take-over.
++    await chat(projectId, '@team-lead are you looking into this issue?');
++
++    // The no-code question is resolved by the Lead (status → answered).
++    await ctx.waitFor(
++      (m) => m.type === 'question.updated' && m.question.id === noCodeQId && m.question.status === 'answered',
++      15000,
++    );
++
++    // The unrelated escalation is untouched (scoping — B1).
++    const stillPending = ctx.store.listQuestions(projectId).find((x) => x.id === unrelated.id);
++    expect(stillPending?.status).toBe('pending');
++  });
++});
+diff --git a/tests/unit/mention.test.ts b/tests/unit/mention.test.ts
+new file mode 100644
+index 0000000..7c9acf0
+--- /dev/null
++++ b/tests/unit/mention.test.ts
+@@ -0,0 +1,54 @@
++import { describe, it, expect } from 'vitest';
++import { mentionsAgent, stripMention } from '../../src/server/mention.js';
++
++const LEAD = 'Team Lead';
++
++describe('mentionsAgent', () => {
++  const positives = [
++    '@lead can you help',
++    '@team-lead please step in',
++    '@team lead are you looking into this?',
++    '@teamlead',
++    'hey @Team Lead what now',
++    'cc @TEAM-LEAD',
++    'so, @lead — take over',
++    'ok @team-lead.', // sentence-ending period still counts
++  ];
++  const negatives = [
++    'are you looking into this issue?', // the screenshot message — NOT a mention
++    'email me at user@team-lead.io',
++    'contact foo@lead',
++    'the team lead should help', // no '@'
++    'leadership matters',
++    'a@@lead',
++    '',
++  ];
++
++  it('matches valid @-mentions of the lead', () => {
++    for (const s of positives) expect(mentionsAgent(s, LEAD), s).toBe(true);
++  });
++  it('rejects non-mentions and email/host lookalikes', () => {
++    for (const s of negatives) expect(mentionsAgent(s, LEAD), s).toBe(false);
++  });
++  it('matches a custom display name with flexible separators', () => {
++    expect(mentionsAgent('@Ada Lovelace ping', 'Ada Lovelace')).toBe(true);
++    expect(mentionsAgent('@ada-lovelace ping', 'Ada Lovelace')).toBe(true);
++    expect(mentionsAgent('email ada@lovelace.dev', 'Ada Lovelace')).toBe(false);
++  });
++  it('is ReDoS-safe on pathological input (returns fast)', () => {
++    const big = '@' + 'a'.repeat(100000);
++    const t = Date.now();
++    mentionsAgent(big, LEAD);
++    expect(Date.now() - t).toBeLessThan(200);
++  });
++});
++
++describe('stripMention', () => {
++  it('removes the mention token so intent is classified on the content', () => {
++    expect(stripMention('@lead build the parser', LEAD)).toBe('build the parser');
++    expect(stripMention('hey @Team Lead what next', LEAD)).toMatch(/^hey\s+what next$/);
++  });
++  it('leaves un-mentioned text unchanged', () => {
++    expect(stripMention('build the parser', LEAD)).toBe('build the parser');
++  });
++});
