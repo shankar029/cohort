@@ -32,8 +32,8 @@ Branch: feat/live-greenfield-smoke (off main, post-merge of PRs #1/#2/#4).
   which forces the fake), bounded, and asserts AC4/AC5 with captured evidence.
 
 ## Progress
-Current phase: 6 — Review + ship (I2 live verification complete)
-Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅ (I1) | G5 ✅ (AC-H proven; AC4/AC5 NOT-VERIFIED live with root cause — harness did its job) | G6 ⏳
+Current phase: 6 — DONE (shipping)
+Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅ (I1) | G5 ✅ (AC-H proven; AC4/AC5 NOT-VERIFIED live with root cause — harness did its job) | G6 ✅
 Next action: independent review of the evals diff + AC reconciliation; probe; quality gate; report.html; commit; PR.
 Blocked on: none
 
