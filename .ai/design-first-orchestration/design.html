@@ -1,0 +1,115 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design — Design-first orchestration</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="design.html" data-slug="design-first-orchestration"></script>
+
+<h1>Design — Design-first orchestration for Cohort</h1>
+<div class="meta">Repo: cohort · Branch: feat/design-first-orchestration (stacked on PR #2) · Grounded in research.md · ≤3 pages</div>
+
+<h2>1. Problem &amp; approach</h2>
+<p>Today <code>decomposeEpic</code> (orchestrator.ts:899) is <strong>dispatch-first, annotate-after</strong>: it fans out one
+generic task per stream via a deterministic template, then (step 5b, ~1148) asks the Architect for design
+<em>notes</em> — its prompt literally says <em>"the team is already building."</em> A scar-tissue NOTE (~925) warns that
+gating dispatch on a planning LLM turn once <em>"stranded an epic with zero assigned tasks."</em> Separately, the
+Frontend persona (catalog.ts:67) says <em>"never introduce a new pattern when one already exists"</em> — on an empty repo
+there is no pattern, so the FE loops on clarifying questions and writes nothing (the reported stall).</p>
+<p><strong>Approach (revised after design-review B1).</strong> Do <strong>not</strong> defer task creation. Keep the deterministic template
+board as a <strong>synchronous floor</strong> — <code>makeTask</code> creates the assigned per-stream tasks immediately, exactly as today,
+so the board is <em>never</em> stranded even on an instant crash (the scar-tissue invariant is preserved verbatim, not
+reinterpreted). What changes is <em>when and how the Architect design informs those tasks</em>: for non-trivial epics the
+structured design turn is <strong>moved to the front</strong> of <code>decomposeEpic</code> (today it runs as after-the-fact step-5b notes),
+and its per-stream acceptance criteria <strong>enrich</strong> the template tasks before builders act on them. Builders already
+<code>awaitEpicDesign</code> (orchestrator.ts:2624) and inject the design, so "design drives building" holds without any
+deferral. The template set is the <strong>floor</strong> for which streams exist (design may add detail, never under-dispatch below
+it — fixes M3). On timeout / error / architect-absent-and-lead-analysis-failed the tasks simply keep their template
+descriptions (AC3). Builder personas gain a QA-style <em>decide-under-uncertainty</em> clause. Agents resolve questions in
+<strong>bounded group discussions with a decider</strong> instead of blocking the user — generalizing the existing
+<code>runGroupChat</code>, writing the decision back under a <strong>distinct</strong> <code>&lt;!--group-decision--&gt;</code> marker (not the
+<code>&lt;!--lead-decision--&gt;</code> one — fixes M2).</p>
+
+<h2>2. Components (why · what · how)</h2>
+<table>
+<tr><th>Component</th><th>AC</th><th>Responsibility (what)</th><th>Collaborators (how)</th><th>Principle</th></tr>
+<tr><td><code>catalog.ts</code> persona strings (frontend/backend/ux/data/devops)</td><td>AC4</td><td>Add: detect conventions; if repo empty/ambiguous, pick the mainstream default, <em>state the assumption</em>, and proceed — build first, ask only for irreversible/product decisions. Conditioned on empty/ambiguous so brownfield "reuse existing patterns" is preserved.</td><td>Mirrors QA's existing license (catalog.ts:90); read by the builder run prompt; empty-build gate (~2740) unchanged</td><td>Consistency / least-surprise</td></tr>
+<tr><td><code>catalog.ts</code> architect string</td><td>AC5</td><td>Greenfield → decide + state the stack/conventions/frameworks; brownfield → read AGENTS.md/README/CONTRIBUTING/docs then design within the repo, don't invent a new stack.</td><td>Steered by <code>isBrownfieldRepo</code> (883); output persisted via <code>setEpicDesign</code></td><td>Grounding</td></tr>
+<tr><td><code>classifyComplexity(content, keptStreams, brownfield, constraints)</code> — new pure fn</td><td>AC2</td><td>Return <code>'trivial' | 'standard'</code>. Trivial = single-layer + no hard constraints + short goal. Pure, deterministic, never blocks.</td><td>Reuses <code>pickBrownfieldBuilders.multiLayer</code>, <code>scopeStreams</code> kept-count, <code>detectConstraints</code>, <code>isBrownfieldRepo</code>, <code>shortGoal</code></td><td>KISS / no LLM in the hot path</td></tr>
+<tr><td><code>designThenEnrich(epic, content, streams, architectPresent)</code> — new method</td><td>AC1, AC3, AC5</td><td>Time-boxed. Ask Architect (or Lead if absent) for a STRUCTURED per-stream breakdown; persist via <code>setEpicDesign</code>; for each returned stream that already has a template task, append its acceptance criteria to that task's description (<code>updateWorkItem</code>). Streams are constrained to the template floor (no under-dispatch). On timeout/error/empty → no-op (tasks keep template descriptions).</td><td>Wraps <code>actor(architect|lead).ask</code> in <code>withTimeout(ATEAM_DESIGN_TIMEOUT_MS)</code>; enriches via <code>existingByStream</code>+<code>updateWorkItem</code>; builders read it via the existing <code>awaitEpicDesign</code></td><td>Single responsibility / bounded I/O</td></tr>
+<tr><td><code>decomposeEpic</code> (edit, orchestrator.ts:899)</td><td>AC1–AC3</td><td>Orchestrate: create the template board synchronously (unchanged floor) → complexity gate → (standard) fire <code>designThenEnrich</code> at the FRONT and REMOVE the old step-5b architect turn (fixes M1: no double-run / no prose overwrite). Board guaranteed immediately.</td><td>Calls <code>classifyComplexity</code>, <code>designThenEnrich</code>; existing <code>makeTask</code>/<code>existingByStream</code> idempotent reuse; step-5b architect block deleted</td><td>Open/closed — additive, template floor preserved</td></tr>
+<tr><td><code>runGroupChat</code> (edit, orchestrator.ts:1198) + <code>maybeHandleGroupChatRequest</code> (1268)</td><td>AC6</td><td>Add: bounded round cap (<code>ATEAM_DISCUSSION_ROUNDS</code>), <code>decider</code> routing (Lead, or PM for product), targeted participant pull, and decision write-back under a DISTINCT <code>&lt;!--group-decision--&gt;</code> marker (M2) so it never trips <code>alreadyLeadAssisted</code>. Set <code>includesUser:false</code> for agent-initiated discussions so they resolve within the team without prompting the user (AC6 intent); the user still sees the posted summary.</td><td>Reuses <code>store.createThread</code>/<code>closeThread</code>, the marker pattern (distinct from 2044), <code>updateWorkItem</code>, <code>emitEvent</code></td><td>Bounded / decider-resolved</td></tr>
+</table>
+
+<h2>3. As-is → to-be</h2>
+<table>
+<tr><th>Symbol</th><th>As-is (research.md)</th><th>To-be</th></tr>
+<tr><td>frontend/backend/ux/data/devops persona</td><td>Anchor on "existing framework/patterns", no empty-repo escape hatch (catalog.ts:67…)</td><td>+ decide-under-uncertainty clause conditioned on empty/ambiguous</td></tr>
+<tr><td>architect persona</td><td>"design BEFORE code… ground in existing codebase" — no greenfield stack license, no AGENTS.md mention (catalog.ts:40)</td><td>+ greenfield: decide+state stack; brownfield: honor AGENTS.md/README/docs</td></tr>
+<tr><td><code>decomposeEpic</code></td><td>Dispatch template first (940–1075); architect design NOTES after, as step-5b prose (1148)</td><td>Template board still created synchronously; non-trivial+architect → structured design turn moved to the FRONT and ENRICHES the template tasks; the old step-5b architect block is REMOVED (no double-run)</td></tr>
+<tr><td><code>runGroupChat</code></td><td>Single round, Lead-only synthesizer, chat-summary only, no write-back (1198–1265)</td><td>Bounded rounds, decider (lead|pm), targeted participants, decision persisted to the work item</td></tr>
+</table>
+
+<h2>4. Key interaction — non-trivial epic (design-first with fallback)</h2>
+<pre>
+Lead.decomposeEpic(epic, content)
+  worktree/branch                       (unchanged, best-effort)
+  makeTask per kept stream  ───▶ TEMPLATE BOARD CREATED NOW (synchronous floor)   [never-strand]
+  complexity = classifyComplexity(...)  (pure)
+  if complexity == 'standard':
+    designThenEnrich(epic, content, keptStreams, architectPresent):   [AC1,AC5]
+      breakdown = await withTimeout(
+          architectPresent ? architect.design(structured)
+                           : lead.analyzeAndSplit(structured),
+          ATEAM_DESIGN_TIMEOUT_MS)
+      if breakdown ok ─▶ setEpicDesign; for each stream in (breakdown ∩ keptStreams):
+                          append acceptance to that stream's EXISTING task     [AC1,AC5]
+      else (timeout/error/empty) ─▶ no-op: tasks keep template descriptions     [AC3]
+  # trivial ─▶ no design turn; template tasks stand as-is                        [AC2]
+  verifiers + plan summary + PM criteria (unchanged); step-5b architect REMOVED  [M1]
+  builders later awaitEpicDesign(2624) ─▶ act on the enriched, design-backed task
+</pre>
+<p>Agent-initiated discussion (AC6): a builder emits <code>[[REQUEST_GROUPCHAT: topic]]</code> → <code>maybeHandleGroupChatRequest</code>
+picks targeted participants → <code>runGroupChat</code> runs ≤N bounded rounds → the decider (Lead, or PM for a product
+question) posts a decision → decision written back onto the work item via the marker; no human question raised.</p>
+
+<h2>5. Data &amp; contracts</h2>
+<ul>
+<li><strong>No schema change.</strong> Reuse <code>epic_designs</code> (setEpicDesign/getEpicDesign) and the <code>threads</code> table unchanged.</li>
+<li>Structured breakdown is parsed from the LLM turn as lines <code>[stream] &lt;title&gt; :: &lt;acceptance&gt;</code> (tolerant parser; unknown streams dropped; empty → fallback). No new persisted shape.</li>
+<li>Decision write-back reuses the existing <code>&lt;!--lead-decision--&gt;</code>-style marker appended to <code>workItem.description</code>.</li>
+<li>New env knobs (defaulted): <code>ATEAM_DESIGN_TIMEOUT_MS</code> (≈45000), <code>ATEAM_DISCUSSION_ROUNDS</code> (≈2). Documented; safe defaults.</li>
+</ul>
+
+<h2>6. Design decisions</h2>
+<table>
+<tr><th>Decision</th><th>Alternatives rejected</th><th>Why</th></tr>
+<tr><td>Template board created synchronously as a FLOOR; design ENRICHES it (never defers creation)</td><td>Defer makeTask until the design turn returns; replace template with LLM planner</td><td>Scar-tissue invariant preserved verbatim (board exists instantly, even on crash — design-review B1); determinism floor</td></tr>
+<tr><td>Complexity gate is a pure function (no LLM)</td><td>Ask the Lead "is this trivial?"</td><td>Hot path must not block dispatch; reuse existing pure signals</td></tr>
+<tr><td>Architect-when-valid, else deterministic breakdown</td><td>Always trust the LLM breakdown</td><td>A malformed/empty breakdown must degrade, not strand</td></tr>
+<tr><td>R4 wording conditioned on empty/ambiguous</td><td>Blanket "pick whatever you want"</td><td>Preserve brownfield "reuse existing patterns" (a live-run scar)</td></tr>
+<tr><td>AC6 backend-only for v1 (no new HTTP/UI)</td><td>Add thread-kind/participants to createThreadSchema + UI</td><td>Agent path already flows through requestGroupChat; YAGNI for v1</td></tr>
+</table>
+
+<h2>7. Failure modes &amp; edge cases</h2>
+<ul>
+<li><strong>Design turn hangs / errors / asks a question</strong> → <code>withTimeout</code> + <code>try/catch</code> → template fallback. Board guaranteed.</li>
+<li><strong>Malformed breakdown</strong> (no parseable streams) → treated as empty → tasks keep template descriptions (no under-dispatch, M3).</li>
+<li><strong>Late design (withTimeout doesn't cancel the LLM turn, M4)</strong> → enrichment only rewrites a task still in <code>todo</code>/<code>backlog</code>; a design landing after a builder already started is still persisted for injection but does not rewrite an in-flight task — harmless.</li>
+<li><strong>Resume/restart mid-decompose</strong> → <code>existingByStream</code> idempotency + persisted <code>epic_designs</code> mean re-drive never duplicates; design is re-read, not re-generated.</li>
+<li><strong>Group discussion doesn't converge in N rounds</strong> → decider forces a decision; if the decider defers (<code>ESCALATE:</code>) → existing human backstop (<code>raiseQuestion</code>).</li>
+<li><strong>Runaway discussion nesting</strong> → existing <code>groupDepth&lt;2</code> guard retained + new round cap.</li>
+<li><strong>Trivial-classified but actually complex</strong> → builders still have the decide-under-uncertainty clause and can open a discussion; no dead-end.</li>
+</ul>
+
+<h2>8. Increments (→ plan.html)</h2>
+<ul>
+<li><strong>I1 (AC4, AC5-wording):</strong> persona strings only. Smallest, lowest-risk, independently fixes the FE stall. Unit-style assertions on prompt text + a greenfield integration test (FE builds without asking).</li>
+<li><strong>I2 (AC1, AC2, AC3, AC5-behavior):</strong> <code>classifyComplexity</code> + <code>designThenEnrich</code> + <code>decomposeEpic</code> rewire (synchronous template floor, front-loaded structured design that enriches tasks, step-5b architect removed). Integration tests: design-first enrich path, trivial-skips-design, fallback branches (never strand).</li>
+<li><strong>I3 (AC6):</strong> bounded rounds + decider + decision write-back on <code>runGroupChat</code>. Integration test: <code>[[REQUEST_GROUPCHAT]]</code> resolves via decider, decision persisted, no human question.</li>
+</ul>
+
+<h2>9. Testability &amp; regression scope</h2>
+<p>All three drive through <code>createTestApp</code> + <code>app.inject</code> + <code>waitFor</code> with the <code>FakeCopilotAdapter</code>
+(<code>[[NOOP]]</code>, <code>[[REQUEST_GROUPCHAT]]</code>). A <strong>new brownfield fixture</strong> (≥8 <code>.ts</code> files + optional AGENTS.md) is
+added for AC5. Regression: existing <code>delivery.test.ts</code> (empty-build SEV-3, worktree/GC, sequencing) and
+<code>leadEscalation.test.ts</code> must stay green; orchestrator tests run with <code>--no-file-parallelism</code>.</p>
