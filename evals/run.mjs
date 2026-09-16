@@ -15,6 +15,9 @@
  *   brownfield   — a focused change on an EXISTING medium repo. Validates that
  *                  agents read + respect the established structure/conventions.
  *   smoke        — tiny greenfield task, quickest end-to-end plumbing check.
+ *   design-first — greenfield, architect on team, NO stack named: proves the
+ *                  Architect decides a stack (AC5) and the Frontend builds under
+ *                  uncertainty instead of stalling (AC4). Real run = the proof.
  *
  * Use `--fake` to self-test the harness (deterministic, no auth). Omit it to run
  * the real Copilot SDK (must be signed in via `copilot`).
@@ -56,6 +59,49 @@ const SCENARIOS = {
       { label: 'At least one epic reached done', check: (o) => o.epicsDone >= 1 },
       { label: 'At least one PR merged', check: (o) => o.prsMerged >= 1 },
       { label: 'Real deliverable files landed', check: (o) => o.deliverableCount >= 1 },
+    ],
+  },
+
+  // Proves the design-first-orchestration feature LIVE (AC4/AC5). An architect is
+  // on the team and the ask NAMES NO STACK, so the Architect must DECIDE a
+  // greenfield stack (AC5) and the Frontend must build under that uncertainty
+  // instead of stalling on clarifying questions (AC4 — the original no-code bug).
+  // Stops as soon as the claim is provable (design persisted + frontend produced
+  // attributed code) so a live run stays bounded.
+  'design-first': {
+    name: 'design-first',
+    kind: 'greenfield',
+    team: ['architect', 'frontend-engineer', 'qa-engineer'],
+    defaultTimeoutMin: 25,
+    async drive(h) {
+      await h.sendChat(
+        'Build a small, accessible "click counter" web page: a button that ' +
+          'increments a number shown on the page, plus a reset button. Include a ' +
+          'small, unit-tested increment/counter module. Keep it simple. I have no ' +
+          'preference on tools — pick whatever is sensible and just build it.',
+      );
+    },
+    until: (s, h) => {
+      if (s.epics.length > 0 && s.epics.every((e) => e.status === 'done')) return true;
+      // Early, bounded stop: as soon as a design is persisted AND the frontend has
+      // produced attributed code, the AC4/AC5 claim is provable — no need to wait
+      // for QA/merge. Cheap snapshot precondition first, then the rich reads.
+      const feTerminal = (s.tasks ?? []).some(
+        (t) => t.stream === 'frontend' && (t.status === 'review' || t.status === 'done'),
+      );
+      if (!feTerminal || !h) return false;
+      const designed = h.readEpicDesigns().some((d) => d.content.trim().length > 0);
+      if (!designed) return false;
+      const fe = h.deliverablesByStream(s.tasks ?? []).frontend ?? [];
+      return fe.some((f) => /\.(js|mjs|cjs|jsx|ts|tsx|html|css|vue|svelte)$/i.test(f) && !/(test|spec)/i.test(f));
+    },
+    acceptance: [
+      { label: 'An epic was created (design-first flow ran)', check: (o) => o.epicsTotal >= 1 },
+      { label: 'AC5 — a design was persisted before builders act', check: (o) => o.designPersisted },
+      { label: 'AC5 — the design stated a concrete stack', check: (o) => o.designStatedStack },
+      { label: 'AC5 — the design enriched the tasks', check: (o) => o.designEnrichedTasks },
+      { label: 'AC4 — the Frontend produced real code', check: (o) => o.frontendProducedCode },
+      { label: 'AC-H — no auth failure', check: (o) => !o.authIssue },
     ],
   },
 

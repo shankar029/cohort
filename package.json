@@ -22,7 +22,8 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "e2e:install": "playwright install chromium",
-    "eval": "node evals/run.mjs"
+    "eval": "node evals/run.mjs",
+    "eval:selftest": "node --test evals/harness.selftest.mjs"
   },
   "dependencies": {
     "@fastify/static": "^8.0.4",
