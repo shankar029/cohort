@@ -1,0 +1,9 @@
+# Traceability — project-create-import
+
+| AC  | Requirement | Design (component/method) | Task | Test / check | Evidence | Verdict |
+|-----|-------------|---------------------------|------|--------------|----------|---------|
+| AC1 | Create a new project from a local repo dir (existing) — regression-guarded | validateRepoDir + createProjectWithLead (unchanged); createProjectSchema back-compat (z.preprocess) | I1 | importUrl.test.ts (schema back-compat); importProject.test.ts "source omitted → local"; e2e _createdir.spec.ts | evidence/unit-integration-full.log; evidence/e2e-full.log | VERIFIED |
+| AC2 | Import a project by GitHub URL: clone locally, then create project from the clone | cloneRepoToDir (clone.ts) + importProjectFromUrl + POST branch | I1 | importProject.test.ts (cloneRepoToDir real fixture; route import happy); e2e _import.spec.ts "clones a git URL and opens the new project" | evidence/i1-tests.log; evidence/e2e-full.log | VERIFIED |
+| AC2.1 | Invalid/malformed URL rejected with clear error | isGitUrl refine (schema) + client-side isGitUrl in modal; deriveRepoName | I1, I2 | importUrl.test.ts (isGitUrl table; schema reject); importProject.test.ts (route 400 no git); e2e _import.spec.ts "malformed URL inline error" | evidence/e2e-full.log | VERIFIED |
+| AC2.2 | Clone failure surfaces clear error, no hang, no partial project | cloneRepoToDir (GIT_TERMINAL_PROMPT=0, partial cleanup) + importProjectFromUrl (no store write on fail) | I1 | importProject.test.ts (clone fail → 400, no row, <15s, no partial dir; target-exists → 400) | evidence/i1-tests.log | VERIFIED |
+| AC2.3 | New Project modal offers import-by-URL vs create-local | CreateProjectModal tabs (+ FolderPicker reuse) | I2 | e2e _import.spec.ts "offers Local vs Import tabs" | evidence/e2e-full.log | VERIFIED |

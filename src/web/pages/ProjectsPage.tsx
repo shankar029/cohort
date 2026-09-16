@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import type { CreateProjectInput } from '@shared/index';
+import { isGitUrl } from '@shared/index';
 import { useApp } from '../state';
 import { api } from '../api';
 import {
@@ -224,16 +226,14 @@ function CreateProjectModal({
   onCreate,
 }: {
   onClose: () => void;
-  onCreate: (input: {
-    name: string;
-    repoDir: string;
-    defaultModel?: string;
-    createDir?: boolean;
-  }) => Promise<unknown>;
+  onCreate: (input: CreateProjectInput) => Promise<unknown>;
 }): React.JSX.Element {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<'local' | 'import'>('local');
   const [name, setName] = useState('');
   const [repoDir, setRepoDir] = useState('');
+  const [repoUrl, setRepoUrl] = useState('');
+  const [parentDir, setParentDir] = useState('');
   const [model, setModel] = useState('auto');
   const [createDir, setCreateDir] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -242,16 +242,28 @@ function CreateProjectModal({
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
+    if (mode === 'import' && !isGitUrl(repoUrl)) {
+      setError('Enter a valid git URL (e.g. https://github.com/owner/repo).');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const project = (await onCreate({ name, repoDir, defaultModel: model, createDir })) as {
-        id: string;
-      };
+      const input: CreateProjectInput =
+        mode === 'import'
+          ? {
+              source: 'import',
+              name: name.trim() || undefined,
+              repoUrl: repoUrl.trim(),
+              parentDir,
+              defaultModel: model,
+            }
+          : { source: 'local', name, repoDir, defaultModel: model, createDir };
+      const project = (await onCreate(input)) as { id: string };
       navigate(`/p/${project.id}/agents`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to create project';
-      if (/does not exist/i.test(msg) && !createDir) {
+      if (mode === 'local' && /does not exist/i.test(msg) && !createDir) {
         setCreateDir(true);
         setError(
           'That folder doesn’t exist yet — ticked “Create this directory” for you. Click Create project again to make it.',
@@ -273,10 +285,46 @@ function CreateProjectModal({
     >
       <form className="card w-full max-w-lg p-5" onSubmit={submit}>
         <h2 className="mb-4 text-lg font-semibold text-slate-100">New project</h2>
+        <div
+          className="mb-4 flex gap-1 rounded-lg bg-surface-2 p-1 text-sm"
+          role="tablist"
+          aria-label="Project source"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'local'}
+            data-testid="project-tab-local"
+            className={`flex-1 rounded-md px-3 py-1.5 ${
+              mode === 'local' ? 'bg-surface-1 text-slate-100' : 'text-slate-400'
+            }`}
+            onClick={() => {
+              setMode('local');
+              setError(null);
+            }}
+          >
+            Local folder
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'import'}
+            data-testid="project-tab-import"
+            className={`flex-1 rounded-md px-3 py-1.5 ${
+              mode === 'import' ? 'bg-surface-1 text-slate-100' : 'text-slate-400'
+            }`}
+            onClick={() => {
+              setMode('import');
+              setError(null);
+            }}
+          >
+            Import from URL
+          </button>
+        </div>
         <div className="space-y-3">
           <div>
             <label className="label" htmlFor="p-name">
-              Project name
+              Project name{mode === 'import' ? ' (optional)' : ''}
             </label>
             <input
               id="p-name"
@@ -284,48 +332,97 @@ function CreateProjectModal({
               data-testid="project-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Checkout Redesign"
-              required
+              placeholder={mode === 'import' ? 'Defaults to the repo name' : 'Checkout Redesign'}
+              required={mode === 'local'}
               autoFocus
             />
           </div>
-          <div>
-            <label className="label" htmlFor="p-repo">
-              Repository directory
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="p-repo"
-                className="input font-mono text-xs"
-                data-testid="project-repo"
-                value={repoDir}
-                onChange={(e) => setRepoDir(e.target.value)}
-                placeholder="C:\\Code\\my-app"
-                required
-              />
-              <button
-                type="button"
-                className="btn-ghost shrink-0"
-                data-testid="project-browse"
-                onClick={() => setBrowsing(true)}
-              >
-                Browse…
-              </button>
+          {mode === 'local' ? (
+            <div>
+              <label className="label" htmlFor="p-repo">
+                Repository directory
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="p-repo"
+                  className="input font-mono text-xs"
+                  data-testid="project-repo"
+                  value={repoDir}
+                  onChange={(e) => setRepoDir(e.target.value)}
+                  placeholder="C:\\Code\\my-app"
+                  required
+                />
+                <button
+                  type="button"
+                  className="btn-ghost shrink-0"
+                  data-testid="project-browse"
+                  onClick={() => setBrowsing(true)}
+                >
+                  Browse…
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Pick a locally checked-out repository, or paste an absolute path.
+              </p>
+              <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-accent-500"
+                  data-testid="project-createdir"
+                  checked={createDir}
+                  onChange={(e) => setCreateDir(e.target.checked)}
+                />
+                Create this directory if it doesn&rsquo;t exist
+              </label>
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Pick a locally checked-out repository, or paste an absolute path.
-            </p>
-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-slate-400">
-              <input
-                type="checkbox"
-                className="h-3.5 w-3.5 accent-accent-500"
-                data-testid="project-createdir"
-                checked={createDir}
-                onChange={(e) => setCreateDir(e.target.checked)}
-              />
-              Create this directory if it doesn&rsquo;t exist
-            </label>
-          </div>
+          ) : (
+            <>
+              <div>
+                <label className="label" htmlFor="p-url">
+                  Repository URL
+                </label>
+                <input
+                  id="p-url"
+                  className="input font-mono text-xs"
+                  data-testid="project-url"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repo.git"
+                  required
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  A public GitHub URL, or any git URL your machine can clone.
+                </p>
+              </div>
+              <div>
+                <label className="label" htmlFor="p-parent">
+                  Clone into folder
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="p-parent"
+                    className="input font-mono text-xs"
+                    data-testid="project-parent"
+                    value={parentDir}
+                    onChange={(e) => setParentDir(e.target.value)}
+                    placeholder="C:\\Code"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost shrink-0"
+                    data-testid="project-parent-browse"
+                    onClick={() => setBrowsing(true)}
+                  >
+                    Browse…
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  The repo is cloned into a new sub-folder here, named after the repository.
+                </p>
+              </div>
+            </>
+          )}
           <div>
             <label className="label" htmlFor="p-model">
               Default model
@@ -344,16 +441,17 @@ function CreateProjectModal({
             data-testid="project-submit"
             disabled={busy}
           >
-            {busy ? 'Creating…' : 'Create project'}
+            {busy ? (mode === 'import' ? 'Importing…' : 'Creating…') : mode === 'import' ? 'Import project' : 'Create project'}
           </button>
         </div>
       </form>
       {browsing && (
         <FolderPicker
-          initial={repoDir}
+          initial={mode === 'import' ? parentDir : repoDir}
           onClose={() => setBrowsing(false)}
           onSelect={(p) => {
-            setRepoDir(p);
+            if (mode === 'import') setParentDir(p);
+            else setRepoDir(p);
             setBrowsing(false);
           }}
         />
