@@ -151,3 +151,23 @@ test('deliverablesByStream attributes a task-clone diff to that task stream', ()
   assert.equal(score.frontendProducedCode, true);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+/* ------------------------------------------------ detectEnvironmentIssue() */
+
+test('detectEnvironmentIssue: a quota/402 session error marks the run invalid', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-env-'));
+  const logPath = path.join(dir, 'server.log');
+  fs.writeFileSync(
+    logPath,
+    'server healthy\n[copilot] session error (quota) [402]: You have exceeded your monthly quota\nmore logs\n',
+  );
+  const env = EvalHarness.prototype.detectEnvironmentIssue.call({ logPath });
+  assert.equal(env.invalid, true);
+  assert.match(env.reason, /quota/i);
+
+  // A clean log is NOT flagged (so real AC4/AC5 failures are still scored).
+  fs.writeFileSync(logPath, 'server healthy\nagent produced no file changes\n');
+  const ok = EvalHarness.prototype.detectEnvironmentIssue.call({ logPath });
+  assert.equal(ok.invalid, false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

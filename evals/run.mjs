@@ -102,6 +102,7 @@ const SCENARIOS = {
       { label: 'AC5 — the design enriched the tasks', check: (o) => o.designEnrichedTasks },
       { label: 'AC4 — the Frontend produced real code', check: (o) => o.frontendProducedCode },
       { label: 'AC-H — no auth failure', check: (o) => !o.authIssue },
+      { label: 'AC-H — environment valid (model provider generated; not quota/402)', check: (o) => !o.environmentInvalid },
     ],
   },
 
@@ -368,6 +369,12 @@ async function main() {
       }
     }
     console.log(`\nreport: ${reportPath}`);
+    if (outcome.environmentInvalid)
+      console.log(
+        `\n⛔ ENVIRONMENT INVALID — the model provider refused to generate: ` +
+          `${outcome.environmentError}\n   Every agent turn resolved empty, so AC4/AC5 could NOT ` +
+          `be evaluated. Restore Copilot quota/auth and re-run before drawing conclusions.`,
+      );
     if (!result.done) console.log('⚠ did NOT complete within the timeout window.');
     process.exitCode = allPass && result.done ? 0 : 1;
   } finally {

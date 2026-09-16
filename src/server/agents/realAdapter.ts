@@ -151,6 +151,24 @@ class RealAgentSession implements AgentSession {
         }),
       );
       offs.push(
+        // Surface session-level errors (quota/402, auth/401, provider outages). The
+        // SDK otherwise SWALLOWS these: the turn just resolves empty, which upstream
+        // looks identical to "the agent chose to produce nothing". Log a greppable
+        // line so operators - and the eval harness - can tell an out-of-quota / auth
+        // failure apart from a genuine no-op. We do NOT inject the error into the
+        // turn's return value: an empty result preserves the never-strand paths
+        // (e.g. design-first keeps its template board) instead of persisting a
+        // warning string as if it were real content.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.session.on('session.error', (e: any) => {
+          const d = e?.data ?? e ?? {};
+          const kind = String(d.errorType ?? d.type ?? 'error');
+          const code = d.statusCode ? ` [${d.statusCode}]` : '';
+          const msg = String(d.message ?? d.error ?? '').slice(0, 300);
+          console.error(`[copilot] session error (${kind})${code}: ${msg}`);
+        }),
+      );
+      offs.push(
         this.session.on('session.idle', () => {
           onEvent({ kind: 'idle' });
           finish();

@@ -214,6 +214,28 @@ export class EvalHarness {
     }
   }
 
+  /**
+   * A run is ENVIRONMENT-INVALID when the model provider itself refused to
+   * generate - most commonly an exhausted Copilot quota (HTTP 402) or a provider
+   * outage. The adapter now logs a greppable `[copilot] session error (...)` line
+   * for these; without this the whole team just produces empty turns and the
+   * scenario looks like a genuine AC4/AC5 failure when in fact NOTHING could run.
+   * Returns the first matching diagnostic so callers can surface it instead of
+   * scoring behavior that never happened.
+   */
+  detectEnvironmentIssue() {
+    try {
+      const log = fs.readFileSync(this.logPath, 'utf8');
+      const m =
+        /\[copilot\] session error \([^)]*\)[^\n]*/i.exec(log) ??
+        /exceeded your monthly quota[^\n]*/i.exec(log) ??
+        /\bquota\b[^\n]*exceeded[^\n]*/i.exec(log);
+      return m ? { invalid: true, reason: m[0].slice(0, 300) } : { invalid: false, reason: '' };
+    } catch {
+      return { invalid: false, reason: '' };
+    }
+  }
+
   async createProject(name, repoDir, settings = {}) {
     const { project } = await this.api.post('/api/projects', { name, repoDir });
     this.projectId = project.id;
@@ -648,6 +670,7 @@ export class EvalHarness {
     const evStr = this.events.map((e) => JSON.stringify(e)).join('\n');
     const qaSignoff = /QA gate: .* passed/.test(evStr);
     const authIssue = this.detectAuthIssue();
+    const env = this.detectEnvironmentIssue();
 
     // --- design-first signals (AC4/AC5) -------------------------------------
     const designs = this.readEpicDesigns();
@@ -685,6 +708,8 @@ export class EvalHarness {
       acceptanceProbe,
       qaSignoff,
       authIssue,
+      environmentInvalid: env.invalid,
+      environmentError: env.reason,
       // design-first (AC4/AC5)
       designPersisted: df.designPersisted,
       designStatedStack: df.designStatedStack,
@@ -773,6 +798,12 @@ function renderReport(scenario, o, chat, h) {
   if (o.crashed)
     lines.push(
       `- **⚠ SERVER CRASHED mid-run** — results below are the last snapshot before it died.`,
+    );
+  if (o.environmentInvalid)
+    lines.push(
+      `- **⛔ ENVIRONMENT INVALID** — the model provider refused to generate ` +
+        `(e.g. exhausted quota / 402): \`${o.environmentError}\`. Every agent turn ` +
+        `resolves empty, so AC4/AC5 behavior below is NOT evaluable this run.`,
     );
   lines.push(`- **Epics done:** ${o.epicsDone}/${o.epicsTotal}`);
   lines.push(`- **PRs merged:** ${o.prsMerged}/${o.prs.length}`);
