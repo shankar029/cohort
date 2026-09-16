@@ -1,0 +1,109 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report — Design-first orchestration</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="report.html" data-slug="design-first-orchestration"></script>
+
+<h1>Design-first orchestration — Final report</h1>
+<div class="meta">Repo: cohort · Branch: feat/design-first-orchestration (stacked on PR #2 base feat/lead-escalation-mention) · 2026-09-15 · Design: design.html · Review: review.md</div>
+
+<h2>1. Outcome</h2>
+<p>Cohort's Team Lead now runs <strong>design-first</strong>. For a non-trivial epic the Architect (or the Lead when no
+architect is on the team) produces a short technical design + a per-stream task breakdown <em>before</em> the team builds;
+the design is persisted and its acceptance criteria <strong>enrich</strong> each task. Trivial/simple work skips the design step —
+the Lead splits directly. A three-level fallback (architect → Lead → deterministic template) plus a synchronous
+template floor means the board is <strong>never stranded</strong>. Every builder persona now <strong>decides under uncertainty</strong> on a
+greenfield repo instead of looping on clarifying questions (the reported Frontend "no code" stall), and the Architect
+owns the greenfield stack decision while honoring an existing repo's AGENTS.md/README/docs. Agents resolve questions
+in <strong>bounded group discussions</strong> settled by a decider (PM for product, else Lead) that writes the decision back —
+instead of blocking the user. Delivered as 3 reviewed increments; PR to open (§10).</p>
+<p>Headline caveats: the persona/stack behavior (AC4/AC5) is proven at the prompt-invariant level — its live effect
+needs the real LLM adapter (the offline fake writes files regardless of persona text); and design taken as-proposed
+without human sign-off (unattended "go ahead").</p>
+
+<h2>2. Delivered</h2>
+<ul>
+<li><strong>I1</strong> — builder personas (frontend/backend/ux/data/devops) gain a decide-under-uncertainty clause; Architect owns greenfield stack + honors existing-repo docs (<code>catalog.ts</code>).</li>
+<li><strong>I2</strong> — <code>src/server/complexity.ts</code> (<code>classifyComplexity</code>, <code>parseDesignBreakdown</code>, <code>pickDecider</code>); <code>decomposeEpic</code> rewired: synchronous template floor → complexity gate → front-loaded time-boxed <code>designThenEnrich</code> that enriches tasks; the old step-5b "team is already building" architect turn removed; <code>withTimeout</code> bound.</li>
+<li><strong>I3</strong> — <code>runGroupChat</code> bounded rounds + decider routing + <code>&lt;!--group-decision--&gt;</code> write-back + <code>includesUser:false</code>; fixed a latent self-deadlock (requester was re-asked mid-turn).</li>
+</ul>
+<h3>Not delivered (out of scope / follow-ups)</h3>
+<ul>
+<li>No UI surface for agent discussions (backend-only v1 per design §6).</li>
+<li>Cancelling the underlying LLM turn on design timeout (M4 — bounded + status-guarded instead).</li>
+<li>Live greenfield build proof with a real Copilot Frontend agent (see §7).</li>
+</ul>
+
+<h2>3. Acceptance criteria</h2>
+<table>
+<tr><th>AC</th><th>Verdict</th><th>Proven by</th></tr>
+<tr><td>AC1 — design-first enrich for non-trivial epics</td><td>VERIFIED</td><td>designFirst.test.ts "runs the Architect design turn and ENRICHES the tasks"</td></tr>
+<tr><td>AC2 — complexity gate skips design for trivial</td><td>VERIFIED</td><td>complexity.test.ts (16) + designFirst "a trivial change skips the design step"</td></tr>
+<tr><td>AC3 — fallback chain never strands the board</td><td>VERIFIED</td><td>designFirst "architect-absent Lead fallback" + "design turn times out → template + non-empty board"</td></tr>
+<tr><td>AC4 — builder personas decide under uncertainty</td><td>VERIFIED-WITH-LIMITATIONS</td><td>personas.test.ts (14) prompt invariants; live behavior needs the real LLM adapter</td></tr>
+<tr><td>AC5 — architect greenfield stack / brownfield honors docs</td><td>VERIFIED-WITH-LIMITATIONS</td><td>personas.test.ts architect block + designFirst brownfield fixture; live design content needs the real adapter</td></tr>
+<tr><td>AC6 — agent-initiated bounded discussion resolved by a decider</td><td>VERIFIED</td><td>groupDiscussion.test.ts + pickDecider unit tests</td></tr>
+</table>
+
+<h2>4. Gates</h2>
+<table>
+<tr><th>G1</th><th>G2</th><th>G3</th><th>G4</th><th>G5</th><th>G6</th></tr>
+<tr><td>✅</td><td>✅ (2b REVISE→addressed; human sign-off waived — unattended)</td><td>✅</td><td>✅ ×3 increments</td><td>✅</td><td>✅</td></tr>
+</table>
+
+<h2>5. Measurements</h2>
+<table>
+<tr><th>Measure</th><th>Value</th><th>Status</th></tr>
+<tr><td>new unit tests</td><td>personas 14 · complexity 16</td><td>ok</td></tr>
+<tr><td>new integration tests</td><td>designFirst 4 · groupDiscussion 1</td><td>ok</td></tr>
+<tr><td>full unit+integration suite</td><td>300 pass / 1 skip / 0 fail (--no-file-parallelism)</td><td>ok</td></tr>
+<tr><td>e2e (Playwright, regression)</td><td>23 pass / 0 fail</td><td>ok</td></tr>
+<tr><td>typecheck / lint</td><td>clean</td><td>ok</td></tr>
+<tr><td>probe verdict (vs origin/main)</td><td>pass — no regression, no new cycle</td><td>ok</td></tr>
+</table>
+<p class="assumption">Unavailable metrics (analysis tools not globally installed): duplication, complexity, cycles,
+dead_exports, static_findings, mutation_score_pct. Mutation was not run; unasserted changed branches are named in
+review.md (DESIGNFAIL empty-design path — covered indirectly by the timeout test; a couple of comment/log lines).
+The full-suite run was clean this pass (the known Windows worktree-GC parallel-load flake did not recur).</p>
+
+<h2>6. Scorecard</h2>
+<table>
+<tr><th>Dimension</th><th>Score</th><th>Justification</th></tr>
+<tr><td>Correctness</td><td>5/5</td><td>Never-strand invariant proven; independent reviewer APPROVE, 6/6 ACs reconcile; fixed a real latent deadlock.</td></tr>
+<tr><td>Testing</td><td>4/5</td><td>Real git-fixture integration + pure-unit truth tables; honest that AC4/AC5 live behavior is unfakeable offline.</td></tr>
+<tr><td>Design fidelity</td><td>5/5</td><td>Built the revised design incl. all Gate-2b fixes (synchronous floor, step-5b removed, distinct marker, floor-constrained parser).</td></tr>
+<tr><td>Maintainability</td><td>5/5</td><td>Pure module extracted (classify/parse/pickDecider); reuses existing seams; no schema change.</td></tr>
+<tr><td>Security</td><td>5/5</td><td>No new external surface; bounded I/O; no injection paths.</td></tr>
+<tr><td>Error handling</td><td>5/5</td><td>Every design-turn exit is additive-only; try/catch + withTimeout; discussion bounded + deadlock-free.</td></tr>
+<tr><td>Performance</td><td>4/5</td><td>Non-trivial epics pay one bounded design turn (complexity-gated to avoid it on trivial work).</td></tr>
+<tr><td>Readability</td><td>5/5</td><td>Documented invariants (floor, bound, distinct marker, decider).</td></tr>
+<tr><td>Grounding</td><td>5/5</td><td>Research spot-checked 3/3; reviewer re-derived every AC and the never-strand ordering from the tree.</td></tr>
+</table>
+<p>Convergence iterations: 2 (design Gate-2b REVISE→addressed; code review APPROVE + 1 disposition applied).</p>
+
+<h2>7. Pending / unproven / environment-blocked</h2>
+<table>
+<tr><th>Item</th><th>Why</th><th>Command to finish</th></tr>
+<tr><td>Live greenfield FE build (AC4) &amp; live Architect stack decision (AC5)</td><td>Offline fake writes files regardless of persona text</td><td>Run a greenfield epic with the real Copilot adapter; confirm the FE builds without a clarifying-question loop and the Architect states a stack</td></tr>
+<tr><td>Analysis metrics + mutation</td><td>Tools not installed / not run</td><td>Install jscpd/madge/ts-prune; <code>probe.py --force-mutation</code></td></tr>
+</table>
+
+<h2>8. Assumptions still unconfirmed</h2>
+<ul class="assumption">
+<li>Design taken as-proposed without human sign-off (unattended "go ahead"); Gate-2b independent review was done.</li>
+<li>Complexity thresholds in <code>classifyComplexity</code> (greenfield ⇒ standard; ≤14-word single-stream brownfield ⇒ trivial) are heuristic defaults.</li>
+<li>Env knobs default safely: <code>ATEAM_DESIGN_TIMEOUT_MS</code> (45000), <code>ATEAM_DISCUSSION_ROUNDS</code> (2, cap 4).</li>
+<li>Agent discussions are backend-only for v1 (no UI); the requester is excluded from the discussant ask-loop (its decision returns via the work-item marker + main-thread summary).</li>
+</ul>
+
+<h2>9. Follow-ups</h2>
+<ul>
+<li>Surface the group decision + design in the UI (thread kind/participants on <code>createThreadSchema</code>).</li>
+<li>Assert the DESIGNFAIL/PM-routing-in-context branches at the integration level; add a live smoke for AC4/AC5.</li>
+<li>Consider cancelling the LLM turn on design timeout (true M4 cancellation).</li>
+</ul>
+
+<h2>10. How to finish (ship)</h2>
+<pre><code>git push -u origin feat/design-first-orchestration
+gh pr create --base feat/lead-escalation-mention --head feat/design-first-orchestration --fill</code></pre>

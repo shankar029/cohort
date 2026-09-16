@@ -13,9 +13,9 @@ Tier: NON-TRIVIAL (multi-part, design decisions, orchestrator behavior change) �
 Base branch: feat/lead-escalation-mention (stacked on PR #2; reuses the escalation primitive).
 Branch: feat/design-first-orchestration
 
-Current phase: 4 — Implement I1
-Gates: G1 ✅ | G2 ✅ (2b REVISE→addressed: B1/M1/M2/M3 fixed, M4 accepted; human sign-off waived — "go ahead" unattended authorization, design taken as-proposed = unconfirmed assumption) | G3 ✅ | G4 ⬜ | G5 ⬜ | G6 ⬜
-Next action: I1 — edit catalog.ts personas (decide-under-uncertainty) + architect wording; unit + greenfield integration tests; green commit.
+Current phase: 6 — DONE (shipping)
+Gates: G1 ✅ | G2 ✅ | G3 ✅ | G4 ✅×3 | G5 ✅ | G6 ✅
+Next action: push + open PR (base feat/lead-escalation-mention).
 Blocked on: none
 
 ## Acceptance criteria (see traceability.md)
@@ -27,13 +27,17 @@ Blocked on: none
 - [ ] AC6 Agent-initiated bounded group discussion resolved by a decider (no user block)
 
 ## Increments (planned)
-- [ ] I1 — Personas decide under uncertainty (AC4) + Architect greenfield/brownfield wording (AC5). Lowest-risk, independently fixes the reported FE stall.
-- [ ] I2 — Design-first decomposition + complexity gate + fallback chain (AC1, AC2, AC3, AC5 behavior).
-- [ ] I3 — Bounded group discussion: round cap + decider routing + decision write-back (AC6).
+- [x] I1 — Personas decide under uncertainty (AC4) + Architect greenfield/brownfield wording (AC5). Committed fd83a0c.
+- [x] I2 — Design-first decomposition + complexity gate + fallback chain (AC1, AC2, AC3, AC5 behavior). Committed eec3bb0.
+- [x] I3 — Bounded group discussion: round cap + decider routing + decision write-back (AC6). Committed 5d4350f. Review disposition (pickDecider extract) committed after.
 
 ## Log
 - 2026-09-15 P2 G2 ✅: design.html (all 6 ACs, 3 increments); independent design-review (fresh, same-model — gemini unavailable) → REVISE, 1 blocker (B1 strand window) + 4 majors. Revised: template board is a SYNCHRONOUS FLOOR + design ENRICHES (no deferral); step-5b architect removed (M1); distinct <!--group-decision--> marker (M2); enrich ∩ keptStreams floor (M3); includesUser:false for agent discussions. Dispositions appended to design-review.md.
 - 2026-09-15 P3 G3 ✅: plan.html — I1 personas, I2 decompose rewire, I3 group discussion; build order + per-increment tests.
+- 2026-09-15 P4 I1 G4 ✅ (fd83a0c): personas + architect wording; personas.test.ts (14). Honest: behavioral effect needs live adapter.
+- 2026-09-15 P4 I2 G4 ✅ (eec3bb0): complexity.ts + designThenEnrich + decomposeEpic rewire; step-5b architect removed; complexity.test.ts + designFirst.test.ts (4). Fixed M4 guard (status→idempotency).
+- 2026-09-15 P4 I3 G4 ✅ (5d4350f): runGroupChat bounded rounds + decider + group-decision write-back; fixed self-deadlock (requester excluded); groupDiscussion.test.ts. Fake reads NEEDS_DISCUSSION from persona.
+- 2026-09-15 P5/P6 G5/G6 ✅: full suite 300 pass/1 skip; e2e 23 pass; probe pass. Independent review (fresh) → APPROVE, 6/6 ACs reconcile, no blockers; disposition: extracted+unit-tested pickDecider. report.html written. Ready to push + PR.
 - 2026-09-15 P1 G1 ✅: research.md (354 lines, cited+typed) + traceability.md (6 ACs) via fresh-context researcher; 3/3 citations spot-checked (catalog.ts:67 FE stall; runGroupChat:1198/GROUPCHAT_RE:70; awaitEpicDesign:4130/isBrownfieldRepo:883). Key find: runGroupChat + awaitEpicDesign + isBrownfieldRepo already exist → R5/R1 are additive, not greenfield.
 
 ## Key facts (from research.md, cited)
