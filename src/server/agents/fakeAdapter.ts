@@ -246,7 +246,7 @@ class FakeAgentSession implements AgentSession {
       }
     } else {
       text = `As the ${displayName}, my recommendation: ${idea(displayName, prompt)}.${extra}`;
-      if (/\[\[NEEDS_DISCUSSION\]\]/.test(prompt)) {
+      if (/\[\[NEEDS_DISCUSSION\]\]/.test(prompt + this.config.persona)) {
         text += ` [[REQUEST_GROUPCHAT: ${topicOf(prompt)}]]`;
       }
     }

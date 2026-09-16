@@ -1323,21 +1323,32 @@ class ProjectOrchestrator {
     topic: string,
     participantIds: string[],
     workItemId: string | null,
+    opts: { decider?: 'lead' | 'pm'; rounds?: number; includesUser?: boolean } = {},
   ): Promise<string> {
-    if (this.groupDepth >= 2) return ''; // guard against runaway nesting
+if (this.groupDepth >= 2) return ''; // guard against runaway nesting
     this.groupDepth += 1;
     try {
       const lead = this.lead();
       const participants = participantIds
         .map((id) => this.deps.store.getAgent(id))
         .filter((a): a is Agent => !!a && a.kind === 'specialist');
+      // Bounded rounds so an agent-initiated discussion always terminates.
+      const rounds = Math.max(
+        1,
+        Math.min(opts.rounds ?? Number(process.env.ATEAM_DISCUSSION_ROUNDS ?? 2), 4),
+      );
+      const includesUser = opts.includesUser ?? true;
+      // The decider resolves the discussion: the PM for product questions (when on
+      // the team), otherwise the Lead.
+      const pm = this.specialists().find((s) => s.name === 'pm');
+      const decider = opts.decider === 'pm' && pm ? pm : lead;
       const thread = this.deps.store.createThread({
         projectId: this.projectId,
         kind: 'group',
         topic,
         workItemId,
         participantAgentIds: [lead.id, ...participants.map((p) => p.id)],
-        includesUser: true,
+        includesUser,
       });
       this.deps.bus.publish({ type: 'thread.updated', projectId: this.projectId, thread });
 
@@ -1348,32 +1359,69 @@ class ProjectOrchestrator {
         workItemId,
       );
 
-      // Participants contribute concurrently (truly async).
-      const contributions = await Promise.all(
-        participants.map((p) =>
-          this.actor(p).ask(
-            `Group discussion "${topic}". Give your concrete recommendation from your discipline in 2-4 sentences. Reference specifics.`,
-            thread.id,
-            workItemId,
+      // Participants contribute over up to `rounds` bounded rounds; later rounds
+      // refine given the discussion so far.
+      let contributions: string[] = [];
+      for (let r = 1; r <= rounds; r++) {
+        contributions = await Promise.all(
+          participants.map((p) =>
+            this.actor(p).ask(
+              `Group discussion "${topic}" (round ${r} of ${rounds}). ` +
+                (r > 1
+                  ? `Refine or converge given the discussion so far; do not repeat yourself. `
+                  : ``) +
+                `Give your concrete recommendation from your discipline in 2-4 sentences. Reference specifics.`,
+              thread.id,
+              workItemId,
+            ),
           ),
-        ),
-      );
+        );
+      }
 
-      // Lead synthesizes.
-      const summary = await this.actor(lead).ask(
-        `Synthesize the discussion "${topic}" into a clear decision and next steps.\n\nContributions:\n${contributions
+      // The decider resolves it into a FINAL decision.
+      const decision = await this.actor(decider).ask(
+        `As the ${decider.displayName}, RESOLVE the discussion "${topic}" into a single clear, final decision and next steps (2-4 sentences). Do not ask the user; make the call.\n\nLatest contributions:\n${contributions
           .map((c, i) => `- ${participants[i]!.displayName}: ${c}`)
           .join('\n')}`,
         thread.id,
         workItemId,
       );
 
+      // Write the decision back onto the work item so it survives and is visible on
+      // the board. Uses a DISTINCT marker from the Lead one-shot unblock decision
+      // so it never trips `alreadyLeadAssisted`.
+      
+      if (workItemId) {
+        const item = this.deps.store.getWorkItem(workItemId);
+        if (item) {
+          const patched =
+            `${item.description ?? ''}\n\n<!--group-decision-->\nTeam decision (${topic}): ${decision.trim()}`.slice(
+              0,
+              8000,
+            );
+          const updated = this.deps.store.updateWorkItem(workItemId, { description: patched });
+          if (updated)
+            this.deps.bus.publish({
+              type: 'workitem.updated',
+              projectId: this.projectId,
+              workItem: updated,
+            });
+        }
+      }
+      this.emitEvent(
+        decider.id,
+        'discussion',
+        `${decider.displayName} resolved group discussion "${topic}"`,
+        { decider: decider.name, rounds },
+        workItemId,
+      );
+
       // Post a short summary back to the main thread so the user stays informed.
       const main = this.ensureMainThread();
-      this.postMessage(main.id, lead, `📋 Discussion "${topic}" concluded. ${summary}`);
+      this.postMessage(main.id, lead, `📋 Discussion "${topic}" concluded. ${decision}`);
       this.deps.store.appendEvent({
         projectId: this.projectId,
-        agentId: lead.id,
+        agentId: decider.id,
         type: 'discussion',
         summary: `Group chat: ${topic}`,
       });
@@ -1382,10 +1430,23 @@ class ProjectOrchestrator {
         projectId: this.projectId,
         thread: this.deps.store.closeThread(thread.id) ?? thread,
       });
-      return summary;
+      return decision;
     } finally {
       this.groupDepth -= 1;
     }
+  }
+
+  /** Route a discussion to the right decider: the PM owns product/scope calls. */
+  private pickDecider(topic: string): 'lead' | 'pm' {
+    const hasPm = this.specialists().some((s) => s.name === 'pm');
+    if (
+      hasPm &&
+      /\b(product|user|ux|scope|priorit|requirement|feature|business|customer|which|should we)\b/i.test(
+        topic,
+      )
+    )
+      return 'pm';
+    return 'lead';
   }
 
   /** When an agent asks the Lead to open a group chat, convene the right people. */
@@ -1397,15 +1458,25 @@ class ProjectOrchestrator {
     const m = reply.match(GROUPCHAT_RE);
     if (!m) return;
     const topic = m[1]!.trim();
-    const others = this.specialists().filter((s) => s.id !== requester.id);
-    const participants = [requester.id, ...others.slice(0, 3).map((s) => s.id)];
+    // Targeted participants: the most relevant disciplines, EXCLUDING the requester.
+    // The requester is mid-turn awaiting this discussion, so re-asking it would
+    // deadlock its own mailbox; its position is already implied by the topic, and
+    // the resolved decision is written back onto its work item.
+    const participants = this.pickDiscussants()
+      .filter((id) => id !== requester.id)
+      .slice(0, 4);
     this.deps.store.appendEvent({
       projectId: this.projectId,
       agentId: requester.id,
       type: 'discussion',
       summary: `${requester.displayName} requested a group chat: ${topic}`,
     });
-    await this.runGroupChat(topic, participants, this.resolveDiscussionEpic(requester, workItemId));
+    // Agent-initiated discussions resolve WITHIN the team (no user prompt); the
+    // user still sees the concluding summary.
+    await this.runGroupChat(topic, participants, this.resolveDiscussionEpic(requester, workItemId), {
+      decider: this.pickDecider(topic),
+      includesUser: false,
+    });
   }
 
   /**
