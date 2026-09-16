@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Design-first orchestration</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="plan.html" data-slug="design-first-orchestration"></script>
+
+<h1>Plan — Design-first orchestration</h1>
+<div class="meta">Executable projection of design.html · cites research.md + design.html · no new facts · ≤3 pages</div>
+
+<h2>Build order (dependency-derived)</h2>
+<p>Personas (pure strings, zero coupling) first — they independently fix the reported FE stall and de-risk the rest.
+Then the decomposition rewire (the structural core). Then the group-discussion extension (reuses the marker pattern
+proven by the shipped escalation feature). Each increment runs Phases 4–6 to a green, reviewed commit.</p>
+
+<table>
+<tr><th>#</th><th>Increment</th><th>Design components</th><th>ACs</th><th>Depends on</th><th>Files</th><th>Proven by</th></tr>
+<tr><td>I1</td><td>Personas decide under uncertainty + Architect greenfield/brownfield wording</td><td>persona strings; architect string</td><td>AC4, AC5(wording)</td><td>—</td><td>src/server/agents/catalog.ts; tests/unit/personas.test.ts; tests/integration/greenfieldBuild.test.ts</td><td>unit: each edited persona contains the decide-under-uncertainty clause + no blanket override of brownfield reuse; integration: greenfield FE-only build produces real files (no "produced no code" question)</td></tr>
+<tr><td>I2</td><td>Complexity gate + front-loaded structured design enrich + decomposeEpic rewire (template floor, step-5b architect removed)</td><td><code>classifyComplexity</code>, <code>designThenEnrich</code>, <code>decomposeEpic</code></td><td>AC1, AC2, AC3, AC5(behavior)</td><td>I1 (architect wording)</td><td>src/server/orchestrator.ts; src/server/complexity.ts (new pure fn + unit); tests/integration/designFirst.test.ts; a brownfield fixture helper in tests/helpers</td><td>unit: <code>classifyComplexity</code> trivial vs standard truth table; integration: (a) standard epic → epic design persisted + tasks enriched with design acceptance; (b) trivial → no design turn, template tasks stand; (c) architect-absent → Lead path still enriches; (d) design turn errors → tasks keep template desc, board non-empty (never strand)</td></tr>
+<tr><td>I3</td><td>Bounded group discussion: round cap + decider routing + <code>&lt;!--group-decision--&gt;</code> write-back</td><td><code>runGroupChat</code>, <code>maybeHandleGroupChatRequest</code></td><td>AC6</td><td>—</td><td>src/server/orchestrator.ts; tests/integration/groupDiscussion.test.ts</td><td>integration: a <code>[[REQUEST_GROUPCHAT]]</code> builder → a <code>group</code> thread with targeted participants, ≤N rounds, decider posts a decision persisted under the group marker, and NO <code>question.updated</code> to the user</td></tr>
+</table>
+
+<h2>Testing plan</h2>
+<ul>
+<li><strong>I1</strong> — unit (prompt-text invariants for frontend/backend/ux/data/devops/architect) + integration (greenfield FE builds without asking). Regression: <code>delivery.test.ts</code> empty-build SEV-3 must stay green (a <code>[[NOOP]]</code> agent still escalates — persona wording doesn't override the fake's NOOP marker).</li>
+<li><strong>I2</strong> — unit (<code>classifyComplexity</code> branches/boundaries) + integration (4 scenarios above). Regression: <code>delivery.test.ts</code> (worktree/GC, sequencing, empty-build), <code>leadEscalation.test.ts</code>, all e2e.</li>
+<li><strong>I3</strong> — integration (bounded resolve + persistence + no user block) + unit for any pure helper (round cap, decider selection). Regression: existing group-chat path (<code>maybeHandleGroupChatRequest</code>) unaffected for the non-targeted case.</li>
+<li><strong>When E2E runs:</strong> Phase 5 per increment (fresh-context verifier). Browser e2e only where a UI surface changed — none here (backend-only per design §6), so Phase 5 uses integration-level end-to-end through <code>app.inject</code> + the Fake adapter, plus the full existing e2e suite as regression.</li>
+<li><strong>Full regression:</strong> <code>tsc --noEmit</code>, <code>eslint . --max-warnings 0</code>, <code>vitest run --no-file-parallelism</code>, <code>playwright test</code>.</li>
+</ul>
+
+<h2>Increment checklist</h2>
+<ul>
+<li>[ ] I1 — personas + architect wording; unit + greenfield integration; green commit</li>
+<li>[ ] I2 — complexity.ts + designThenEnrich + decomposeEpic; unit + 4 integration; green commit</li>
+<li>[ ] I3 — bounded rounds + decider + write-back; integration; green commit</li>
+<li>[ ] PR opened when I1–I3 complete (base feat/lead-escalation-mention, stacked on PR #2)</li>
+</ul>
+
+<h2>Notes</h2>
+<ul>
+<li>Sequential execution (single agent); no parallel subagents for implementation — the increments share <code>orchestrator.ts</code>.</li>
+<li>No production-readiness section: this is an in-app behavior change, not a deploy/release.</li>
+<li>Each increment ends at a green reviewed commit so a session cut short still leaves the repo better.</li>
+</ul>
