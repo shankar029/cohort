@@ -70,3 +70,14 @@ ATEAM_DESIGN_TIMEOUT_MS=240000 node evals/run.mjs design-first --port=4620 --tim
 # frontendProducedCode=false, a user question is raised.
 # After fix #1 lands, this scenario's AC4/AC5 checks should flip to green.
 ```
+
+---
+## SUPERSEDED root cause (discovered in the follow-up fix task, 2026-09-16)
+The "empty Architect turn" diagnosis above was INCOMPLETE. A minimal direct
+Copilot SDK probe during the fix task proved the decisive cause: the Copilot
+account is **out of monthly quota — every model call fails with HTTP 402
+(`session.error errorType=quota`)**, yielding zero tokens / empty text for ALL
+agents (not just the architect). The architect's empty turn was a symptom of
+quota exhaustion. See `.ai/design-empty-turn-fallback/` (report.md, evidence/
+quota-probe.txt). The adapter now logs 402s and the smoke flags such runs
+ENVIRONMENT-INVALID instead of scoring them as AC4/AC5 failures.
