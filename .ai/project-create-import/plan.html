@@ -1,0 +1,104 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Project create + GitHub import</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="plan.html" data-slug="project-create-import"></script>
+
+<h1>Plan — Project create + GitHub import</h1>
+<p class="s">Executable projection of <code>design.html</code>. Introduces no new facts — only build
+order, grouping, and the tests that prove each increment. Grounded in <code>research.md</code> and
+<code>design.html</code>.</p>
+
+<section>
+  <h2>1. Build order</h2>
+  <figure>
+    <svg viewBox="0 0 500 110" role="img" aria-label="Build order">
+      <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z"/></marker></defs>
+      <rect class="b" x="10" y="35" width="230" height="46" rx="5"/>
+      <text class="t" x="125" y="55">I1 · Backend (contracts→route)</text>
+      <text class="s" x="125" y="71">schema · helpers · clone · service · POST</text>
+      <line class="a" x1="240" y1="58" x2="290" y2="58" marker-end="url(#ar)"/>
+      <rect class="b" x="290" y="35" width="190" height="46" rx="5"/>
+      <text class="t" x="385" y="55">I2 · Web UI + E2E</text>
+      <text class="s" x="385" y="71">api · state · modal tabs</text>
+    </svg>
+    <figcaption>Fig — increments in build order; an arrow means "needs the previous one first". (Resized from 3→2: the union type ripples through service+route, so the backend lands as one green slice.)</figcaption>
+  </figure>
+
+  <table>
+    <thead><tr><th>#</th><th>Increment</th><th>Design components</th><th>ACs</th><th>Depends on</th><th>Files</th><th>Tests</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>1</td><td>Backend: contracts + helpers + clone + service + route</td>
+        <td><code>createProjectSchema</code> (union+preprocess), <code>isGitUrl</code>, <code>deriveRepoName</code>, <code>cloneRepoToDir</code> (new <code>clone.ts</code>), <code>importProjectFromUrl</code>, <code>POST /api/projects</code> branch</td>
+        <td>AC1 (regression), AC2, AC2.1, AC2.2</td>
+        <td>—</td>
+        <td><code>src/shared/api.ts</code>, <code>src/server/services.ts</code>, <code>src/server/clone.ts</code> (new), <code>src/server/app.ts</code></td>
+        <td>unit: <code>isGitUrl</code>/<code>deriveRepoName</code> tables; schema back-compat (body w/o <code>source</code>), reject malformed URL; <code>importProjectFromUrl</code> name-normalize + no-store-write-on-fail (clone mocked). integration: <code>cloneRepoToDir</code> local fixture; route import happy + failure (400, no row, bounded) + target-exists</td>
+      </tr>
+      <tr>
+        <td>2</td><td>Web UI + end-to-end</td>
+        <td>web <code>createProject</code> (widened), <code>state.createProject</code>, <code>CreateProjectModal</code> tabs</td>
+        <td>AC2.3, AC2.1, AC2 (surface)</td>
+        <td>I1</td>
+        <td><code>src/web/api.ts</code>, <code>src/web/state.tsx</code>, <code>src/web/pages/ProjectsPage.tsx</code></td>
+        <td>e2e (Playwright): local/import tabs; import fields; malformed URL inline error; import against a local fixture path creates a project</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>2. Increment detail</h2>
+  <ul>
+    <li><strong>I1 — Contracts + helpers.</strong> Pure, no I/O. Establishes the shared type both
+      server and web compile against, and the URL validation (AC2.1). Session-sized: 2 files, all
+      unit-tested. Must not break the existing local-create schema — the back-compat test is the
+      guard for AC1.</li>
+    <li><strong>I2 — Clone + service + route.</strong> The core behavior (AC2) and its failure
+      contract (AC2.2). Depends on I1's types/helpers. Integration tests use a <strong>local git
+      fixture repo</strong> (created in a temp dir, cloned via <code>file://</code> path) so no
+      network is needed and the test is fast and deterministic. Failure paths assert a 400 with a
+      user-visible <code>error</code>, no store write, and no hang.</li>
+    <li><strong>I3 — Web UI + E2E.</strong> Widens the web input type to the union, adds the
+      import tab to <code>CreateProjectModal</code> (reusing <code>FolderPicker</code> for the
+      parent dir), and proves the surface with Playwright. Depends on I2 (the endpoint must exist).</li>
+  </ul>
+</section>
+
+<section>
+  <h2>3. Testing plan</h2>
+  <ul>
+    <li><strong>Unit</strong> (Vitest): <code>isGitUrl</code> (accept https/.git/git@/ssh, reject
+      empty/plain-text/space), <code>deriveRepoName</code> (strip <code>.git</code>, trailing
+      slash, path segments, sanitize), schema back-compat + import validation,
+      <code>importProjectFromUrl</code> name-normalization &amp; no-store-write-on-failure (clone
+      helper mocked).</li>
+    <li><strong>Integration</strong> (Vitest, real git): <code>cloneRepoToDir</code> against a
+      local fixture repo; route-level <code>POST /api/projects</code> import happy path + failure
+      paths (malformed URL → 400 before git; unreachable → 400, bounded; target exists → 400).</li>
+    <li><strong>End-to-end</strong> (Playwright, Phase 5): modal tabs render; import fields show;
+      malformed-URL inline error; a full import against a local fixture path creates a project and
+      navigates. Reuses the existing <code>webServer</code> harness.</li>
+    <li><strong>Regression scope</strong>: existing <code>validateRepoDir.test.ts</code>,
+      <code>fsBrowse.test.ts</code>, <code>git.test.ts</code>, and the create-local e2e
+      (<code>_createdir.spec.ts</code>) must all stay green. Coverage gate (80% lines/fn/stmt,
+      70% branch over <code>git.ts</code>/<code>store.ts</code>) must hold; new <code>clone.ts</code>
+      and helpers carry their own tests.</li>
+    <li><strong>When full E2E runs</strong>: Phase 5, once all three increments are integrated.
+      Final regression pass = full <code>vitest run</code> + <code>playwright test</code> +
+      typecheck + lint.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>4. Tasks</h2>
+  <ul>
+    <li>☐ I1: schema union + <code>z.preprocess</code>; <code>isGitUrl</code>; <code>deriveRepoName</code>; unit tests.</li>
+    <li>☐ I2: <code>src/server/clone.ts</code>; <code>importProjectFromUrl</code>; route branch; integration tests.</li>
+    <li>☐ I3: web <code>createProject</code> type; <code>state.createProject</code>; modal tabs; Playwright e2e.</li>
+    <li>☐ Phase 5 verification (delegated) · Phase 6 review (delegated) + probe + PR.</li>
+  </ul>
+  <p class="s">Each increment ends at a green, reviewed commit on <code>feat/project-create-import</code>. PR opens when all three are complete.</p>
+</section>

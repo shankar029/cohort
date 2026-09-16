@@ -13,6 +13,7 @@ import type {
   AgentNote,
   AgentTask,
   ChatMessage,
+  CreateProjectInput,
   Project,
   Question,
   ServerMessage,
@@ -292,12 +293,7 @@ function reducer(state: State, action: Action): State {
 interface AppContextValue {
   state: State;
   refreshProjects: () => Promise<void>;
-  createProject: (input: {
-    name: string;
-    repoDir: string;
-    defaultModel?: string;
-    createDir?: boolean;
-  }) => Promise<Project>;
+  createProject: (input: CreateProjectInput) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   ensureBundle: (projectId: string) => Promise<void>;
   loadAgentTasks: (projectId: string, agentId: string) => Promise<void>;

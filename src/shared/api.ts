@@ -7,14 +7,63 @@ import {
   AGENT_TASK_STATUSES,
 } from './domain';
 
-/** Validation for a project's repo directory + name on creation. */
-export const createProjectSchema = z.object({
+/**
+ * Accepts the git-remote URL forms we support for import: `https(s)://host/owner/repo(.git)`,
+ * scp-style `git@host:owner/repo(.git)`, `ssh://` / `git://`, and `file://` (a local bare/checkout
+ * clone source, also what the tests use offline). Trims first; rejects empty, plain text, and
+ * anything without a host/path. This is a UX-correctness check for a local single-user app, not a
+ * security boundary.
+ */
+export function isGitUrl(raw: string): boolean {
+  const s = (raw ?? '').trim();
+  if (!s) return false;
+  // scp-style: user@host:path (no scheme). Excludes Windows drive paths (no '@').
+  if (/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:.+$/.test(s)) return true;
+  try {
+    const u = new URL(s);
+    if (u.protocol === 'file:') return u.pathname.replace(/^\/+/, '').length > 0;
+    if (!['https:', 'http:', 'ssh:', 'git:'].includes(u.protocol)) return false;
+    if (!u.hostname) return false;
+    return u.pathname.replace(/^\/+/, '').length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Validation for creating a project from an existing local repo directory. */
+const localProjectSchema = z.object({
+  source: z.literal('local'),
   name: z.string().trim().min(1, 'Name is required').max(80),
   repoDir: z.string().trim().min(1, 'Repository directory is required'),
   defaultModel: z.string().trim().min(1).optional(),
   /** When true, create the repository directory (recursively) if it doesn't exist. */
   createDir: z.boolean().optional(),
 });
+export type LocalProjectInput = z.infer<typeof localProjectSchema>;
+
+/** Validation for importing a project by cloning a git URL into a chosen parent directory. */
+const importProjectSchema = z.object({
+  source: z.literal('import'),
+  /** Optional; when omitted the name is derived from the repo URL. */
+  name: z.string().trim().max(80).optional(),
+  repoUrl: z.string().trim().min(1, 'Repository URL is required').refine(isGitUrl, 'Enter a valid git URL'),
+  parentDir: z.string().trim().min(1, 'Parent directory is required'),
+  defaultModel: z.string().trim().min(1).optional(),
+});
+export type ImportProjectInput = z.infer<typeof importProjectSchema>;
+
+/**
+ * A request body without an explicit `source` is treated as a `local` create, so callers that
+ * predate the import feature keep working. `z.preprocess` injects `source: 'local'` BEFORE the
+ * discriminated union reads the discriminator key.
+ */
+export const createProjectSchema = z.preprocess(
+  (v) =>
+    v && typeof v === 'object' && !Array.isArray(v) && !('source' in v)
+      ? { ...(v as Record<string, unknown>), source: 'local' }
+      : v,
+  z.discriminatedUnion('source', [localProjectSchema, importProjectSchema]),
+);
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 
 export const updateProjectSettingsSchema = z.object({

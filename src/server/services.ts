@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Agent, Project } from '@shared/index';
-import type { CreateAgentInput, CreateProjectInput } from '@shared/index';
+import type { CreateAgentInput, ImportProjectInput, LocalProjectInput } from '@shared/index';
 import type { Store } from './db/store.js';
 import { AGENT_CATALOG, TEAM_LEAD_TEMPLATE, getCatalogAgent } from './agents/catalog.js';
+import { cloneRepoToDir } from './clone.js';
 
 export interface ServiceConfig {
   defaultModel: string;
@@ -41,7 +42,7 @@ export function validateRepoDir(
 export function createProjectWithLead(
   store: Store,
   config: ServiceConfig,
-  input: CreateProjectInput,
+  input: LocalProjectInput,
   resolvedRepoDir: string,
 ): Project {
   const model = input.defaultModel?.trim() || config.defaultModel;
@@ -62,6 +63,90 @@ export function createProjectWithLead(
   });
   store.ensureMainThread(project.id);
   return project;
+}
+
+/**
+ * Derive a filesystem-safe repository directory name from a git URL, e.g.
+ * `https://github.com/owner/my-repo.git` -> `my-repo`. Strips a trailing `.git`
+ * and any trailing slashes, takes the last path segment (after `/` or `:` for
+ * scp-style URLs), and sanitizes to `[A-Za-z0-9._-]`. Returns `''` when nothing
+ * usable remains (caller treats that as invalid).
+ */
+export function deriveRepoName(url: string): string {
+  const trimmed = (url ?? '').trim().replace(/[/\\]+$/, '').replace(/\.git$/i, '').replace(/[/\\]+$/, '');
+  const segment = trimmed.split(/[/:]/).filter(Boolean).pop() ?? '';
+  return segment.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Import a project by cloning a git URL into `<parentDir>/<name>`, then reusing
+ * the existing create path. `name` is resolved (never undefined) from the input
+ * or derived from the URL. Throws {@link ProjectImportError} on any failure so
+ * the route can map it to an HTTP 400 with a user-visible message; no project
+ * row is written unless the clone succeeds.
+ */
+export async function importProjectFromUrl(
+  store: Store,
+  config: ServiceConfig,
+  input: ImportProjectInput,
+): Promise<Project> {
+  const name = input.name?.trim() || deriveRepoName(input.repoUrl);
+  if (!name) {
+    throw new ProjectImportError('Could not determine a project name from the URL');
+  }
+  const parent = path.resolve(input.parentDir);
+  try {
+    const parentStat = fs.statSync(parent);
+    if (!parentStat.isDirectory()) {
+      throw new ProjectImportError('Parent path is not a directory');
+    }
+  } catch (err) {
+    if (err instanceof ProjectImportError) throw err;
+    throw new ProjectImportError('Parent directory does not exist');
+  }
+
+  const target = path.join(parent, name);
+  if (fs.existsSync(target)) {
+    throw new ProjectImportError(`Target folder already exists: ${target}`);
+  }
+
+  const result = await cloneRepoToDir(input.repoUrl, parent, name);
+  if (!result.ok) {
+    throw new ProjectImportError(summarizeCloneError(result.stderr));
+  }
+
+  return createProjectWithLead(
+    store,
+    config,
+    { source: 'local', name, repoDir: result.path, defaultModel: input.defaultModel },
+    result.path,
+  );
+}
+
+/** Raised by {@link importProjectFromUrl}; the route maps it to HTTP 400. */
+export class ProjectImportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProjectImportError';
+  }
+}
+
+/** Reduce raw `git clone` stderr to a short, user-actionable sentence. */
+export function summarizeCloneError(stderr: string): string {
+  const text = (stderr || '').trim();
+  if (!text) return 'Clone failed';
+  if (/could not read Username|Authentication failed|terminal prompts disabled/i.test(text)) {
+    return 'Clone failed: the repository is private or requires authentication.';
+  }
+  if (/not found|repository .* not found|does not exist/i.test(text)) {
+    return 'Clone failed: repository not found. Check the URL.';
+  }
+  if (/Could not resolve host|unable to access|Connection|network/i.test(text)) {
+    return 'Clone failed: could not reach the remote. Check the URL and your network.';
+  }
+  // Fall back to the last non-empty line of git's own message.
+  const lastLine = text.split(/\r?\n/).filter(Boolean).pop() ?? text;
+  return `Clone failed: ${lastLine}`;
 }
 
 function uniqueAgentName(store: Store, projectId: string, base: string): string {
