@@ -73,6 +73,34 @@ class FakeAgentSession implements AgentSession {
       return text;
     }
 
+    // Design-first turn (Architect/Lead): emit a short design plus a per-stream
+    // breakdown in the exact `[stream] title :: acceptance` format so the
+    // orchestrator's parse → enrich path is exercised offline. A prompt marked
+    // DESIGNFAIL returns empty (the timeout/no-op fallback path).
+    if (/per-stream task breakdown/i.test(prompt)) {
+      if (/DESIGNFAIL/.test(prompt)) {
+        onEvent({ kind: 'idle' });
+        return '';
+      }
+      const streams = (
+        /Use only these streams:\s*([a-z0-9,\s-]+?)\./i.exec(prompt)?.[1] ?? ''
+      )
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const lines = [
+        `Technical design: build the smallest correct slice using a conventional stack; ` +
+          `streams share a simple typed contract.`,
+        ...streams.map(
+          (s) => `[${s}] Build the ${s} slice :: the ${s} slice works and is covered by tests.`,
+        ),
+      ];
+      const text = lines.join('\n');
+      await this.stream(messageId, text, onEvent);
+      onEvent({ kind: 'idle' });
+      return text;
+    }
+
     // Product Manager acceptance-criteria ask: emit deterministic `AC:` lines so
     // the orchestrator's parse → persist path is exercised offline.
     if (/one criterion per line/i.test(prompt)) {

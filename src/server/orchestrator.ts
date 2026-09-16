@@ -12,6 +12,11 @@ import { reviewBudgetDecision } from './reviewBudget.js';
 import { mentionsAgent, stripMention } from './mention.js';
 import { scopeStreams, pickBrownfieldBuilders } from './streamScope.js';
 import {
+  classifyComplexity,
+  parseDesignBreakdown,
+  type Complexity,
+} from './complexity.js';
+import {
   detectConstraints,
   checkClone,
   summarizeViolations,
@@ -68,6 +73,23 @@ function isInsideWorkspace(repoDir: string, filePath: string | undefined): boole
 }
 
 const GROUPCHAT_RE = /\[\[REQUEST_GROUPCHAT:\s*([^\]]+)\]\]/i;
+
+/** Sentinel returned by {@link withTimeout} when the wrapped promise does not settle in time. */
+const TIMED_OUT = Symbol('timed-out');
+
+/**
+ * Race a promise against a timeout. The underlying work is NOT cancelled (LLM
+ * turns cannot be aborted mid-flight) — the caller simply stops waiting and
+ * treats the result as unavailable. Used to bound the design turn so dispatch is
+ * never held past the budget.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), Math.max(1, ms));
+  });
+  return Promise.race([p.then((v) => v).finally(() => clearTimeout(timer)), timeout]);
+}
 
 /**
  * One independent, concurrent actor per agent: owns the agent's own Copilot
@@ -1075,6 +1097,36 @@ class ProjectOrchestrator {
     }
     for (const v of verifiers) makeTask(v, { verify: true, dependsOn: builderTaskIds });
 
+    // DESIGN-FIRST (AC1/AC2/AC3/AC5): the deterministic template board above is the
+    // synchronous FLOOR - it is already created and dispatched, so the board is
+    // never stranded (scar-tissue invariant preserved). For NON-TRIVIAL epics we
+    // now run a front-loaded, time-boxed Architect (or Lead) design turn that
+    // ENRICHES those tasks with per-stream acceptance; builders read it via the
+    // existing awaitEpicDesign wait. Trivial/simple epics skip the design turn.
+    const architectForDesign = specs.find((s) => s.name === 'architect');
+    const complexity: Complexity = classifyComplexity({
+      request: content,
+      keptCoreStreams: coreBuilders.map((s) => s.name),
+      multiLayer: pickBrownfieldBuilders(
+        content,
+        coreBuilders.map((s) => s.name),
+      ).multiLayer,
+      brownfield,
+      constraintCount: detectConstraints([content]).length,
+    });
+    if (complexity === 'standard') {
+      const streamToTaskId = new Map(existingByStream);
+      await this.designThenEnrich(epic, content, thread, streamToTaskId, architectForDesign, brownfield);
+    } else {
+      this.emitEvent(
+        lead.id,
+        'system',
+        `Trivial change - splitting directly without a design step`,
+        null,
+        epic.id,
+      );
+    }
+
     // 5. Post a clear, user-facing plan summary in the main chat so the user knows
     //    exactly what was decided and what happens next.
     const streamList = builders.map((b) => b.name).join(', ') || 'the team';
@@ -1145,35 +1197,10 @@ class ProjectOrchestrator {
         /* annotation is best-effort */
       }
     }
-    const architect = specs.find((s) => s.name === 'architect');
-    if (architect) {
-      try {
-        const design = await this.actor(architect).ask(
-          `Design notes for epic "${epic.title}" - the team is already building.\n` +
-            `Request: ${content}\n` +
-            `Give a concise technical design the builders will follow: approach and key ` +
-            `decisions, the components/modules involved, and - critically - the SHARED INTERFACES ` +
-            `and CONTRACTS between streams (API shapes, data models, shared types, function ` +
-            `signatures) so frontend/backend/data agree. Note key risks. Record it with ` +
-            `update_plan and post a short summary. Ground it in the existing codebase. Do not ` +
-            `create tasks, do not ask the user questions, and do not write code yourself.`,
-          thread.id,
-          epic.id,
-        );
-        // Persist the design so every builder's run prompt can carry it (the
-        // builders never saw the design before - it lived only in the thread).
-        const trimmed = (design ?? '').trim();
-        if (trimmed) {
-          this.deps.store.setEpicDesign({
-            projectId: this.projectId,
-            epicId: epic.id,
-            content: trimmed.slice(0, 6000),
-          });
-        }
-      } catch {
-        /* annotation is best-effort */
-      }
-    }
+    // NOTE: the Architect design turn is no longer run here as an after-the-fact
+    // annotation. It now runs FRONT-LOADED in `designThenEnrich` (called above,
+    // before the builders act) for non-trivial epics, so the design drives the
+    // tasks instead of trailing the build.
     // MAJOR-1: author a spec-derived acceptance probe into the epic clone so the
     // deterministic epic gate can check the delivered CONTRACT independently of the
     // builders' own unit tests. Best-effort, never blocks dispatch.
@@ -1195,6 +1222,103 @@ class ProjectOrchestrator {
   /* ------------------------------------------------------- group chats */
 
   /** Lead-moderated group discussion: each participant contributes in parallel. */
+  /**
+   * Front-loaded, time-boxed design turn for a non-trivial epic (AC1/AC3/AC5). The
+   * Architect - or the Lead when no architect is on the team - produces a short
+   * technical design plus a per-stream task breakdown; the design is persisted for
+   * the builders' `awaitEpicDesign` wait, and each breakdown line ENRICHES the
+   * matching template task with concrete acceptance. Bounded by
+   * `ATEAM_DESIGN_TIMEOUT_MS`; on timeout/error/empty it is a no-op and the tasks
+   * keep their template descriptions, so the board is never stranded.
+   */
+  private async designThenEnrich(
+    epic: WorkItem,
+    content: string,
+    thread: Thread,
+    streamToTaskId: Map<string, string>,
+    architect: Agent | undefined,
+    brownfield: boolean,
+  ): Promise<void> {
+    const streams = [...streamToTaskId.keys()];
+    if (!streams.length) return;
+    const designer = architect ?? this.lead();
+    const role = architect ? 'Software Architect' : 'Team Lead';
+    const stackClause = brownfield
+      ? `This is an EXISTING codebase. Honor its AGENTS.md / CLAUDE.md / CONTRIBUTING / README and ` +
+        `current conventions; design WITHIN the established stack - do not propose a new one.`
+      : `This is a GREENFIELD repo with no established stack. DECIDE and state the tech stack, ` +
+        `frameworks, language, and project layout the team will use.`;
+    const prompt =
+      `You are the ${role}. Design epic "${epic.title}" BEFORE the team builds it.\n` +
+      `Request: ${content}\n\n` +
+      `${stackClause}\n\n` +
+      `First give a 3-6 sentence technical design: the approach, key decisions, and the SHARED ` +
+      `interfaces/contracts between streams (API shapes, data models, shared types).\n` +
+      `Then output a per-stream task breakdown as ONE LINE PER STREAM in EXACTLY this format:\n` +
+      `[stream] <task title> :: <concrete acceptance criteria>\n` +
+      `Use only these streams: ${streams.join(', ')}. Do not invent streams, do not create tasks ` +
+      `yourself, do not ask the user questions, and do not write code.`;
+    let raw: string | typeof TIMED_OUT;
+    try {
+      raw = await withTimeout(
+        this.actor(designer).ask(prompt, thread.id, epic.id),
+        Number(process.env.ATEAM_DESIGN_TIMEOUT_MS ?? 45_000),
+      );
+    } catch {
+      return; // never crash decomposition - tasks keep their template descriptions
+    }
+    if (raw === TIMED_OUT) {
+      this.emitEvent(
+        designer.id,
+        'system',
+        `Design step timed out - proceeding with template tasks`,
+        null,
+        epic.id,
+      );
+      return;
+    }
+    const text = (raw ?? '').trim();
+    if (!text) return;
+    this.deps.store.setEpicDesign({
+      projectId: this.projectId,
+      epicId: epic.id,
+      content: text.slice(0, 6000),
+    });
+    const tasks = parseDesignBreakdown(text, streams);
+    let enriched = 0;
+    for (const t of tasks) {
+      const taskId = streamToTaskId.get(t.stream);
+      if (!taskId) continue;
+      const item = this.deps.store.getWorkItem(taskId);
+      if (!item) continue;
+      // Enrichment is append-only. Skip a task that is already reviewed/done, and
+      // skip one already enriched so a re-drive/resume never double-appends (M4).
+      if (item.status === 'review' || item.status === 'done') continue;
+      if ((item.description ?? '').includes('<!--design-acceptance-->')) continue;
+      const patched =
+        `${item.description ?? ''}\n\n<!--design-acceptance-->\nDesign acceptance (${t.stream}): ${t.acceptance}`.slice(
+          0,
+          8000,
+        );
+      const updated = this.deps.store.updateWorkItem(taskId, { description: patched });
+      if (updated) {
+        this.deps.bus.publish({
+          type: 'workitem.updated',
+          projectId: this.projectId,
+          workItem: updated,
+        });
+        enriched += 1;
+      }
+    }
+    this.emitEvent(
+      designer.id,
+      'system',
+      `${role} designed "${epic.title}" - enriched ${enriched} task(s) with design acceptance`,
+      { streams: tasks.map((t) => t.stream) },
+      epic.id,
+    );
+  }
+
   async runGroupChat(
     topic: string,
     participantIds: string[],
