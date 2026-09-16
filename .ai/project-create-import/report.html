@@ -1,0 +1,111 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report — Project create + GitHub import</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="report.html" data-slug="project-create-import"></script>
+
+<h1>Project create + GitHub import — Final report</h1>
+<div class="meta">Repo: cohort · Branch: feat/project-create-import · Commit: d0cb715 · 2026-09-15 · Design: design.html · Plan: plan.html</div>
+
+<h2>1. Outcome</h2>
+<p>Cohort's <strong>New Project</strong> flow now supports two sources. <em>Create local</em> (point at an
+existing checked-out repo) already existed and is preserved and regression-guarded. <em>Import from URL</em>
+is new: the user pastes a git/GitHub URL and picks a parent folder, the server clones the repo into
+<code>&lt;parent&gt;/&lt;repo-name&gt;</code>, then reuses the existing create-with-Team-Lead path against the clone.
+Failures (invalid URL, private/auth-required, unreachable, target exists) return a clear message with
+no hang and no partial project. Work is committed on <code>feat/project-create-import</code>; PR to be opened
+(see §10). Headline caveat: the design was taken as-proposed under an unattended one-shot invocation
+(no human sign-off), and three UX/policy defaults are recorded as unconfirmed assumptions (§8).</p>
+
+<h2>2. Delivered</h2>
+<ul>
+  <li>Discriminated-union <code>createProjectSchema</code> (local | import) with <code>z.preprocess</code> back-compat so bodies without <code>source</code> still create a local project.</li>
+  <li><code>isGitUrl</code> validation (https/http/ssh/git/scp/file forms) — server refine + client-side inline check.</li>
+  <li>Standalone <code>cloneRepoToDir</code> (src/server/clone.ts) — non-throwing, <code>GIT_TERMINAL_PROMPT=0</code> fail-fast, partial-dir cleanup; deliberately kept off the worktree-scoped <code>GitService</code>.</li>
+  <li><code>deriveRepoName</code> + <code>importProjectFromUrl</code> service: name-normalized, target-exists guard, clone-failure → <code>ProjectImportError → HTTP 400</code>, no store write on failure.</li>
+  <li><code>POST /api/projects</code> branches on <code>source</code>; response shape <code>{project, agents}</code> unchanged.</li>
+  <li>New Project modal: Local / Import tabs, URL + parent-folder inputs (reuses the folder picker).</li>
+  <li>Tests: 11 unit, 7 integration (real git clone of a real fixture), 3 e2e (Playwright).</li>
+</ul>
+<h3>Not delivered (out of scope by design)</h3>
+<ul>
+  <li>Stored credentials / tokens, SSH-key management, host allow-listing — private repos rely on the ambient git credential helper.</li>
+  <li>Streamed clone progress UI; editing a project's remote after creation; non-git sources.</li>
+</ul>
+
+<h2>3. Acceptance criteria</h2>
+<table>
+  <tr><th>AC</th><th>Verdict</th><th>Proven by</th></tr>
+  <tr><td>AC1 — local create still works</td><td>VERIFIED</td><td>importUrl.test.ts (schema back-compat) · importProject.test.ts "source omitted → 201" · e2e _createdir.spec.ts</td></tr>
+  <tr><td>AC2 — import by URL clones then creates</td><td>VERIFIED</td><td>importProject.test.ts "imports…provisions Team Lead" · cloneRepoToDir clone test · e2e "clones a git URL and opens the new project"</td></tr>
+  <tr><td>AC2.1 — invalid URL rejected clearly</td><td>VERIFIED</td><td>importUrl.test.ts (isGitUrl table + schema reject) · route 400-before-git · e2e inline-error</td></tr>
+  <tr><td>AC2.2 — clone failure: clear error, no hang, no partial project</td><td>VERIFIED</td><td>importProject.test.ts (400, 0 rows, &lt;15s, no partial dir; target-exists 400)</td></tr>
+  <tr><td>AC2.3 — modal offers import vs local</td><td>VERIFIED</td><td>e2e _import.spec.ts "offers Local vs Import tabs"</td></tr>
+</table>
+
+<h2>4. Gates</h2>
+<table>
+  <tr><th>G1</th><th>G2</th><th>G3</th><th>G4</th><th>G5</th><th>G6</th></tr>
+  <tr><td>✅</td><td>✅ (2b APPROVE after revision; human sign-off waived — unattended)</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+</table>
+
+<h2>5. Measurements</h2>
+<table>
+  <tr><th>Measure</th><th>Base</th><th>Head</th><th>Status</th></tr>
+  <tr><td>feature tests (unit+integ)</td><td>—</td><td>41 pass / 0 fail</td><td>ok</td></tr>
+  <tr><td>full unit+integ suite</td><td>~283</td><td>297 pass / 0 fail / 1 skip*</td><td>ok*</td></tr>
+  <tr><td>e2e (Playwright)</td><td>22</td><td>25 pass / 0 fail</td><td>ok</td></tr>
+  <tr><td>typecheck / lint</td><td>clean</td><td>clean</td><td>ok</td></tr>
+  <tr><td>probe verdict (vs merge-base)</td><td>—</td><td>pass (no regression)</td><td>ok</td></tr>
+</table>
+<p class="assumption">* Full suite is green only with <code>npx vitest run --no-file-parallelism</code>: the pre-existing
+orchestration tests (delivery/parallel/regression/pr/orchestration) time out under default parallel load
+on this machine — confirmed identical on clean <code>main</code> (1 fail/14 pass baseline), so not caused by this change.
+The 1 skip is the live-adapter test (intentionally skipped, needs network/credentials).</p>
+<p class="assumption">Unavailable metrics (analysis tools not globally installed): duplication_pct, complexity, cycles,
+dead_exports, static_findings. Mutation was auto-skipped for the UI project (the component suite reruns per
+mutant); the one gap it would have caught (unasserted <code>summarizeCloneError</code> branches) was closed with
+explicit unit tests instead.</p>
+
+<h2>6. Scorecard</h2>
+<table>
+  <tr><th>Dimension</th><th>Score</th><th>Justification</th></tr>
+  <tr><td>Correctness</td><td>5/5</td><td>41 feature tests + 3 e2e green; independent verify 5/5 AC PASS.</td></tr>
+  <tr><td>Testing</td><td>5/5</td><td>Real git clone of a real fixture; failure/no-hang/no-partial all asserted; branch tests added.</td></tr>
+  <tr><td>Design fidelity</td><td>5/5</td><td>Built exactly the revised design (standalone clone helper, preprocess back-compat).</td></tr>
+  <tr><td>Maintainability</td><td>5/5</td><td>+679/−64 across 10 files; reuses existing seams; no dead code/TODOs.</td></tr>
+  <tr><td>Security</td><td>4/5</td><td>execFile (no shell) + isGitUrl + <code>--</code> separator; ambient-cred model documented; local single-user threat model.</td></tr>
+  <tr><td>Error handling</td><td>5/5</td><td>Fail-fast, partial cleanup, no store write on failure, clear mapped messages.</td></tr>
+  <tr><td>Performance</td><td>4/5</td><td>Synchronous clone (no progress stream) — acceptable for v1, noted.</td></tr>
+  <tr><td>Readability</td><td>5/5</td><td>Plain functions, documented invariants (why clone is off GitService).</td></tr>
+  <tr><td>Grounding</td><td>5/5</td><td>Every symbol cited in research/design; reviewer re-derived all ACs from the tree.</td></tr>
+</table>
+<p>Convergence iterations: 1 (design REVISE→APPROVE at Gate 2b; review APPROVE with 3 low findings fixed).</p>
+
+<h2>7. Pending &amp; unproven</h2>
+<table>
+  <tr><th>Item</th><th>Why</th><th>Command to finish</th></tr>
+  <tr><td>Full suite under default parallelism</td><td>Pre-existing orchestration-test timeouts under load (not this feature)</td><td><code>npx vitest run --no-file-parallelism</code></td></tr>
+  <tr><td>Analysis-tool metrics + UI mutation</td><td>Tools not globally installed; UI mutation reruns the whole suite</td><td>Install jscpd/madge/ts-prune; <code>probe.py --force-mutation</code></td></tr>
+  <tr><td>Real private/HTTPS GitHub clone</td><td>Proven offline via file:// fixture; live network not exercised</td><td>Import <code>https://github.com/&lt;owner&gt;/&lt;repo&gt;.git</code> in the running app</td></tr>
+</table>
+
+<h2>8. Assumptions still unconfirmed</h2>
+<ul class="assumption">
+  <li>Design taken as-proposed without human sign-off (unattended one-shot invocation).</li>
+  <li>Q1: clone lands at <code>&lt;parent&gt;/&lt;repo-name&gt;</code>, target subdir must not already exist.</li>
+  <li>Q2: public HTTPS + ambient git credentials for private; <code>GIT_TERMINAL_PROMPT=0</code>; no token stored.</li>
+  <li>Q3: URL validation is UX-level (accepts https/ssh/scp/git/file), not a security boundary (local single-user app). Note: <code>file://</code> was added beyond the original https/ssh/scp scope to enable offline real-clone tests — it is a harmless superset.</li>
+</ul>
+
+<h2>9. Follow-ups</h2>
+<ul>
+  <li>Streamed clone progress + cancel for large repos.</li>
+  <li>Optional explicit token field for private repos that don't use a credential helper.</li>
+  <li>Address the orchestration-suite parallel-load timeouts (raise timeouts or cap worker concurrency in vitest config).</li>
+</ul>
+
+<h2>10. How to finish</h2>
+<pre><code>git push -u origin feat/project-create-import
+gh pr create --fill --base main --head feat/project-create-import</code></pre>

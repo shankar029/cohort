@@ -1,0 +1,927 @@
+diff --git a/eslint.config.js b/eslint.config.js
+index f74c930..30f6123 100644
+--- a/eslint.config.js
++++ b/eslint.config.js
+@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
+ import globals from 'globals';
+ 
+ export default tseslint.config(
+-  { ignores: ['dist', 'node_modules', 'playwright-report', 'test-results', 'coverage', '**/._*'] },
++  { ignores: ['dist', 'node_modules', 'playwright-report', 'test-results', 'coverage', '.ai', '**/._*'] },
+   js.configs.recommended,
+   ...tseslint.configs.recommended,
+   {
+diff --git a/src/server/app.ts b/src/server/app.ts
+index 8d7f04d..98fa0ea 100644
+--- a/src/server/app.ts
++++ b/src/server/app.ts
+@@ -19,7 +19,7 @@ import {
+   updateProjectSettingsSchema,
+   updateWorkItemSchema,
+ } from '@shared/index';
+-import { AGENT_CATALOG, createAgent, createProjectWithLead, validateRepoDir } from './services.js';
++import { AGENT_CATALOG, createAgent, createProjectWithLead, importProjectFromUrl, ProjectImportError, validateRepoDir } from './services.js';
+ import { discoverSkills } from './agents/skillScanner.js';
+ 
+ export interface AppContext {
+@@ -158,6 +158,18 @@ export function buildApp(ctx: AppContext): FastifyInstance {
+ 
+   app.post('/api/projects', async (req, reply) => {
+     const input = createProjectSchema.parse(req.body);
++    if (input.source === 'import') {
++      let project;
++      try {
++        project = await importProjectFromUrl(store, config, input);
++      } catch (err) {
++        if (err instanceof ProjectImportError) throw new HttpError(400, err.message);
++        throw err;
++      }
++      bus.publish({ type: 'project.updated', project });
++      reply.status(201);
++      return { project, agents: store.listAgents(project.id) };
++    }
+     const check = validateRepoDir(input.repoDir, input.createDir === true);
+     if (!check.ok) throw new HttpError(400, check.error);
+     const project = createProjectWithLead(store, config, input, check.resolved);
+diff --git a/src/server/clone.ts b/src/server/clone.ts
+new file mode 100644
+index 0000000..f9c8ff9
+--- /dev/null
++++ b/src/server/clone.ts
+@@ -0,0 +1,60 @@
++import { execFile } from 'node:child_process';
++import fs from 'node:fs';
++import path from 'node:path';
++
++/**
++ * Standalone git-clone helper for the "import a project by URL" flow.
++ *
++ * Deliberately kept OFF `GitService`: that class is scoped to managed epic/task
++ * clones under its `worktreeRoot` (its whole invariant), whereas an import clone
++ * writes into a user-chosen directory anywhere on the local disk. Mixing the two
++ * would break `GitService`'s single responsibility, so this is a small module
++ * function the import service imports directly — no `GitService` instance, and
++ * no wiring change to `buildApp`.
++ *
++ * Like `GitService.run`, it never throws on a non-zero exit: it resolves a
++ * `{ ok, path, stderr }` result so the caller can map a failure to a clear HTTP
++ * error. `GIT_TERMINAL_PROMPT=0` forces git to FAIL FAST instead of hanging on a
++ * credential prompt for a private/auth-required repo.
++ */
++export async function cloneRepoToDir(
++  url: string,
++  parentDir: string,
++  name: string,
++): Promise<{ ok: boolean; path: string; stderr: string }> {
++  const parent = path.resolve(parentDir);
++  const targetPath = path.join(parent, name);
++  return new Promise((resolve) => {
++    execFile(
++      'git',
++      ['clone', url, name],
++      {
++        cwd: parent,
++        windowsHide: true,
++        maxBuffer: 10 * 1024 * 1024,
++        env: {
++          ...process.env,
++          GIT_TERMINAL_PROMPT: '0',
++          GIT_AUTHOR_NAME: 'ateam',
++          GIT_AUTHOR_EMAIL: 'ateam@local',
++          GIT_COMMITTER_NAME: 'ateam',
++          GIT_COMMITTER_EMAIL: 'ateam@local',
++        },
++      },
++      (err, _stdout, stderr) => {
++        if (err) {
++          // Best-effort cleanup of any partial checkout git left behind, so a
++          // failed import never leaves a half-cloned directory on disk.
++          try {
++            fs.rmSync(targetPath, { recursive: true, force: true });
++          } catch {
++            /* ignore cleanup failure */
++          }
++          resolve({ ok: false, path: targetPath, stderr: String(stderr || err.message) });
++          return;
++        }
++        resolve({ ok: true, path: targetPath, stderr: String(stderr) });
++      },
++    );
++  });
++}
+diff --git a/src/server/services.ts b/src/server/services.ts
+index 15b0101..c9625c1 100644
+--- a/src/server/services.ts
++++ b/src/server/services.ts
+@@ -1,9 +1,10 @@
+ import fs from 'node:fs';
+ import path from 'node:path';
+ import type { Agent, Project } from '@shared/index';
+-import type { CreateAgentInput, CreateProjectInput } from '@shared/index';
++import type { CreateAgentInput, ImportProjectInput, LocalProjectInput } from '@shared/index';
+ import type { Store } from './db/store.js';
+ import { AGENT_CATALOG, TEAM_LEAD_TEMPLATE, getCatalogAgent } from './agents/catalog.js';
++import { cloneRepoToDir } from './clone.js';
+ 
+ export interface ServiceConfig {
+   defaultModel: string;
+@@ -41,7 +42,7 @@ export function validateRepoDir(
+ export function createProjectWithLead(
+   store: Store,
+   config: ServiceConfig,
+-  input: CreateProjectInput,
++  input: LocalProjectInput,
+   resolvedRepoDir: string,
+ ): Project {
+   const model = input.defaultModel?.trim() || config.defaultModel;
+@@ -64,6 +65,90 @@ export function createProjectWithLead(
+   return project;
+ }
+ 
++/**
++ * Derive a filesystem-safe repository directory name from a git URL, e.g.
++ * `https://github.com/owner/my-repo.git` -> `my-repo`. Strips a trailing `.git`
++ * and any trailing slashes, takes the last path segment (after `/` or `:` for
++ * scp-style URLs), and sanitizes to `[A-Za-z0-9._-]`. Returns `''` when nothing
++ * usable remains (caller treats that as invalid).
++ */
++export function deriveRepoName(url: string): string {
++  const trimmed = (url ?? '').trim().replace(/\.git$/i, '').replace(/[/\\]+$/, '');
++  const segment = trimmed.split(/[/:]/).filter(Boolean).pop() ?? '';
++  return segment.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '');
++}
++
++/**
++ * Import a project by cloning a git URL into `<parentDir>/<name>`, then reusing
++ * the existing create path. `name` is resolved (never undefined) from the input
++ * or derived from the URL. Throws {@link ProjectImportError} on any failure so
++ * the route can map it to an HTTP 400 with a user-visible message; no project
++ * row is written unless the clone succeeds.
++ */
++export async function importProjectFromUrl(
++  store: Store,
++  config: ServiceConfig,
++  input: ImportProjectInput,
++): Promise<Project> {
++  const name = input.name?.trim() || deriveRepoName(input.repoUrl);
++  if (!name) {
++    throw new ProjectImportError('Could not determine a project name from the URL');
++  }
++  const parent = path.resolve(input.parentDir);
++  try {
++    const parentStat = fs.statSync(parent);
++    if (!parentStat.isDirectory()) {
++      throw new ProjectImportError('Parent path is not a directory');
++    }
++  } catch (err) {
++    if (err instanceof ProjectImportError) throw err;
++    throw new ProjectImportError('Parent directory does not exist');
++  }
++
++  const target = path.join(parent, name);
++  if (fs.existsSync(target)) {
++    throw new ProjectImportError(`Target folder already exists: ${target}`);
++  }
++
++  const result = await cloneRepoToDir(input.repoUrl, parent, name);
++  if (!result.ok) {
++    throw new ProjectImportError(summarizeCloneError(result.stderr));
++  }
++
++  return createProjectWithLead(
++    store,
++    config,
++    { source: 'local', name, repoDir: result.path, defaultModel: input.defaultModel },
++    result.path,
++  );
++}
++
++/** Raised by {@link importProjectFromUrl}; the route maps it to HTTP 400. */
++export class ProjectImportError extends Error {
++  constructor(message: string) {
++    super(message);
++    this.name = 'ProjectImportError';
++  }
++}
++
++/** Reduce raw `git clone` stderr to a short, user-actionable sentence. */
++function summarizeCloneError(stderr: string): string {
++  const text = (stderr || '').trim();
++  if (!text) return 'Clone failed';
++  if (/could not read Username|Authentication failed|terminal prompts disabled/i.test(text)) {
++    return 'Clone failed: the repository is private or requires authentication.';
++  }
++  if (/not found|repository .* not found|does not exist/i.test(text)) {
++    return 'Clone failed: repository not found. Check the URL.';
++  }
++  if (/Could not resolve host|unable to access|Connection|network/i.test(text)) {
++    return 'Clone failed: could not reach the remote. Check the URL and your network.';
++  }
++  // Fall back to the last non-empty line of git's own message.
++  const lastLine = text.split(/\r?\n/).filter(Boolean).pop() ?? text;
++  return `Clone failed: ${lastLine}`;
++}
++
+ function uniqueAgentName(store: Store, projectId: string, base: string): string {
+   let name = base;
+   let n = 2;
+diff --git a/src/shared/api.ts b/src/shared/api.ts
+index 0be8ce9..c0d97b3 100644
+--- a/src/shared/api.ts
++++ b/src/shared/api.ts
+@@ -7,14 +7,63 @@ import {
+   AGENT_TASK_STATUSES,
+ } from './domain';
+ 
+-/** Validation for a project's repo directory + name on creation. */
+-export const createProjectSchema = z.object({
++/**
++ * Accepts the git-remote URL forms we support for import: `https(s)://host/owner/repo(.git)`,
++ * scp-style `git@host:owner/repo(.git)`, `ssh://` / `git://`, and `file://` (a local bare/checkout
++ * clone source, also what the tests use offline). Trims first; rejects empty, plain text, and
++ * anything without a host/path. This is a UX-correctness check for a local single-user app, not a
++ * security boundary.
++ */
++export function isGitUrl(raw: string): boolean {
++  const s = (raw ?? '').trim();
++  if (!s) return false;
++  // scp-style: user@host:path (no scheme). Excludes Windows drive paths (no '@').
++  if (/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:.+$/.test(s)) return true;
++  try {
++    const u = new URL(s);
++    if (u.protocol === 'file:') return u.pathname.replace(/^\/+/, '').length > 0;
++    if (!['https:', 'http:', 'ssh:', 'git:'].includes(u.protocol)) return false;
++    if (!u.hostname) return false;
++    return u.pathname.replace(/^\/+/, '').length > 0;
++  } catch {
++    return false;
++  }
++}
++
++/** Validation for creating a project from an existing local repo directory. */
++const localProjectSchema = z.object({
++  source: z.literal('local'),
+   name: z.string().trim().min(1, 'Name is required').max(80),
+   repoDir: z.string().trim().min(1, 'Repository directory is required'),
+   defaultModel: z.string().trim().min(1).optional(),
+   /** When true, create the repository directory (recursively) if it doesn't exist. */
+   createDir: z.boolean().optional(),
+ });
++export type LocalProjectInput = z.infer<typeof localProjectSchema>;
++
++/** Validation for importing a project by cloning a git URL into a chosen parent directory. */
++const importProjectSchema = z.object({
++  source: z.literal('import'),
++  /** Optional; when omitted the name is derived from the repo URL. */
++  name: z.string().trim().max(80).optional(),
++  repoUrl: z.string().trim().min(1, 'Repository URL is required').refine(isGitUrl, 'Enter a valid git URL'),
++  parentDir: z.string().trim().min(1, 'Parent directory is required'),
++  defaultModel: z.string().trim().min(1).optional(),
++});
++export type ImportProjectInput = z.infer<typeof importProjectSchema>;
++
++/**
++ * A request body without an explicit `source` is treated as a `local` create, so callers that
++ * predate the import feature keep working. `z.preprocess` injects `source: 'local'` BEFORE the
++ * discriminated union reads the discriminator key.
++ */
++export const createProjectSchema = z.preprocess(
++  (v) =>
++    v && typeof v === 'object' && !Array.isArray(v) && !('source' in v)
++      ? { ...(v as Record<string, unknown>), source: 'local' }
++      : v,
++  z.discriminatedUnion('source', [localProjectSchema, importProjectSchema]),
++);
+ export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+ 
+ export const updateProjectSettingsSchema = z.object({
+diff --git a/src/web/pages/ProjectsPage.tsx b/src/web/pages/ProjectsPage.tsx
+index 2448af8..02c8d95 100644
+--- a/src/web/pages/ProjectsPage.tsx
++++ b/src/web/pages/ProjectsPage.tsx
+@@ -1,5 +1,7 @@
+ import React, { useEffect, useRef, useState } from 'react';
+ import { useNavigate, useSearchParams } from 'react-router-dom';
++import type { CreateProjectInput } from '@shared/index';
++import { isGitUrl } from '@shared/index';
+ import { useApp } from '../state';
+ import { api } from '../api';
+ import {
+@@ -224,16 +226,14 @@ function CreateProjectModal({
+   onCreate,
+ }: {
+   onClose: () => void;
+-  onCreate: (input: {
+-    name: string;
+-    repoDir: string;
+-    defaultModel?: string;
+-    createDir?: boolean;
+-  }) => Promise<unknown>;
++  onCreate: (input: CreateProjectInput) => Promise<unknown>;
+ }): React.JSX.Element {
+   const navigate = useNavigate();
++  const [mode, setMode] = useState<'local' | 'import'>('local');
+   const [name, setName] = useState('');
+   const [repoDir, setRepoDir] = useState('');
++  const [repoUrl, setRepoUrl] = useState('');
++  const [parentDir, setParentDir] = useState('');
+   const [model, setModel] = useState('auto');
+   const [createDir, setCreateDir] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+@@ -242,16 +242,28 @@ function CreateProjectModal({
+ 
+   const submit = async (e: React.FormEvent): Promise<void> => {
+     e.preventDefault();
++    if (mode === 'import' && !isGitUrl(repoUrl)) {
++      setError('Enter a valid git URL (e.g. https://github.com/owner/repo).');
++      return;
++    }
+     setBusy(true);
+     setError(null);
+     try {
+-      const project = (await onCreate({ name, repoDir, defaultModel: model, createDir })) as {
+-        id: string;
+-      };
++      const input: CreateProjectInput =
++        mode === 'import'
++          ? {
++              source: 'import',
++              name: name.trim() || undefined,
++              repoUrl: repoUrl.trim(),
++              parentDir,
++              defaultModel: model,
++            }
++          : { source: 'local', name, repoDir, defaultModel: model, createDir };
++      const project = (await onCreate(input)) as { id: string };
+       navigate(`/p/${project.id}/agents`);
+     } catch (err) {
+       const msg = err instanceof Error ? err.message : 'Failed to create project';
+-      if (/does not exist/i.test(msg) && !createDir) {
++      if (mode === 'local' && /does not exist/i.test(msg) && !createDir) {
+         setCreateDir(true);
+         setError(
+           'That folder doesn’t exist yet — ticked “Create this directory” for you. Click Create project again to make it.',
+@@ -273,10 +285,46 @@ function CreateProjectModal({
+     >
+       <form className="card w-full max-w-lg p-5" onSubmit={submit}>
+         <h2 className="mb-4 text-lg font-semibold text-slate-100">New project</h2>
++        <div
++          className="mb-4 flex gap-1 rounded-lg bg-surface-2 p-1 text-sm"
++          role="tablist"
++          aria-label="Project source"
++        >
++          <button
++            type="button"
++            role="tab"
++            aria-selected={mode === 'local'}
++            data-testid="project-tab-local"
++            className={`flex-1 rounded-md px-3 py-1.5 ${
++              mode === 'local' ? 'bg-surface-1 text-slate-100' : 'text-slate-400'
++            }`}
++            onClick={() => {
++              setMode('local');
++              setError(null);
++            }}
++          >
++            Local folder
++          </button>
++          <button
++            type="button"
++            role="tab"
++            aria-selected={mode === 'import'}
++            data-testid="project-tab-import"
++            className={`flex-1 rounded-md px-3 py-1.5 ${
++              mode === 'import' ? 'bg-surface-1 text-slate-100' : 'text-slate-400'
++            }`}
++            onClick={() => {
++              setMode('import');
++              setError(null);
++            }}
++          >
++            Import from URL
++          </button>
++        </div>
+         <div className="space-y-3">
+           <div>
+             <label className="label" htmlFor="p-name">
+-              Project name
++              Project name{mode === 'import' ? ' (optional)' : ''}
+             </label>
+             <input
+               id="p-name"
+@@ -284,48 +332,97 @@ function CreateProjectModal({
+               data-testid="project-name"
+               value={name}
+               onChange={(e) => setName(e.target.value)}
+-              placeholder="Checkout Redesign"
+-              required
++              placeholder={mode === 'import' ? 'Defaults to the repo name' : 'Checkout Redesign'}
++              required={mode === 'local'}
+               autoFocus
+             />
+           </div>
+-          <div>
+-            <label className="label" htmlFor="p-repo">
+-              Repository directory
+-            </label>
+-            <div className="flex gap-2">
+-              <input
+-                id="p-repo"
+-                className="input font-mono text-xs"
+-                data-testid="project-repo"
+-                value={repoDir}
+-                onChange={(e) => setRepoDir(e.target.value)}
+-                placeholder="C:\\Code\\my-app"
+-                required
+-              />
+-              <button
+-                type="button"
+-                className="btn-ghost shrink-0"
+-                data-testid="project-browse"
+-                onClick={() => setBrowsing(true)}
+-              >
+-                Browse…
+-              </button>
++          {mode === 'local' ? (
++            <div>
++              <label className="label" htmlFor="p-repo">
++                Repository directory
++              </label>
++              <div className="flex gap-2">
++                <input
++                  id="p-repo"
++                  className="input font-mono text-xs"
++                  data-testid="project-repo"
++                  value={repoDir}
++                  onChange={(e) => setRepoDir(e.target.value)}
++                  placeholder="C:\\Code\\my-app"
++                  required
++                />
++                <button
++                  type="button"
++                  className="btn-ghost shrink-0"
++                  data-testid="project-browse"
++                  onClick={() => setBrowsing(true)}
++                >
++                  Browse…
++                </button>
++              </div>
++              <p className="mt-1 text-xs text-slate-500">
++                Pick a locally checked-out repository, or paste an absolute path.
++              </p>
++              <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-slate-400">
++                <input
++                  type="checkbox"
++                  className="h-3.5 w-3.5 accent-accent-500"
++                  data-testid="project-createdir"
++                  checked={createDir}
++                  onChange={(e) => setCreateDir(e.target.checked)}
++                />
++                Create this directory if it doesn&rsquo;t exist
++              </label>
+             </div>
+-            <p className="mt-1 text-xs text-slate-500">
+-              Pick a locally checked-out repository, or paste an absolute path.
+-            </p>
+-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-slate-400">
+-              <input
+-                type="checkbox"
+-                className="h-3.5 w-3.5 accent-accent-500"
+-                data-testid="project-createdir"
+-                checked={createDir}
+-                onChange={(e) => setCreateDir(e.target.checked)}
+-              />
+-              Create this directory if it doesn&rsquo;t exist
+-            </label>
+-          </div>
++          ) : (
++            <>
++              <div>
++                <label className="label" htmlFor="p-url">
++                  Repository URL
++                </label>
++                <input
++                  id="p-url"
++                  className="input font-mono text-xs"
++                  data-testid="project-url"
++                  value={repoUrl}
++                  onChange={(e) => setRepoUrl(e.target.value)}
++                  placeholder="https://github.com/owner/repo.git"
++                  required
++                />
++                <p className="mt-1 text-xs text-slate-500">
++                  A public GitHub URL, or any git URL your machine can clone.
++                </p>
++              </div>
++              <div>
++                <label className="label" htmlFor="p-parent">
++                  Clone into folder
++                </label>
++                <div className="flex gap-2">
++                  <input
++                    id="p-parent"
++                    className="input font-mono text-xs"
++                    data-testid="project-parent"
++                    value={parentDir}
++                    onChange={(e) => setParentDir(e.target.value)}
++                    placeholder="C:\\Code"
++                    required
++                  />
++                  <button
++                    type="button"
++                    className="btn-ghost shrink-0"
++                    data-testid="project-parent-browse"
++                    onClick={() => setBrowsing(true)}
++                  >
++                    Browse…
++                  </button>
++                </div>
++                <p className="mt-1 text-xs text-slate-500">
++                  The repo is cloned into a new sub-folder here, named after the repository.
++                </p>
++              </div>
++            </>
++          )}
+           <div>
+             <label className="label" htmlFor="p-model">
+               Default model
+@@ -344,16 +441,17 @@ function CreateProjectModal({
+             data-testid="project-submit"
+             disabled={busy}
+           >
+-            {busy ? 'Creating…' : 'Create project'}
++            {busy ? (mode === 'import' ? 'Importing…' : 'Creating…') : mode === 'import' ? 'Import project' : 'Create project'}
+           </button>
+         </div>
+       </form>
+       {browsing && (
+         <FolderPicker
+-          initial={repoDir}
++          initial={mode === 'import' ? parentDir : repoDir}
+           onClose={() => setBrowsing(false)}
+           onSelect={(p) => {
+-            setRepoDir(p);
++            if (mode === 'import') setParentDir(p);
++            else setRepoDir(p);
+             setBrowsing(false);
+           }}
+         />
+diff --git a/src/web/state.tsx b/src/web/state.tsx
+index e4045a9..4a44130 100644
+--- a/src/web/state.tsx
++++ b/src/web/state.tsx
+@@ -13,6 +13,7 @@ import type {
+   AgentNote,
+   AgentTask,
+   ChatMessage,
++  CreateProjectInput,
+   Project,
+   Question,
+   ServerMessage,
+@@ -292,12 +293,7 @@ function reducer(state: State, action: Action): State {
+ interface AppContextValue {
+   state: State;
+   refreshProjects: () => Promise<void>;
+-  createProject: (input: {
+-    name: string;
+-    repoDir: string;
+-    defaultModel?: string;
+-    createDir?: boolean;
+-  }) => Promise<Project>;
++  createProject: (input: CreateProjectInput) => Promise<Project>;
+   deleteProject: (id: string) => Promise<void>;
+   ensureBundle: (projectId: string) => Promise<void>;
+   loadAgentTasks: (projectId: string, agentId: string) => Promise<void>;
+diff --git a/tests/e2e/_import.spec.ts b/tests/e2e/_import.spec.ts
+new file mode 100644
+index 0000000..893248f
+--- /dev/null
++++ b/tests/e2e/_import.spec.ts
+@@ -0,0 +1,75 @@
++import { test, expect } from '@playwright/test';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { execFileSync } from 'node:child_process';
++import { pathToFileURL } from 'node:url';
++
++/** Create a real local git repo with one commit; returns its absolute path. */
++function makeFixtureRepo(): string {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-e2e-src-'));
++  const env = {
++    ...process.env,
++    GIT_AUTHOR_NAME: 't',
++    GIT_AUTHOR_EMAIL: 't@e',
++    GIT_COMMITTER_NAME: 't',
++    GIT_COMMITTER_EMAIL: 't@e',
++  };
++  execFileSync('git', ['init', '-q'], { cwd: dir, env });
++  fs.writeFileSync(path.join(dir, 'README.md'), '# e2e fixture\n');
++  execFileSync('git', ['add', '.'], { cwd: dir, env });
++  execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir, env });
++  return dir;
++}
++
++test('New Project modal offers Local vs Import tabs (AC2.3)', async ({ page }) => {
++  await page.goto('/');
++  await page.getByTestId('new-project').click();
++
++  // Local tab is the default: repo-dir field is shown, URL field is not.
++  await expect(page.getByTestId('project-repo')).toBeVisible();
++  await expect(page.getByTestId('project-url')).toHaveCount(0);
++
++  // Switch to Import: URL + parent-folder inputs appear.
++  await page.getByTestId('project-tab-import').click();
++  await expect(page.getByTestId('project-url')).toBeVisible();
++  await expect(page.getByTestId('project-parent')).toBeVisible();
++  await expect(page.getByTestId('project-repo')).toHaveCount(0);
++});
++
++test('Import rejects a malformed URL with a clear inline error (AC2.1)', async ({ page }) => {
++  await page.goto('/');
++  await page.getByTestId('new-project').click();
++  await page.getByTestId('project-tab-import').click();
++  await page.getByTestId('project-url').fill('not-a-git-url');
++  await page.getByTestId('project-parent').fill(os.tmpdir());
++  await page.getByTestId('project-submit').click();
++
++  await expect(page.getByText(/valid git URL/i)).toBeVisible();
++  // Still on the modal (no navigation) — project not created.
++  await expect(page.getByTestId('project-submit')).toBeVisible();
++});
++
++test('Import clones a git URL and opens the new project (AC2)', async ({ page }) => {
++  const src = makeFixtureRepo();
++  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-e2e-parent-'));
++  try {
++    await page.goto('/');
++    await page.getByTestId('new-project').click();
++    await page.getByTestId('project-tab-import').click();
++    await page.getByTestId('project-url').fill(pathToFileURL(src).href);
++    await page.getByTestId('project-parent').fill(parent);
++    await page.getByTestId('project-submit').click();
++
++    // On success we navigate into the new project's agents view.
++    await page.getByTestId('add-agent').waitFor();
++
++    // The repo was cloned into <parent>/<repoName>.
++    const cloned = path.join(parent, path.basename(src));
++    expect(fs.existsSync(path.join(cloned, '.git'))).toBe(true);
++    expect(fs.existsSync(path.join(cloned, 'README.md'))).toBe(true);
++  } finally {
++    fs.rmSync(src, { recursive: true, force: true });
++    fs.rmSync(parent, { recursive: true, force: true });
++  }
++});
+diff --git a/tests/integration/importProject.test.ts b/tests/integration/importProject.test.ts
+new file mode 100644
+index 0000000..2512c8f
+--- /dev/null
++++ b/tests/integration/importProject.test.ts
+@@ -0,0 +1,146 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { execFileSync } from 'node:child_process';
++import { pathToFileURL } from 'node:url';
++import { cloneRepoToDir } from '../../src/server/clone.js';
++import { createTestApp, rmDir, type TestApp } from '../helpers/testApp.js';
++
++const made: string[] = [];
++let ctx: TestApp | null = null;
++
++afterEach(async () => {
++  if (ctx) {
++    await ctx.close();
++    ctx = null;
++  }
++  for (const p of made.splice(0)) rmDir(p);
++});
++
++/** Create a real local git repo with one commit; returns its absolute path. */
++function makeFixtureRepo(): string {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-src-'));
++  made.push(dir);
++  const run = (args: string[]): void => {
++    execFileSync('git', args, {
++      cwd: dir,
++      env: {
++        ...process.env,
++        GIT_AUTHOR_NAME: 't',
++        GIT_AUTHOR_EMAIL: 't@e',
++        GIT_COMMITTER_NAME: 't',
++        GIT_COMMITTER_EMAIL: 't@e',
++      },
++    });
++  };
++  run(['init', '-q']);
++  fs.writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
++  run(['add', '.']);
++  run(['commit', '-q', '-m', 'init']);
++  return dir;
++}
++
++describe('cloneRepoToDir', () => {
++  it('clones a local fixture repo into <parent>/<name>', async () => {
++    const src = makeFixtureRepo();
++    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-parent-'));
++    made.push(parent);
++    const res = await cloneRepoToDir(pathToFileURL(src).href, parent, 'cloned');
++    expect(res.ok).toBe(true);
++    expect(res.path).toBe(path.join(parent, 'cloned'));
++    expect(fs.existsSync(path.join(parent, 'cloned', '.git'))).toBe(true);
++    expect(fs.existsSync(path.join(parent, 'cloned', 'README.md'))).toBe(true);
++  });
++
++  it('fails fast and leaves no partial dir when the source does not exist', async () => {
++    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-parent-'));
++    made.push(parent);
++    const bogus = pathToFileURL(path.join(os.tmpdir(), `nope-${Date.now()}`)).href;
++    const started = Date.now();
++    const res = await cloneRepoToDir(bogus, parent, 'x');
++    expect(res.ok).toBe(false);
++    expect(res.stderr.length).toBeGreaterThan(0);
++    expect(fs.existsSync(path.join(parent, 'x'))).toBe(false); // partial cleaned up
++    expect(Date.now() - started).toBeLessThan(15000); // no hang
++  });
++});
++
++describe('POST /api/projects import (route)', () => {
++  it('imports a project from a git URL and provisions the Team Lead (AC2)', async () => {
++    const src = makeFixtureRepo();
++    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-parent-'));
++    made.push(parent);
++    ctx = createTestApp();
++    const res = await ctx.app.inject({
++      method: 'POST',
++      url: '/api/projects',
++      payload: { source: 'import', repoUrl: pathToFileURL(src).href, parentDir: parent },
++    });
++    expect(res.statusCode).toBe(201);
++    const body = res.json() as { project: { id: string; name: string; repoDir: string }; agents: unknown[] };
++    // Name derived from the source dir; repoDir is the cloned checkout under parent.
++    expect(body.project.repoDir.startsWith(path.resolve(parent))).toBe(true);
++    expect(fs.existsSync(path.join(body.project.repoDir, '.git'))).toBe(true);
++    expect(body.agents.length).toBeGreaterThanOrEqual(1); // Team Lead provisioned
++    expect(ctx.store.listProjects()).toHaveLength(1);
++  });
++
++  it('rejects a malformed URL with 400 before any git call (AC2.1)', async () => {
++    ctx = createTestApp();
++    const res = await ctx.app.inject({
++      method: 'POST',
++      url: '/api/projects',
++      payload: { source: 'import', repoUrl: 'not-a-git-url', parentDir: os.tmpdir() },
++    });
++    expect(res.statusCode).toBe(400);
++    expect(ctx.store.listProjects()).toHaveLength(0);
++  });
++
++  it('surfaces a clone failure as 400 with no project row and no hang (AC2.2)', async () => {
++    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-parent-'));
++    made.push(parent);
++    ctx = createTestApp();
++    const bogus = pathToFileURL(path.join(os.tmpdir(), `missing-${Date.now()}`)).href;
++    const started = Date.now();
++    const res = await ctx.app.inject({
++      method: 'POST',
++      url: '/api/projects',
++      payload: { source: 'import', repoUrl: bogus, parentDir: parent },
++    });
++    expect(res.statusCode).toBe(400);
++    expect((res.json() as { error: string }).error).toMatch(/clone failed/i);
++    expect(ctx.store.listProjects()).toHaveLength(0);
++    expect(Date.now() - started).toBeLessThan(15000);
++  });
++
++  it('rejects when the target folder already exists (no clobber)', async () => {
++    const src = makeFixtureRepo();
++    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-parent-'));
++    made.push(parent);
++    const name = path.basename(src); // deriveRepoName of file url = last segment = src basename
++    fs.mkdirSync(path.join(parent, name));
++    ctx = createTestApp();
++    const res = await ctx.app.inject({
++      method: 'POST',
++      url: '/api/projects',
++      payload: { source: 'import', repoUrl: pathToFileURL(src).href, parentDir: parent },
++    });
++    expect(res.statusCode).toBe(400);
++    expect((res.json() as { error: string }).error).toMatch(/already exists/i);
++    expect(ctx.store.listProjects()).toHaveLength(0);
++  });
++
++  it('still creates a local project when source is omitted (AC1 regression)', async () => {
++    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ateam-local-'));
++    made.push(repoDir);
++    ctx = createTestApp();
++    const res = await ctx.app.inject({
++      method: 'POST',
++      url: '/api/projects',
++      payload: { name: 'Local One', repoDir },
++    });
++    expect(res.statusCode).toBe(201);
++    expect(ctx.store.listProjects()).toHaveLength(1);
++  });
++});
+diff --git a/tests/unit/importUrl.test.ts b/tests/unit/importUrl.test.ts
+new file mode 100644
+index 0000000..c6932d8
+--- /dev/null
++++ b/tests/unit/importUrl.test.ts
+@@ -0,0 +1,94 @@
++import { describe, it, expect } from 'vitest';
++import { isGitUrl, createProjectSchema } from '../../src/shared/api.js';
++import { deriveRepoName } from '../../src/server/services.js';
++
++describe('isGitUrl', () => {
++  const accepted = [
++    'https://github.com/owner/repo',
++    'https://github.com/owner/repo.git',
++    'http://gitlab.example.com/group/sub/repo.git',
++    'git@github.com:owner/repo.git',
++    'git@github.com:owner/repo',
++    'ssh://git@github.com/owner/repo.git',
++    'git://github.com/owner/repo.git',
++    'file:///tmp/some/repo',
++    '  https://github.com/owner/repo  ', // trimmed
++  ];
++  for (const url of accepted) {
++    it(`accepts ${JSON.stringify(url)}`, () => expect(isGitUrl(url)).toBe(true));
++  }
++
++  const rejected = [
++    '',
++    '   ',
++    'not a url',
++    'github.com/owner/repo', // no scheme, not scp-style
++    'https://github.com', // host but no path
++    'ftp://github.com/owner/repo', // unsupported scheme
++    'C:\\Users\\me\\repo', // windows path, not a url
++  ];
++  for (const url of rejected) {
++    it(`rejects ${JSON.stringify(url)}`, () => expect(isGitUrl(url)).toBe(false));
++  }
++});
++
++describe('deriveRepoName', () => {
++  const cases: [string, string][] = [
++    ['https://github.com/owner/my-repo.git', 'my-repo'],
++    ['https://github.com/owner/my-repo', 'my-repo'],
++    ['https://github.com/owner/my-repo/', 'my-repo'],
++    ['git@github.com:owner/Cool_Repo.git', 'Cool_Repo'],
++    ['ssh://git@host/a/b/c.git', 'c'],
++    ['file:///tmp/some/fixture-repo', 'fixture-repo'],
++    ['https://github.com/owner/weird name!.git', 'weird-name'], // sanitized, trailing dashes trimmed
++  ];
++  for (const [url, expected] of cases) {
++    it(`${url} -> ${expected}`, () => expect(deriveRepoName(url)).toBe(expected));
++  }
++
++  it('returns empty string when nothing usable remains', () => {
++    // Path-less URLs like https://github.com/ are already rejected by isGitUrl at the
++    // schema boundary, so they never reach deriveRepoName in the real flow.
++    expect(deriveRepoName('')).toBe('');
++    expect(deriveRepoName('   ')).toBe('');
++    expect(deriveRepoName('///')).toBe('');
++  });
++});
++
++describe('createProjectSchema back-compat + discrimination', () => {
++  it('treats a body without source as a local create (AC1 back-compat)', () => {
++    const parsed = createProjectSchema.parse({ name: 'X', repoDir: '/tmp/x' });
++    expect(parsed).toMatchObject({ source: 'local', name: 'X', repoDir: '/tmp/x' });
++  });
++
++  it('parses an explicit local body', () => {
++    const parsed = createProjectSchema.parse({ source: 'local', name: 'X', repoDir: '/tmp/x' });
++    expect(parsed.source).toBe('local');
++  });
++
++  it('parses a valid import body', () => {
++    const parsed = createProjectSchema.parse({
++      source: 'import',
++      repoUrl: 'https://github.com/owner/repo.git',
++      parentDir: '/tmp',
++    });
++    expect(parsed).toMatchObject({ source: 'import', repoUrl: 'https://github.com/owner/repo.git' });
++  });
++
++  it('rejects an import body with a malformed URL (AC2.1)', () => {
++    const r = createProjectSchema.safeParse({
++      source: 'import',
++      repoUrl: 'not-a-git-url',
++      parentDir: '/tmp',
++    });
++    expect(r.success).toBe(false);
++  });
++
++  it('rejects an import body missing parentDir', () => {
++    const r = createProjectSchema.safeParse({
++      source: 'import',
++      repoUrl: 'https://github.com/owner/repo.git',
++    });
++    expect(r.success).toBe(false);
++  });
++});
