@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyComplexity,
   parseDesignBreakdown,
+  pickDecider,
   type ComplexityInput,
 } from '../../src/server/complexity.js';
 
@@ -107,5 +108,19 @@ describe('parseDesignBreakdown (AC1/AC5)', () => {
     );
     expect(out).toHaveLength(1);
     expect(out[0]!.title).toBe('First');
+  });
+});
+
+describe('pickDecider (AC6)', () => {
+  it('routes product/scope/UX questions to the PM when one is on the team', () => {
+    expect(pickDecider('Which feature scope should we ship first?', true)).toBe('pm');
+    expect(pickDecider('what is the right user experience here', true)).toBe('pm');
+  });
+  it('falls back to the Lead when there is no PM', () => {
+    expect(pickDecider('Which feature scope should we ship first?', false)).toBe('lead');
+  });
+  it('routes a purely technical question to the Lead even with a PM', () => {
+    expect(pickDecider('which database index to add for this query', true)).toBe('pm'); // 'which' is a product signal — conservative
+    expect(pickDecider('refactor the retry backoff helper', true)).toBe('lead');
   });
 });

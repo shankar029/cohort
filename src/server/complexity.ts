@@ -50,6 +50,22 @@ export function classifyComplexity(i: ComplexityInput): Complexity {
   return 'standard';
 }
 
+/**
+ * Route a group discussion to its decider: the PM owns product/scope/UX calls
+ * when a PM is on the team; otherwise the Lead resolves it. Pure so it is unit
+ * testable and never blocks.
+ */
+export function pickDecider(topic: string, hasPm: boolean): 'lead' | 'pm' {
+  if (
+    hasPm &&
+    /\b(product|user|ux|scope|priorit|requirement|feature|business|customer|which|should we)\b/i.test(
+      topic,
+    )
+  )
+    return 'pm';
+  return 'lead';
+}
+
 export interface DesignTask {
   stream: string;
   title: string;

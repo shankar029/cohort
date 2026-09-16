@@ -14,6 +14,7 @@ import { scopeStreams, pickBrownfieldBuilders } from './streamScope.js';
 import {
   classifyComplexity,
   parseDesignBreakdown,
+  pickDecider,
   type Complexity,
 } from './complexity.js';
 import {
@@ -1438,15 +1439,7 @@ if (this.groupDepth >= 2) return ''; // guard against runaway nesting
 
   /** Route a discussion to the right decider: the PM owns product/scope calls. */
   private pickDecider(topic: string): 'lead' | 'pm' {
-    const hasPm = this.specialists().some((s) => s.name === 'pm');
-    if (
-      hasPm &&
-      /\b(product|user|ux|scope|priorit|requirement|feature|business|customer|which|should we)\b/i.test(
-        topic,
-      )
-    )
-      return 'pm';
-    return 'lead';
+    return pickDecider(topic, this.specialists().some((s) => s.name === 'pm'));
   }
 
   /** When an agent asks the Lead to open a group chat, convene the right people. */
