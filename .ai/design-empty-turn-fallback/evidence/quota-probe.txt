@@ -1,0 +1,19 @@
+Minimal direct Copilot SDK probe (repo node_modules), 2026-09-16 23:52:
+  MODELS: ["auto"]
+  ASSISTANT_TEXT: ""
+  DELTAS: 0 | USAGE: null
+  OTHER_EVENTS: [["session.error","{\"errorType\":\"quota\",\"message\":\"You have exceeded
+    your monthly quota (Request ID: E1DF:...)\",\"statusCode\":402,...}"]]
+
+Conclusion: the GitHub Copilot account is OUT OF MONTHLY QUOTA (HTTP 402). Every
+model call returns a quota session.error → zero tokens, empty assistant text, for
+EVERY agent. This is the true, decisive root cause of the empty turns seen in
+live smoke runs 1/2/3 — not a design-first defect. No orchestrator change can fix
+a 402; the account quota must reset or a different subscription must be used.
+
+Corroboration from live run 3 (design-first, real adapter, 36-min window):
+  epic_designs: [] (empty)   designPersisted=false
+  usage totals across ALL agents: inputTokens=0, outputTokens=0
+  chat.message empty-len counts: ARCH 2/2, FE 9/9, QA 1/1; the only non-empty
+    LEAD messages were orchestrator postMessage() calls, not agent ask() output.
+  git: "Produced no file changes (attempt 1/2 & 2/2)" for every builder.

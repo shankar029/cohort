@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
 import { WebSocket } from 'ws';
+import Database from 'better-sqlite3';
 
 const BUILTIN_MODULES = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
 
@@ -213,6 +214,28 @@ export class EvalHarness {
     }
   }
 
+  /**
+   * A run is ENVIRONMENT-INVALID when the model provider itself refused to
+   * generate - most commonly an exhausted Copilot quota (HTTP 402) or a provider
+   * outage. The adapter now logs a greppable `[copilot] session error (...)` line
+   * for these; without this the whole team just produces empty turns and the
+   * scenario looks like a genuine AC4/AC5 failure when in fact NOTHING could run.
+   * Returns the first matching diagnostic so callers can surface it instead of
+   * scoring behavior that never happened.
+   */
+  detectEnvironmentIssue() {
+    try {
+      const log = fs.readFileSync(this.logPath, 'utf8');
+      const m =
+        /\[copilot\] session error \([^)]*\)[^\n]*/i.exec(log) ??
+        /exceeded your monthly quota[^\n]*/i.exec(log) ??
+        /\bquota\b[^\n]*exceeded[^\n]*/i.exec(log);
+      return m ? { invalid: true, reason: m[0].slice(0, 300) } : { invalid: false, reason: '' };
+    } catch {
+      return { invalid: false, reason: '' };
+    }
+  }
+
   async createProject(name, repoDir, settings = {}) {
     const { project } = await this.api.post('/api/projects', { name, repoDir });
     this.projectId = project.id;
@@ -337,7 +360,7 @@ export class EvalHarness {
         this.log(line);
         last = line;
       }
-      if (until(snap)) return { done: true, snap, elapsedMs: Date.now() - t0 };
+      if (until(snap, this)) return { done: true, snap, elapsedMs: Date.now() - t0 };
       if (Date.now() - t0 > timeoutMs) return { done: false, snap, elapsedMs: Date.now() - t0 };
       await sleep(intervalMs);
     }
@@ -517,6 +540,91 @@ export class EvalHarness {
     return { uiFileCount: uiFiles.length, runtimeDeps: [...runtimeDeps], writesToDisk };
   }
 
+  /**
+   * Read the Architect/Lead technical designs persisted for each epic (AC5).
+   * Opens the live sqlite db READ-ONLY (safe against the server's WAL); degrades
+   * to [] on any error so scoring never crashes. Returns [{ epicId, content }].
+   */
+  readEpicDesigns() {
+    let db;
+    try {
+      db = new Database(this.dbPath, { readonly: true, fileMustExist: true });
+      const rows = db.prepare('SELECT epic_id AS epicId, content FROM epic_designs').all();
+      return rows.map((r) => ({ epicId: r.epicId, content: String(r.content ?? '') }));
+    } catch {
+      return [];
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * Attribute changed files to the STREAM that produced them (AC4). Each task
+   * clone dir's basename IS the full task id (`.tasks-<epicId>/<taskId>`), so we
+   * map dir -> task.stream from the snapshot and git-diff it vs its merge-base.
+   * Also diffs each task's `branch` in the epic/target clones so attribution
+   * survives a clone that was GC'd after merge. Returns { [stream]: string[] }.
+   */
+  deliverablesByStream(tasks = []) {
+    const keep = (f) => f && !f.startsWith('.ateam') && f !== '.ateam-keep' && !f.startsWith('.git');
+    const byId = new Map(tasks.map((t) => [t.id, t]));
+    const buckets = {};
+    const add = (stream, files) => {
+      if (!stream || !files.length) return;
+      (buckets[stream] ??= new Set());
+      for (const f of files) if (keep(f)) buckets[stream].add(f);
+    };
+    const diffNames = (dir, range) => {
+      try {
+        return execFileSync('git', ['diff', '--name-only', range], { cwd: dir, encoding: 'utf8' })
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } catch {
+        return [];
+      }
+    };
+    const mergeBase = (dir) => {
+      for (const b of ['main', 'master']) {
+        try {
+          return execFileSync('git', ['merge-base', 'HEAD', b], { cwd: dir, encoding: 'utf8' }).trim();
+        } catch {
+          /* try next */
+        }
+      }
+      return '';
+    };
+    // 1. Per-task clones (primary attribution: dir basename == task id).
+    for (const dir of this.cloneDirs()) {
+      const task = byId.get(path.basename(dir));
+      if (!task) continue; // epic clone (basename != task id) — skip; task clones only
+      const base = mergeBase(dir);
+      if (base) add(task.stream, diffNames(dir, `${base}..HEAD`));
+    }
+    // 2. Branch-based attribution (survives clone GC): diff each task's branch in
+    //    the target repo and any clone that has the ref.
+    const searchDirs = [this.repoDir, ...this.cloneDirs()];
+    for (const task of tasks) {
+      if (!task.branch) continue;
+      for (const dir of searchDirs) {
+        for (const b of ['main', 'master']) {
+          const names = diffNames(dir, `${b}...${task.branch}`);
+          if (names.length) {
+            add(task.stream, names);
+            break;
+          }
+        }
+      }
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(buckets)) out[k] = [...v];
+    return out;
+  }
+
   /** Build a structured outcome + a human-readable markdown report. */
   async report(scenario, monitorResult) {
     const snap = monitorResult.snap;
@@ -562,6 +670,18 @@ export class EvalHarness {
     const evStr = this.events.map((e) => JSON.stringify(e)).join('\n');
     const qaSignoff = /QA gate: .* passed/.test(evStr);
     const authIssue = this.detectAuthIssue();
+    const env = this.detectEnvironmentIssue();
+
+    // --- design-first signals (AC4/AC5) -------------------------------------
+    const designs = this.readEpicDesigns();
+    const byStream = this.deliverablesByStream(snap.tasks ?? []);
+    const df = scoreDesignFirst({
+      designs,
+      tasks: snap.tasks ?? [],
+      deliverables,
+      byStream,
+      events: this.events,
+    });
 
     const outcome = {
       scenario: scenario.name,
@@ -588,6 +708,17 @@ export class EvalHarness {
       acceptanceProbe,
       qaSignoff,
       authIssue,
+      environmentInvalid: env.invalid,
+      environmentError: env.reason,
+      // design-first (AC4/AC5)
+      designPersisted: df.designPersisted,
+      designStatedStack: df.designStatedStack,
+      designEnrichedTasks: df.designEnrichedTasks,
+      frontendStreamTerminal: df.frontendStreamTerminal,
+      frontendProducedCode: df.frontendProducedCode,
+      streamsWithCode: df.streamsWithCode,
+      frontendFiles: df.frontendFiles,
+      userQuestionsRaised: df.userQuestionsRaised,
     };
 
     const md = renderReport(scenario, outcome, chat, this);
@@ -602,6 +733,61 @@ export class EvalHarness {
 
 /* ---------------------------------------------------------- report rendering */
 
+/**
+ * Pure AC4/AC5 scoring over already-collected inputs (so it is unit-testable
+ * without a live server or the fake adapter).
+ *  - AC5: designPersisted (non-empty epic design), designStatedStack (names a
+ *    CONCRETE technology, not the meta-word "stack"), designEnrichedTasks (a
+ *    <!--design-acceptance--> marker reached a task).
+ *  - AC4: frontendProducedCode — primary = code attributed to the frontend
+ *    stream; guarded fallback = frontend terminal + real code landed + frontend
+ *    is the SOLE code-authoring builder (architect designs, qa tests).
+ */
+export function scoreDesignFirst({ designs = [], tasks = [], deliverables = [], byStream = {}, events = [] }) {
+  const CODE_RE = /\.(js|mjs|cjs|jsx|ts|tsx|html|css|vue|svelte)$/i;
+  const TEST_RE = /(test|spec)/i;
+  const STACK_RE =
+    /\b(html|css|javascript|typescript|react|vue|svelte|preact|lit|vanilla|node(?:\.js)?|express|fastify|vite|webpack|tailwind|jest|vitest|playwright)\b/i;
+  const NON_BUILDER = new Set(['architect', 'qa', 'docs', 'reviewer', 'security', 'pm', 'product']);
+
+  const designPersisted = designs.some((d) => (d.content ?? '').trim().length > 0);
+  const designStatedStack = designs.some((d) => STACK_RE.test(d.content ?? ''));
+  const designEnrichedTasks = tasks.some((t) => (t.description ?? '').includes('<!--design-acceptance-->'));
+
+  const streamsWithCode = Object.keys(byStream).filter((s) => (byStream[s] ?? []).some((f) => CODE_RE.test(f)));
+  const frontendFiles = byStream.frontend ?? [];
+  const frontendAttributedCode = frontendFiles.some((f) => CODE_RE.test(f) && !TEST_RE.test(f));
+  const builderStreams = [
+    ...new Set(tasks.map((t) => t.stream).filter((s) => s && !NON_BUILDER.has(s))),
+  ];
+  const frontendStreamTerminal = tasks.some(
+    (t) => t.stream === 'frontend' && (t.status === 'review' || t.status === 'done'),
+  );
+  const codeDeliverableExists = deliverables.some((f) => CODE_RE.test(f) && !TEST_RE.test(f));
+  const frontendFallback =
+    !frontendAttributedCode &&
+    frontendStreamTerminal &&
+    codeDeliverableExists &&
+    builderStreams.length > 0 &&
+    builderStreams.every((s) => s === 'frontend');
+  const frontendProducedCode = frontendAttributedCode || frontendFallback;
+
+  const questionIds = new Set();
+  for (const e of events) {
+    if (e.type === 'question.updated') questionIds.add(e.question?.id ?? JSON.stringify(e.question ?? e));
+  }
+  return {
+    designPersisted,
+    designStatedStack,
+    designEnrichedTasks,
+    frontendStreamTerminal,
+    frontendProducedCode,
+    streamsWithCode,
+    frontendFiles,
+    userQuestionsRaised: questionIds.size,
+  };
+}
+
 function renderReport(scenario, o, chat, h) {
   const check = (b) => (b ? '✅' : '❌');
   const lines = [];
@@ -612,6 +798,12 @@ function renderReport(scenario, o, chat, h) {
   if (o.crashed)
     lines.push(
       `- **⚠ SERVER CRASHED mid-run** — results below are the last snapshot before it died.`,
+    );
+  if (o.environmentInvalid)
+    lines.push(
+      `- **⛔ ENVIRONMENT INVALID** — the model provider refused to generate ` +
+        `(e.g. exhausted quota / 402): \`${o.environmentError}\`. Every agent turn ` +
+        `resolves empty, so AC4/AC5 behavior below is NOT evaluable this run.`,
     );
   lines.push(`- **Epics done:** ${o.epicsDone}/${o.epicsTotal}`);
   lines.push(`- **PRs merged:** ${o.prsMerged}/${o.prs.length}`);
@@ -624,6 +816,16 @@ function renderReport(scenario, o, chat, h) {
       `- **External runtime deps:** ${o.runtimeDeps.length ? o.runtimeDeps.join(', ') : '(none)'} | **UI files:** ${o.uiFileCount} | **writes to disk:** ${check(o.writesToDisk)}`,
     );
   if (o.authIssue) lines.push(`- **⚠ AUTH ISSUE detected** — SDK appeared unauthenticated.`);
+  if (o.designPersisted !== undefined) {
+    lines.push(
+      `- **Design-first (AC5):** persisted ${check(o.designPersisted)} | stated a stack ${check(o.designStatedStack)} | enriched tasks ${check(o.designEnrichedTasks)}`,
+    );
+    lines.push(
+      `- **Frontend (AC4):** produced code ${check(o.frontendProducedCode)} | stream terminal ${check(o.frontendStreamTerminal)} | streams with code: ${o.streamsWithCode?.length ? o.streamsWithCode.join(', ') : '(none)'} | user questions raised: ${o.userQuestionsRaised}`,
+    );
+    if (o.frontendFiles?.length)
+      lines.push(`- **Frontend files:** ${o.frontendFiles.slice(0, 20).map((f) => '`' + f + '`').join(', ')}`);
+  }
   if (o.verificationReports !== undefined)
     lines.push(
       `- **Verification reports:** ${o.verificationReports} (failures ${o.gateFailures}, overrides ${o.gateOverrides}) | **tasks terminal with a failing gate:** ${o.tasksDoneWithFailingGate} ${o.tasksDoneWithFailingGate === 0 ? '✅' : '❌'}`,

@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Live greenfield smoke</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="plan.html" data-slug="live-greenfield-smoke"></script>
+
+<h1>Plan — Live greenfield smoke</h1>
+<div class="meta">Executable projection of design.html · cites research.md + design.html · introduces no new facts</div>
+
+<h2>Build order</h2>
+<table>
+<tr><th>#</th><th>Increment</th><th>Design components</th><th>ACs</th><th>Depends on</th><th>Files</th><th>Proven by</th></tr>
+<tr><td>I1</td><td>Harness scoring + <code>design-first</code> scenario</td>
+<td><code>readEpicDesigns()</code>, <code>deliverablesByStream()</code>, 7 new <code>outcome</code> fields, <code>monitorUntil(until(snap,h))</code> signature, <code>design-first</code> scenario</td>
+<td>AC4, AC5, AC-H (scoring)</td><td>—</td>
+<td><code>evals/harness.mjs</code>, <code>evals/run.mjs</code></td>
+<td><strong>Gate-4 self-test:</strong> <code>node evals/run.mjs design-first --fake</code> → scoring plumbing green (designPersisted, designEnrichedTasks, frontendProducedCode true; authIssue false); <code>lint</code> + <code>typecheck</code> clean</td></tr>
+<tr><td>I2</td><td>Live run (Phase 5 verification)</td>
+<td>the scenario, executed against the REAL adapter</td>
+<td>AC4, AC5 (behavior)</td><td>I1</td>
+<td>evidence only (no code)</td>
+<td><strong>Gate-5:</strong> <code>node evals/run.mjs design-first</code> (real) under the idle-runner → captured report + <code>outcome.json</code> + server events reconcile AC4/AC5</td></tr>
+</table>
+
+<h2>Testing plan</h2>
+<ul>
+<li><strong>I1 (deterministic self-test).</strong> The <code>--fake</code> run is the unit/integration proof for the <em>scoring</em>: the fake's structured-breakdown turn persists a design (via <code>designThenEnrich</code>) and enriches tasks with <code>&lt;!--design-acceptance--&gt;</code>, and the fake writes files — so every new outcome field is exercised and asserted by the scenario's <code>acceptance[]</code>. This proves the harness measures the right thing without spending a live run. Regression scope: the other scenarios' <code>until</code>/scoring must be unaffected (additive fields; unary <code>until</code> compatibility) — re-run <code>node evals/run.mjs smoke --fake</code> to confirm.</li>
+<li><strong>I2 (live behavior).</strong> One real run is the end-to-end proof. Evidence bundle: <code>evals/reports/&lt;run&gt;.md</code> + <code>.json</code>, the WS <code>events.jsonl</code>, the persisted design text, and the frontend deliverable list — copied into <code>.ai/live-greenfield-smoke/evidence/</code>. One pass/fail line per AC. If the run times out or the frontend stalls, that is captured honestly and the owning AC is marked NOT-VERIFIED/BLOCKED, not argued away.</li>
+<li><strong>Bounds (AC-H).</strong> Scenario <code>defaultTimeoutMin</code> modest; per-turn 15-min safety (realAdapter); isolated scratch port/DB/worktree; the whole live command wrapped in the skill's idle-runner so a hang is killed and recovered, not left to burn.</li>
+</ul>
+
+<h2>Notes</h2>
+<ul>
+<li>No production code changes — <code>src/**</code> is untouched; the diff is <code>evals/**</code> only. The quality gate (lint/typecheck/full vitest) must still pass to prove nothing regressed.</li>
+<li>Sequential (no safe parallel boundary — I2 depends on I1).</li>
+<li>Each increment ends at a green commit on <code>feat/live-greenfield-smoke</code>.</li>
+</ul>

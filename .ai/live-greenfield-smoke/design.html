@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design — Live greenfield smoke (design-first proof)</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="design.html" data-slug="live-greenfield-smoke"></script>
+
+<h1>Design — Live greenfield smoke (design-first, real adapter)</h1>
+<div class="meta">Repo: cohort · Branch: feat/live-greenfield-smoke · verification/dev-tooling change · no production code touched</div>
+
+<h2>1. Problem &amp; approach</h2>
+<p>The design-first-orchestration feature (PRs #1/#2/#4) is proven by unit + integration tests using the
+<strong>fake</strong> adapter — but the fake writes files regardless of persona text, so AC4 ("greenfield Frontend
+<em>decides</em> and produces code instead of stalling") and AC5 ("Architect <em>states a stack</em>; design persisted
+before builders act") are only <em>VERIFIED-WITH-LIMITATIONS</em>. This work proves them <strong>live</strong>.</p>
+<p><strong>FACT</strong> (this session): the real Copilot adapter connects here (<code>CopilotClient().start()</code> ok,
+<code>listModels()</code> → <code>auto</code>). <strong>FACT:</strong> an isolated live harness already exists —
+<code>evals/harness.mjs</code> + <code>evals/run.mjs</code> — that boots the real server against a greenfield repo,
+drives it over HTTP/WS, and scores deliverables. <strong>Approach: extend that harness</strong> with the two signals it
+lacks (a per-stream deliverable attribution and a read of the persisted design) and add one focused scenario. No new
+tool, no production code, no CI test (a live LLM run is non-deterministic and must stay opt-in).</p>
+
+<h2>2. Components (what / why / how)</h2>
+<table>
+<tr><th>Component</th><th>AC</th><th>Responsibility / interface</th><th>Collaborators</th></tr>
+<tr><td><code>EvalHarness.readEpicDesigns()</code> <span class="tag">new, harness.mjs</span></td><td>AC5</td>
+<td>Open <code>this.dbPath</code> <strong>read-only</strong> via <code>better-sqlite3</code>; return <code>[{epicId, content}]</code> from <code>epic_designs</code>. Pure read, never writes.</td>
+<td><code>epic_designs</code> table (store.setEpicDesign); <code>report()</code></td></tr>
+<tr><td><code>EvalHarness.deliverablesByStream()</code> <span class="tag">new, harness.mjs</span></td><td>AC4</td>
+<td>For each task-clone dir whose <strong>basename is the full task id</strong> (<code>.tasks-&lt;epicId&gt;/&lt;taskId&gt;</code>, e.g. <code>wi_ab12</code>), map → task <code>stream</code> (from the snapshot), git-diff it vs merge-base, bucket changed files by stream. Also diffs each task's <code>branch</code> (snapshot-exposed) vs base so attribution survives clone GC after merge. Returns <code>{ [stream]: string[] }</code>.</td>
+<td><code>cloneDirs()</code>, <code>snapshot().tasks</code> (id/stream/branch)</td></tr>
+<tr><td>New <code>outcome</code> fields in <code>report()</code> <span class="tag">extend</span></td><td>AC4/AC5</td>
+<td><code>designPersisted</code>, <code>designStatedStack</code>, <code>designEnrichedTasks</code>, <code>frontendStreamTerminal</code>, <code>frontendProducedCode</code>, <code>streamsWithCode</code>, <code>userQuestionsRaised</code>. Rendered into the md report too.</td>
+<td>the two methods above; <code>this.events</code>; snapshot</td></tr>
+<tr><td><code>design-first</code> scenario <span class="tag">new, run.mjs</span></td><td>AC4/AC5/AC-H</td>
+<td>team <code>[architect, frontend-engineer, qa-engineer]</code>; a small greenfield ask that <strong>names no stack</strong>; <code>until</code> = epic done <em>or</em> (design persisted &amp; frontend produced code) so it stops as soon as the claim is provable; acceptance = the checks in §4.</td>
+<td>harness driver + outcome</td></tr>
+</table>
+<p>Every row maps to an AC; nothing is added that no AC needs (YAGNI). Reading the design straight from sqlite (vs adding
+an HTTP route) keeps the change out of production code — the right call for a verification task.</p>
+
+<h2>3. As-is → to-be</h2>
+<table>
+<tr><th>Symbol</th><th>As-is (research.md)</th><th>To-be</th></tr>
+<tr><td><code>report()</code> outcome (harness.mjs ~report)</td><td>Scores epicsDone, prsMerged, deliverableCount, taskStreams, faithfulness (uiFileCount/runtimeDeps/writesToDisk), verification reports.</td><td>+ the 7 AC4/AC5 fields; existing fields untouched (additive).</td></tr>
+<tr><td><code>evals/run.mjs</code> SCENARIOS</td><td>smoke / acceptance-probe / headless / gate-enforcement / greenfield / brownfield. <code>smoke</code> has no architect and no stack/design assertions.</td><td>+ <code>design-first</code> scenario; others untouched.</td></tr>
+<tr><td>production code</td><td>ships design-first behavior</td><td><strong>unchanged</strong> — this run only observes it.</td></tr>
+</table>
+
+<h2>4. Acceptance scoring (the heart)</h2>
+<table>
+<tr><th>AC</th><th>Signal (server-authoritative)</th><th>Pass condition</th></tr>
+<tr><td>AC5 — design persisted</td><td><code>readEpicDesigns()</code> content non-empty for the epic</td><td><code>designPersisted === true</code></td></tr>
+<tr><td>AC5 — stack stated</td><td>design content matches a <strong>concrete-technology</strong> lexicon (<code>html|css|javascript|typescript|react|vue|svelte|preact|lit|vanilla|node|express|fastify|vite|webpack|tailwind|jest|vitest|playwright</code>, case-insensitive) — <strong>meta-words</strong> (<code>stack/framework/module</code>) are excluded so it proves a <em>named</em> technology, not the word &ldquo;stack&rdquo;</td><td><code>designStatedStack === true</code></td></tr>
+<tr><td>AC5 — design fed the build</td><td>≥1 task <code>description</code> contains <code>&lt;!--design-acceptance--&gt;</code> (HTTP bundle)</td><td><code>designEnrichedTasks === true</code></td></tr>
+<tr><td>AC4 — frontend produced code</td><td><strong>Primary:</strong> the frontend task's clone-diff OR its <code>branch</code>-diff has ≥1 non-<code>.md</code>, non-test code file (server-authoritative attribution). <strong>Guarded fallback</strong> (only if the frontend clone/branch is gone): a frontend-stream task is terminal AND ≥1 non-test code deliverable exists AND <code>frontend</code> is the <em>only</em> code-authoring builder stream on the team (architect designs, qa tests) so the code cannot be another builder's.</td><td><code>frontendProducedCode === true</code>; <code>streamsWithCode</code> exposes the attribution for transparency</td></tr>
+<tr><td>AC4 — no stall</td><td>count of <code>question.updated</code> events</td><td>reported as <code>userQuestionsRaised</code> (0 is the goal; a value &gt;0 with code still produced is noted, not an automatic fail)</td></tr>
+<tr><td>AC-H — opt-in/bounded</td><td>real adapter only without <code>--fake</code>; isolated scratch port/DB/worktree; scenario <code>defaultTimeoutMin</code> + 15-min per-turn safety; no writes to the cohort repo</td><td>harness invariants (already enforced) + <code>authIssue === false</code></td></tr>
+</table>
+
+<h2>5. Two-mode validation</h2>
+<p><code>--fake</code> proves the <strong>scoring plumbing</strong> deterministically (design persisted by the fake's
+structured-breakdown turn, markers enrich tasks, fake writes files → frontendProducedCode true) — this is the Gate-4
+self-test, no auth, seconds. The <strong>real</strong> run proves the <strong>behavior</strong> (Gate 5). The split is
+deliberate: the fake can't fake a real stack decision, so only the live run closes AC4/AC5.</p>
+
+<h2>6. Failure modes &amp; edge cases</h2>
+<ul>
+<li><strong>Early-stop needs rich reads (review F1).</strong> <code>monitorUntil</code> is extended to pass <code>this</code> (the harness) as a 2nd arg to <code>until(snap, h)</code> — backward-compatible, since every existing scenario's <code>until</code> is unary and ignores it. The <code>design-first</code> <code>until</code> does the cheap snapshot check first (epic done, or a frontend-stream task terminal) and only then reads the design/clones, so the 5s poll stays light.</li>
+<li><strong>Live run times out mid-epic.</strong> the report is captured with whatever was proven and per-AC verdicts reflect that honestly (never claim an unobserved pass).</li>
+<li><strong>Frontend clone GC'd after merge</strong> → primary attribution uses the task <code>branch</code> ref; only if that is also gone does the guarded, sole-code-author fallback apply (review F3).</li>
+<li><strong>WAL read.</strong> <code>better-sqlite3</code> opened <code>{ readonly: true, fileMustExist: true }</code> reads a live WAL db safely; wrapped in try/catch → empty on any error, so scoring degrades, never crashes.</li>
+<li><strong>Frontend stalls on a question (the very bug under test).</strong> the harness does <strong>not</strong> auto-answer — a stall must surface, not be hidden. <code>userQuestionsRaised</code> is recorded; if the frontend stalls and never produces code, AC4 fails honestly and the scenario ends at its (modest) timeout (review F6, accepted).</li>
+<li><strong>Auth failure.</strong> <code>detectAuthIssue()</code> surfaces it from the server log; AC-H fails loudly rather than a false green.</li>
+<li><strong>Model only <code>auto</code>.</strong> fine — agents default to it.</li>
+</ul>
+
+<h2>7. Design decisions</h2>
+<table>
+<tr><th>Decision</th><th>Chosen</th><th>Rejected — why</th></tr>
+<tr><td>Read persisted design</td><td>sqlite read-only from the harness</td><td>Add <code>GET …/design</code> route — touches production code for a test; not needed.</td></tr>
+<tr><td>Attribute code to frontend</td><td>task-clone dir → stream map, with a terminal-task+deliverable fallback</td><td>Only check "any code file exists" — wouldn't prove the <em>frontend</em> produced it (AC4 is stream-specific).</td></tr>
+<tr><td>Where it lives</td><td>extend <code>evals/</code> (opt-in, real-SDK)</td><td>A vitest test — would run under the forced fake in CI and can't prove live behavior.</td></tr>
+<tr><td>Team</td><td>architect + frontend + qa</td><td>No architect (like <code>smoke</code>) — would test only the Lead-fallback, not AC5's architect path.</td></tr>
+</table>

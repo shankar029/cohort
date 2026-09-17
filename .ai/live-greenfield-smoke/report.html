@@ -1,0 +1,99 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report — Live greenfield smoke</title>
+<link rel="stylesheet" href="../assets/artifact.css">
+<script src="../assets/artifact.js" defer data-doc="report.html" data-slug="live-greenfield-smoke"></script>
+
+<h1>Live greenfield smoke — Final report</h1>
+<div class="meta">Repo: cohort · Branch: feat/live-greenfield-smoke (stacked on main) · 2026-09-16 · Design: design.html · Review: review.md · Findings: evidence/findings.md</div>
+
+<h2>1. Outcome (headline)</h2>
+<p>Built and ran a <strong>repeatable, opt-in live smoke</strong> (extending <code>evals/</code>) that boots Cohort with the
+<strong>real Copilot adapter</strong> against a greenfield repo and scores the design-first behaviors. <strong>The harness works
+(AC-H VERIFIED)</strong> — and it did its job: it <strong>proved, with evidence, that AC4 and AC5 do NOT hold live.</strong> On a
+greenfield repo the Architect's design turn <strong>returned empty text</strong>, so no stack/design was persisted, and the
+Frontend <strong>re-exhibited the original no-code stall</strong> and escalated to the user. This is a <strong>product defect in the
+previously-shipped design-first feature (PR #4)</strong>, surfaced by this task — not a defect in the harness.</p>
+<p><strong>This is a successful verification run with a negative result.</strong> The deliverable was the live-proof capability plus an
+honest verdict; a green checkmark on AC4/AC5 was not achievable because the feature itself is not yet correct live.</p>
+
+<h2>2. Delivered</h2>
+<ul>
+<li><code>evals/harness.mjs</code> — <code>readEpicDesigns()</code> (read-only sqlite), <code>deliverablesByStream()</code> (per-stream file attribution via task-clone + branch), exported pure <code>scoreDesignFirst()</code> (AC4/AC5 scoring with the review's F2/F3 guards), <code>monitorUntil(snap,h)</code> (backward-compatible), and 7 new outcome fields + report rendering.</li>
+<li><code>evals/run.mjs</code> — the <code>design-first</code> scenario (architect + frontend + qa; a greenfield ask that names no stack; bounded early-stop; AC4/AC5/AC-H acceptance).</li>
+<li><code>evals/harness.selftest.mjs</code> + <code>npm run eval:selftest</code> — 7 deterministic tests proving the scoring true-paths the fake cannot.</li>
+<li><strong>Evidence:</strong> two live runs (<code>evidence/run1</code>, <code>evidence/run2</code>) + a root-caused <code>evidence/findings.md</code>.</li>
+<li><strong>No production code touched</strong> — <code>git diff main…HEAD -- src</code> is empty (confirmed by the independent reviewer).</li>
+</ul>
+
+<h2>3. Acceptance criteria</h2>
+<table>
+<tr><th>AC</th><th>Verdict</th><th>Proven by</th></tr>
+<tr><td>AC-H — live smoke repeatable / opt-in / bounded / scores correctly</td><td><strong>VERIFIED</strong></td><td>7/7 self-tests; 2 bounded, isolated live runs; <code>authIssue=false</code>; <code>smoke --fake</code> regression green</td></tr>
+<tr><td>AC4 — Frontend decides &amp; produces code (no stall)</td><td><strong>NOT-VERIFIED (live)</strong></td><td>run1/run2: <code>frontendProducedCode=false</code>, FE stalled → user escalation both runs</td></tr>
+<tr><td>AC5 — Architect states a stack; design persisted before builders</td><td><strong>NOT-VERIFIED (live)</strong></td><td>run1/run2: <code>designPersisted=false</code>; architect turn returned 0-length text → <code>designThenEnrich</code> no-op</td></tr>
+</table>
+
+<h2>4. Root cause (the finding)</h2>
+<p>The design-first flow <strong>collapses when the real Architect turn returns empty</strong>. <code>designThenEnrich</code> guards on
+<code>if (!text) return</code> (orchestrator.ts ~1281) — correct for never-stranding, but it means an empty/tool-only architect
+turn <strong>silently persists no design</strong> (<code>epic_designs</code> stayed empty in both runs). With no stack/spec to anchor to,
+the greenfield Frontend stalls ("no deliverable after 2 attempts"); the shipped Lead-first escalation re-drives it, and it
+<strong>still</strong> escalates to the user. Raising <code>ATEAM_DESIGN_TIMEOUT_MS</code> to 4 min (run 2) did not help — the turn was
+<strong>empty, not slow</strong>. Secondary: builders are dispatched before the design settles and only wait
+<code>ATEAM_DESIGN_WAIT_MS</code> (45s), and the 45s timeouts are fake-tuned.</p>
+
+<h2>5. Gates</h2>
+<table>
+<tr><th>G1</th><th>G2</th><th>G3</th><th>G4</th><th>G5</th><th>G6</th></tr>
+<tr><td>✅</td><td>✅ (2b REVISE→addressed F1/F2/F3; human sign-off waived — unattended)</td><td>✅</td><td>✅ (I1)</td><td>✅ (AC-H proven; AC4/AC5 NOT-VERIFIED live with root cause)</td><td>✅</td></tr>
+</table>
+
+<h2>6. Measurements</h2>
+<table>
+<tr><th>Measure</th><th>Value</th><th>Status</th></tr>
+<tr><td>harness self-tests</td><td>7/7 pass (<code>node --test evals/harness.selftest.mjs</code>)</td><td>ok</td></tr>
+<tr><td>live runs (real adapter)</td><td>2 — both bounded/isolated; <code>authIssue=false</code>; AC4/AC5 measured false</td><td>ok (true-negative)</td></tr>
+<tr><td>full unit+integration suite</td><td>343 pass / 1 skip / <strong>1 known flake</strong> (delivery SEV-4 GC — passes in isolation 13/13)</td><td>ok</td></tr>
+<tr><td>lint / typecheck</td><td>clean</td><td>ok</td></tr>
+<tr><td><code>src/**</code> changed</td><td>0 files (verification-only)</td><td>ok</td></tr>
+<tr><td>probe (vs main)</td><td>verdict pass, no regression</td><td>ok</td></tr>
+</table>
+<p class="assumption">Mutation skipped (UI project reruns the whole suite per mutant — probe policy). Analysis tools
+(duplication/complexity/cycles/dead-exports/static) unavailable — reported honestly, same as prior features in this repo.
+Reviewer minors: F4 (branch-GC attribution path unasserted — safe-degrading), F5 (<code>streamsWithCode</code> counts test files —
+cosmetic) — accepted as non-blocking.</p>
+
+<h2>7. Scorecard</h2>
+<table>
+<tr><th>Dimension</th><th>Score</th><th>Justification</th></tr>
+<tr><td>Correctness</td><td>5/5</td><td>Scoring not gamed (F2/F3 guards self-tested); root cause confirmed in code + events; reviewer APPROVE.</td></tr>
+<tr><td>Testing</td><td>5/5</td><td>7 deterministic self-tests over real temp git+sqlite prove the true-paths the fake can't; two real live runs.</td></tr>
+<tr><td>Design fidelity</td><td>5/5</td><td>Built the revised design incl. all Gate-2b fixes (until(snap,h), concrete-stack lexicon, sole-author fallback).</td></tr>
+<tr><td>Honesty / grounding</td><td>5/5</td><td>Negative result reported as such, root-caused, with a reproduction; no over-claim; independent re-derivation.</td></tr>
+<tr><td>Maintainability</td><td>5/5</td><td>Pure <code>scoreDesignFirst</code> extracted; reuses existing harness seams; no product coupling.</td></tr>
+<tr><td>Security</td><td>5/5</td><td>Isolated scratch; read-only sqlite; no writes to the cohort repo; no new surface.</td></tr>
+<tr><td>Performance</td><td>4/5</td><td>Bounded (per-turn + scenario timeouts, idle-runner); a live run is inherently minutes-long.</td></tr>
+</table>
+<p>Convergence iterations: 2 (design Gate-2b REVISE→addressed; code review APPROVE). Live runs: 2 (same root cause both — not iterated further; the finding is robust and further runs would only burn budget).</p>
+
+<h2>8. Pending / follow-ups (reopen design-first, PR #4)</h2>
+<table>
+<tr><th>Item</th><th>Why</th><th>Finish</th></tr>
+<tr><td><strong>Handle empty/tool-only Architect design turn</strong></td><td>root cause: empty turn silently no-ops design-first</td><td>In <code>designThenEnrich</code>, on empty text retry once with a text-only instruction and/or fall back to the Lead as designer before returning; then re-run the smoke — its AC4/AC5 checks should flip green</td></tr>
+<tr><td>Don't dispatch builders design-less on real latency</td><td>builders wait only <code>ATEAM_DESIGN_WAIT_MS</code>=45s</td><td>Align the builder wait with the design turn (or gate dispatch on design-settled, template as floor)</td></tr>
+<tr><td>Raise fake-tuned 45s defaults / make adapter-aware</td><td>real LLM turns exceed 45s</td><td>Bump <code>ATEAM_DESIGN_TIMEOUT_MS</code>/<code>ATEAM_DESIGN_WAIT_MS</code> defaults</td></tr>
+<tr><td>Re-run the live smoke after the fix</td><td>close AC4/AC5 live</td><td><code>ATEAM_DESIGN_TIMEOUT_MS=240000 node evals/run.mjs design-first --port=4620 --timeout=36</code></td></tr>
+</table>
+
+<h2>9. Assumptions still unconfirmed</h2>
+<ul class="assumption">
+<li>Design taken as-proposed without human sign-off ("lets do the 1st one" = unattended authorization); independent design review was done.</li>
+<li>Two live samples are enough to establish the finding (both reproduced the identical root cause); not a statistical claim.</li>
+<li>The concrete-stack lexicon and the frontend attribution heuristics are pragmatic, not exhaustive (reviewer F4/F5).</li>
+</ul>
+
+<h2>10. Ship</h2>
+<pre><code>git push -u origin feat/live-greenfield-smoke
+gh pr create --base main --head feat/live-greenfield-smoke --fill</code></pre>

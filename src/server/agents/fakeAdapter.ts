@@ -78,7 +78,22 @@ class FakeAgentSession implements AgentSession {
     // orchestrator's parse → enrich path is exercised offline. A prompt marked
     // DESIGNFAIL returns empty (the timeout/no-op fallback path).
     if (/per-stream task breakdown/i.test(prompt)) {
+      const isArchitect = /You are the Software Architect/i.test(prompt);
+      const isTextOnlyRetry = /PLAIN TEXT ONLY/i.test(prompt);
+      // DESIGNFAIL: every design turn returns empty (the exhausted-retries no-op).
       if (/DESIGNFAIL/.test(prompt)) {
+        onEvent({ kind: 'idle' });
+        return '';
+      }
+      // ARCH_EMPTY: the Architect emits an empty (tool-only) turn on EVERY attempt,
+      // forcing the orchestrator to fall back to the Team Lead as designer.
+      if (/ARCH_EMPTY/.test(prompt) && isArchitect) {
+        onEvent({ kind: 'idle' });
+        return '';
+      }
+      // DESIGN_EMPTY_ONCE: the Architect's FIRST attempt is empty; the text-only
+      // retry (same designer) then succeeds.
+      if (/DESIGN_EMPTY_ONCE/.test(prompt) && isArchitect && !isTextOnlyRetry) {
         onEvent({ kind: 'idle' });
         return '';
       }
