@@ -1,0 +1,74 @@
+{
+  "scenario": "design-first",
+  "adapter": "real",
+  "completed": false,
+  "crashed": false,
+  "elapsedSec": 2162,
+  "epics": [
+    {
+      "id": "wi_ebRQ_0BV-aCr",
+      "title": "Build a small, accessible \"click counter\" web page: a button that i...",
+      "status": "review"
+    }
+  ],
+  "epicsDone": 0,
+  "epicsTotal": 1,
+  "tasksByStatus": {
+    "review": 3,
+    "in_progress": 1
+  },
+  "prs": [
+    {
+      "title": "PR: Build a small, accessible \"click counter\" web page: a button that i...",
+      "status": "changes_requested"
+    }
+  ],
+  "prsMerged": 0,
+  "deliverableFiles": [
+    "index.html",
+    "package-lock.json",
+    "package.json",
+    "src/App.css",
+    "src/App.test.tsx",
+    "src/App.tsx",
+    "src/counter.test.ts",
+    "src/counter.ts",
+    "src/main.tsx",
+    "src/testSetup.ts",
+    "tsconfig.app.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ],
+  "deliverableCount": 15,
+  "taskStreams": [
+    "frontend",
+    "qa"
+  ],
+  "uiFileCount": 3,
+  "runtimeDeps": [
+    "react",
+    "react-dom",
+    "vite",
+    "@vitejs/plugin-react"
+  ],
+  "writesToDisk": false,
+  "verificationReports": 5,
+  "gateFailures": 1,
+  "gateOverrides": 0,
+  "tasksDoneWithFailingGate": 0,
+  "acceptanceProbe": "skip",
+  "qaSignoff": false,
+  "authIssue": false,
+  "environmentInvalid": false,
+  "environmentError": "",
+  "designPersisted": true,
+  "designStatedStack": true,
+  "designEnrichedTasks": true,
+  "frontendStreamTerminal": true,
+  "frontendProducedCode": true,
+  "streamsWithCode": [],
+  "frontendFiles": [],
+  "userQuestionsRaised": 0
+}

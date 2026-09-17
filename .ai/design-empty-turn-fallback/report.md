@@ -42,11 +42,25 @@ validated live until Copilot quota resets or a different subscription is used.
 
 ## AC verdicts (this task)
 - **Design-first empty-turn recovery: VERIFIED offline** — 2 regression tests +
-  full suite 346 pass / 1 skip. **NOT verifiable live** (quota-blocked).
+  full suite 346 pass / 1 skip.
 - **Quota observability + smoke ENV-INVALID detection: VERIFIED** — selftest 8/8;
   fake regression green; adapter logs the 402.
-- **AC4 / AC5 live: BLOCKED (environment)** — Copilot monthly quota exhausted
-  (HTTP 402). Finishing command below.
+- **AC4 / AC5 live: VERIFIED LIVE (2026-09-17, quota restored).** See
+  `evidence/run4-live-pass/`. Real adapter, greenfield click-counter epic:
+  - **AC5**: `designPersisted=true`, `designStatedStack=true`,
+    `designEnrichedTasks=true`. The Architect persisted a concrete stack BEFORE
+    builders acted: *"Use **Vite + React + TypeScript** with **Vitest + Testing
+    Library**…"* + a `createCounter(...)` shared contract + an `aria-live`
+    accessibility contract (`evidence/run4-live-pass/persisted-design.md`).
+  - **AC4**: `frontendProducedCode=true`, **15 real files** (`src/App.tsx`,
+    `src/counter.ts`, `src/main.tsx`, `index.html`, `vite.config.ts`, colocated
+    tests…), **`userQuestionsRaised=0`** — the greenfield Frontend did NOT stall.
+    The original "no code" bug is fixed live.
+  - **AC-H**: `environmentInvalid=false`, `authIssue=false`; token usage healthy
+    (165M in / 4M out over 325 turns).
+  - Note: the run's `completed=false` only because the PR sat in
+    `changes_requested` (QA loop) past the 36-min window — orthogonal to AC4/AC5,
+    which were all satisfied well before that.
 
 ## Finishing command (when quota is restored)
 ```
@@ -59,4 +73,5 @@ ATEAM_DESIGN_TIMEOUT_MS=240000 node evals/run.mjs design-first --port=4620 --tim
 
 ## Gates
 G-typecheck ✅ · G-lint ✅ · G-unit/integration 346 pass/1 skip ✅ · G-selftest 8/8 ✅
-· G-fake-regression ✅ · G-live ⛔ BLOCKED (Copilot quota / HTTP 402).
+· G-fake-regression ✅ · G-live ✅ **PASS** (quota restored 2026-09-17; all 7 acceptance
+checks green — AC4/AC5/AC-H verified live).
