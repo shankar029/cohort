@@ -1,0 +1,13 @@
+Meet Cohort. A local web app that turns one plain English request into an entire A I engineering team, working your real repositories in parallel.
+====
+You talk to just one agent. The Team Lead. Give it a goal, and it consults your Product Manager for outcomes and acceptance criteria, then turns your request into an epic.
+====
+Behind the Lead is a catalog of twelve principal level specialists. Architect, frontend, backend, Q A, security, and more. Add one with a click, or craft a custom agent with its own prompt, tools, skills, and model.
+====
+Cohort breaks the epic into stream tagged tasks on a Kanban board, with dependencies, and assigns them for safe parallelism. Every request becomes real, trackable work.
+====
+The specialists spin up as independent, grounded actors. They brainstorm in group threads, keep living scratchpads, and you watch every message, reasoning step, and tool call stream live.
+====
+Each epic runs on its own branch in an isolated git worktree, so parallel work never collides. When the tasks are done, the Lead opens a pull request, assigns a reviewer, and iterates to a quality bar before a real merge.
+====
+All local, powered by the Git Hub Copilot S D K. Cohort. Your request, end to end. This is your A I cohort.

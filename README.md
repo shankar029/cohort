@@ -10,6 +10,19 @@ living scratchpads, and drive the work through a real **pull-request → review 
 > Built with the real `@github/copilot-sdk`. Each agent is an independent, grounded actor (aware of
 > the project, environment, and teammates); the Team Lead owns every request end to end.
 
+## 🎬 Demo
+
+A ~2-minute walkthrough: build an entire app from a single plain-English request — team creation,
+parallel work on a Kanban board, group discussion, a code-reviewer catching a real bug, the
+quality-gate/verification loop, and a real PR merge.
+
+<video src="https://github.com/shankar029/cohort/raw/main/demo/video/out/cohort-demo.mp4" poster="https://github.com/shankar029/cohort/raw/main/demo/video/out/poster.png" controls muted playsinline width="900"></video>
+
+https://github.com/shankar029/cohort/raw/main/demo/video/out/cohort-demo.mp4
+
+> If the inline player doesn't load, use the direct link above or
+> [download the MP4](demo/video/out/cohort-demo.mp4).
+
 ## Features
 
 - **Projects** — each points at a locally checked-out repo; the team works in that directory.

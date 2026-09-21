@@ -1,0 +1,9 @@
+# Remotion deps (reinstall with: cd video && npm install)
+video/node_modules/
+# intermediate render + planning scratch
+video/out/*-raw.mp4
+video/qc/
+survey/
+find/
+pick/
+*.tmp

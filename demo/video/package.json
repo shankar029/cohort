@@ -1,0 +1,21 @@
+{
+  "name": "cohort-demo-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render CohortDemo out/cohort-demo-raw.mp4 --concurrency=4",
+    "finalize": "ffmpeg -y -i out/cohort-demo-raw.mp4 -c:v copy -af loudnorm=I=-16:TP=-1.5:LRA=11 -c:a aac -b:a 256k out/cohort-demo.mp4",
+    "build:video": "npm run render && npm run finalize"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.523",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.523"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,15 @@
+[
+  { "id": "scene00", "text": "This is Cohort. An A.I. engineering team that runs on your own machine." },
+  { "id": "scene01", "text": "It starts with your team. A full roster of specialists: architect, frontend, backend, Q.A., code reviewer, security, and more. Each with its own role and system prompt. And you can add your own." },
+  { "id": "scene02", "text": "You send one message to the team lead. No tickets, no board. Just describe what you want built." },
+  { "id": "scene03", "text": "Here, a full personal finance app. Attach a brief, hit send, and that one sentence becomes the plan." },
+  { "id": "scene04", "text": "In seconds, the lead consults a product manager for acceptance criteria, turns it into an epic, and plans the work as parallel streams." },
+  { "id": "scene05", "text": "It's decomposed into stream-tagged tasks on a live board, with dependencies. Every specialist works in parallel, each in its own git worktree, so nothing ever collides." },
+  { "id": "scene06", "text": "And they don't work in a vacuum. These are grounded, persistent agents that brainstorm and align before writing a line of code." },
+  { "id": "scene07", "text": "Then it gets serious. The code reviewer catches a real floating-point bug and blocks the pull request." },
+  { "id": "scene08", "text": "And it's not just review. Every task must pass Q.A., security, and coverage." },
+  { "id": "scene09", "text": "When a check fails, the lead files it as a new work item and re-runs the gate. Nothing merges until it's green." },
+  { "id": "scene10", "text": "Once the bar is met, an independent reviewer signs off, and it's a real merge." },
+  { "id": "scene11", "text": "One dashboard keeps you in command. Epics, tokens, and who's active, at a glance." },
+  { "id": "scene12", "text": "From one sentence, to shipped, reviewed code. Powered by the GitHub Copilot S.D.K. This is Cohort. Your A.I. engineering team." }
+]
